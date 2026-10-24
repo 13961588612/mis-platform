@@ -315,6 +315,28 @@ public class IqdModelingClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT));
     }
 
+    /**
+     * 删除模型（含物理表 + 列 + 范围策略/ACL 级联）。
+     * {@code DELETE /api/v1/iqd/catalog/model/{itemKey}}。
+     *
+     * <p>被关系/Cube/sql_pair/knowledge 引用时 42200 + dependents（原样透传）。
+     */
+    public Map<String, Object> deleteModel(
+            Long connectionId, String itemKey, Long baseRevision, String idempotencyKey) {
+        return block(client().delete()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/iqd/catalog/model/{itemKey}")
+                        .queryParam("connectionId", connectionId)
+                        .queryParamIfPresent("baseRevision",
+                                java.util.Optional.ofNullable(baseRevision))
+                        .queryParamIfPresent("idempotencyKey",
+                                java.util.Optional.ofNullable(idempotencyKey))
+                        .build(itemKey))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     /** 直接引用方清单。{@code GET /api/v1/iqd/dependencies?connectionId=&itemKey=}。 */
     public Map<String, Object> listDependencies(Long connectionId, String itemKey) {
         return block(client().get()

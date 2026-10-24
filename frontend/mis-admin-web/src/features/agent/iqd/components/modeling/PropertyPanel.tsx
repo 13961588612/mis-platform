@@ -33,10 +33,18 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Info, Loader2, RotateCcw, Save, ShieldCheck } from 'lucide-react';
+import { Info, Loader2, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -51,7 +59,12 @@ import {
   type IqdCatalogItem,
 } from '@/lib/api/iqd';
 // 依赖方清单在**建模台 wire 层**（非 catalog 页 wire 层）：`GET /iqd/dependencies`。
-import { listDependencies } from '../../api/iqd-modeling';
+import {
+  deleteModel,
+  errorCode,
+  errorData,
+  listDependencies,
+} from '../../api/iqd-modeling';
 import { resolveTableKey, useCatalogNodes } from '../../hooks/useCatalogNodes';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { iqdKeys } from '../../queries/iqd-keys';
@@ -232,6 +245,14 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
             node={selected}
           />
         )}
+        {/* 删除模型（连带物理表 + 范围策略；被关系/Cube 引用时硬阻断） */}
+        {(selected.kind === 'model' || selected.kind === 'table') && (
+          <ModelDeleteSection
+            connectionId={connectionId}
+            selected={selected}
+            catalog={catalog}
+          />
+        )}
       </div>
 
       {/* 字段列表：仅在选中 model/table 时展示；选中字段后只留下方编辑器 */}
@@ -341,6 +362,189 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
       <dd className={mono ? 'min-w-0 break-all font-mono text-[11px]' : 'min-w-0 break-words'}>
         {value}
       </dd>
+    </div>
+  );
+}
+
+/**
+ * 删除模型入口（右栏）。
+ *
+ * <p>选中 model 直接删；选中 table 时反查同名 model（无 model 则提示无法删）。
+ * 物理表节点、列、范围策略 / ACL 由后端级联；关系 / Cube 引用硬阻断。
+ */
+function ModelDeleteSection({
+  connectionId,
+  selected,
+  catalog,
+}: {
+  connectionId: number | null;
+  selected: IqdCatalogItem;
+  catalog: IqdCatalogItem[];
+}) {
+  const queryClient = useQueryClient();
+  const sync = useSyncStatus(connectionId);
+  const { canEdit } = useIqdModelingPermission();
+  const setSelected = useModelingStore((state) => state.setSelected);
+  const clearDirty = useModelingStore((state) => state.clearDirty);
+
+  const model = useMemo(() => {
+    if (selected.kind === 'model') {
+      return selected;
+    }
+    if (selected.kind !== 'table') {
+      return null;
+    }
+    const tableName = (
+      selected.display_name ?? selected.item_key.split('.').pop() ?? ''
+    ).toLowerCase();
+    if (!tableName) {
+      return null;
+    }
+    return (
+      catalog.find(
+        (item) =>
+          item.kind === 'model' &&
+          (item.display_name ?? item.item_key.split(':').pop() ?? '').toLowerCase() === tableName,
+      ) ?? null
+    );
+  }, [catalog, selected]);
+
+  const tableKeyHint =
+    model != null ? resolveTableKey(catalog, model) : selected.kind === 'table' ? selected.item_key : null;
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBlockers, setDeleteBlockers] = useState<Array<{ item_key: string; kind: string }>>(
+    [],
+  );
+
+  const doDelete = useCallback(async () => {
+    if (connectionId == null || model == null) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    setDeleteBlockers([]);
+    try {
+      await deleteModel(
+        connectionId,
+        model.item_key,
+        sync.status?.current_edit_revision ?? undefined,
+        `model-del-${model.item_key}-${Date.now()}`,
+      );
+      clearDirty(model.item_key);
+      if (tableKeyHint) {
+        clearDirty(tableKeyHint);
+      }
+      setConfirmOpen(false);
+      setSelected(null);
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      sync.refresh();
+    } catch (err) {
+      const code = errorCode(err);
+      const data = errorData(err);
+      const deps = (data?.dependents ?? null) as Array<{ item_key: string; kind: string }> | null;
+      if (code === 42200 && Array.isArray(deps) && deps.length > 0) {
+        setDeleteBlockers(deps);
+        setDeleteError('该模型被关系 / Cube / 样本或知识引用，禁止删除。请先拆除引用。');
+      } else {
+        setDeleteBlockers([]);
+        setDeleteError(err instanceof Error ? err.message : '删除模型失败');
+      }
+      setConfirmOpen(false);
+    } finally {
+      setDeleting(false);
+    }
+  }, [
+    clearDirty,
+    connectionId,
+    model,
+    queryClient,
+    setSelected,
+    sync,
+    tableKeyHint,
+  ]);
+
+  if (!canEdit) {
+    return null;
+  }
+
+  if (model == null) {
+    return (
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        该物理表没有对应模型节点，无法从建模台删除（请先用「表发现导入」生成模型，或联系管理员）。
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1.5 border-t border-border/60 pt-2">
+      <Button
+        size="sm"
+        variant="destructive"
+        className="w-full"
+        disabled={deleting || connectionId == null}
+        onClick={() => {
+          setDeleteError(null);
+          setDeleteBlockers([]);
+          setConfirmOpen(true);
+        }}
+      >
+        {deleting ? (
+          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="mr-1 h-3.5 w-3.5" />
+        )}
+        删除模型
+      </Button>
+      <p className="text-[11px] text-muted-foreground">
+        将物理删除模型
+        {tableKeyHint ? '、对应物理表与列' : ''}
+        ，并级联清理范围策略 / ACL。被关系或 Cube 引用时会硬阻断。
+      </p>
+      {deleteError && (
+        <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[12px] text-destructive">
+          <p>{deleteError}</p>
+          {deleteBlockers.length > 0 && (
+            <ul className="mt-1 list-disc pl-4">
+              {deleteBlockers.map((d) => (
+                <li key={d.item_key}>
+                  <code className="rounded bg-background px-1">{d.item_key}</code>
+                  <span className="ml-1 text-muted-foreground">（{d.kind}）</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>确认删除该模型？</DialogTitle>
+            <DialogDescription>
+              将从 catalog 物理删除{' '}
+              <code className="rounded bg-muted px-1">{model.item_key}</code>
+              {tableKeyHint ? (
+                <>
+                  {' '}
+                  及物理表 <code className="rounded bg-muted px-1">{tableKeyHint}</code> 与全部列
+                </>
+              ) : null}
+              ，并级联清理范围策略与行级 ACL。此操作不可撤销；须先拆除关系 / Cube 等引用。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={deleting}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={() => void doDelete()} disabled={deleting}>
+              {deleting ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

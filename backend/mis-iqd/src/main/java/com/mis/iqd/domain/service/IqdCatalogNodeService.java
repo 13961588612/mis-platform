@@ -1440,6 +1440,181 @@ public class IqdCatalogNodeService {
         return result;
     }
 
+    /**
+     * 删除模型（{@code DELETE /api/v1/iqd/catalog/model/{itemKey}}）。
+     *
+     * <p><b>硬阻断</b>：被关系 / Cube / sql_pair / knowledge 直接引用时
+     * {@code 42200} + {@code data.dependents}（复用 {@code validateCatalogRefs(..., "DELETE")}）。
+     * 不自动连带删关系或 Cube —— 须先拆引用。
+     *
+     * <p><b>级联清理</b>：① 模型下计算列（{@code parent_key=model}）；
+     * ② 对应物理表节点（{@code kind=table}）及其列；③ 范围策略 + 行级 ACL
+     * （复用 {@link IqdAdminService#cascadeDeleteScopeForItemKeys}，与 Cube 同口径）。
+     *
+     * @param connectionId   问数连接 id
+     * @param itemKey        模型稳定键 {@code mdl:model:<name>}
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键
+     * @return {@code {edit_revision, edit_status, deleted_item_key, deleted_children,
+     *         deleted_table_key, cascade_scope_policies, cascade_acls}}
+     */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
+    public Map<String, Object> deleteModel(
+            Long connectionId,
+            String itemKey,
+            Long baseRevision,
+            String idempotencyKey) {
+
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(MODEL_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:model:<name>", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return deleted(prev.get().getEditRevision(), effectiveKey);
+        }
+
+        IqdCatalogItem model = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, effectiveKey)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND.getCode(),
+                        "模型不存在: " + effectiveKey,
+                        Map.of("item_key", effectiveKey)));
+        if (!"model".equals(model.getKind())) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("item_key", effectiveKey);
+            data.put("actual_kind", model.getKind());
+            throw new BusinessException(42200, "该节点不是模型，无法用本端点删除", data);
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // 硬阻断：关系 / Cube / sql_pair / knowledge 直接引用
+        List<Map<String, Object>> dependents =
+                adminService.validateCatalogRefs(connectionId, effectiveKey, "DELETE");
+        if (!dependents.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("dependents", dependents);
+            throw new BusinessException(42200, "该模型被引用，禁止删除", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+
+        // 物理表：与 collectModelFields / 前端 resolveTableKey 同口径
+        String tableKey = resolvePhysicalTableKey(connectionId, model);
+        IqdCatalogItem table = null;
+        if (tableKey != null) {
+            table = catalogItemRepository
+                    .findByConnectionIdAndItemKey(connectionId, tableKey)
+                    .orElse(null);
+            if (table != null && !"table".equals(table.getKind())) {
+                table = null;
+                tableKey = null;
+            }
+        }
+
+        // 待删：模型计算列 + 物理表列
+        List<IqdCatalogItem> toDelete = new ArrayList<>();
+        toDelete.addAll(
+                catalogItemRepository.findByConnectionIdAndParentKey(connectionId, effectiveKey));
+        if (tableKey != null) {
+            toDelete.addAll(
+                    catalogItemRepository.findByConnectionIdAndParentKey(connectionId, tableKey));
+        }
+
+        Set<String> cascadeKeys = new LinkedHashSet<>();
+        cascadeKeys.add(effectiveKey);
+        if (tableKey != null) {
+            cascadeKeys.add(tableKey);
+        }
+        for (IqdCatalogItem child : toDelete) {
+            if (child.getItemKey() != null && !child.getItemKey().isBlank()) {
+                cascadeKeys.add(child.getItemKey());
+            }
+        }
+        Map<String, Integer> cascade =
+                adminService.cascadeDeleteScopeForItemKeys(connectionId, cascadeKeys);
+
+        for (IqdCatalogItem child : toDelete) {
+            catalogItemRepository.delete(child);
+        }
+        if (table != null) {
+            catalogItemRepository.delete(table);
+        }
+        catalogItemRepository.delete(model);
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed",
+                "model_deleted=" + effectiveKey
+                        + ";table=" + (tableKey == null ? "" : tableKey)
+                        + ";children=" + toDelete.size());
+
+        log.info(
+                "IQD deleteModel connectionId={} itemKey={} tableKey={} children={} "
+                        + "cascadePolicies={} cascadeAcls={} revision={}",
+                connectionId, effectiveKey, tableKey, toDelete.size(),
+                cascade.getOrDefault("scope_policies", 0),
+                cascade.getOrDefault("acls", 0), next);
+
+        Map<String, Object> result = deleted(next, effectiveKey);
+        result.put("deleted_children", toDelete.size());
+        result.put("deleted_table_key", tableKey);
+        result.put("cascade_scope_policies", cascade.getOrDefault("scope_policies", 0));
+        result.put("cascade_acls", cascade.getOrDefault("acls", 0));
+        return result;
+    }
+
+    /**
+     * 解析模型对应的物理表 item_key（与 {@link #collectModelFields} / 前端
+     * {@code resolveTableKey} 同口径：后缀 / 裸名 / 末段）。
+     *
+     * @return 命中的 table item_key；无物理表（空白模型）时 {@code null}
+     */
+    private String resolvePhysicalTableKey(Long connectionId, IqdCatalogItem model) {
+        if (model == null) {
+            return null;
+        }
+        String tableName = model.getDisplayName();
+        if (tableName == null || tableName.isBlank()) {
+            tableName = nodeName(model.getItemKey());
+        }
+        if (tableName == null || tableName.isBlank()) {
+            return null;
+        }
+        String guess = tableName.toLowerCase(LOWER);
+        String suffixHit = null;
+        String bareHit = null;
+        String segmentHit = null;
+        for (IqdCatalogItem it : catalogItemRepository.findByConnectionId(connectionId)) {
+            if (!"table".equals(it.getKind()) || it.getItemKey() == null) {
+                continue;
+            }
+            String key = it.getItemKey().toLowerCase(LOWER);
+            if (key.endsWith("." + guess)) {
+                suffixHit = it.getItemKey();
+                break;
+            }
+            if (key.equals(guess)) {
+                bareHit = it.getItemKey();
+            } else if (lastSegment(key) != null && lastSegment(key).equals(guess) && segmentHit == null) {
+                segmentHit = it.getItemKey();
+            }
+        }
+        if (suffixHit != null) {
+            return suffixHit;
+        }
+        if (bareHit != null) {
+            return bareHit;
+        }
+        return segmentHit;
+    }
+
     /** 删除关系结果（{@code {edit_revision, edit_status, deleted_item_key}}）。 */
     private static Map<String, Object> deleted(long revision, String itemKey) {
         Map<String, Object> r = new LinkedHashMap<>();

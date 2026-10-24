@@ -44,6 +44,7 @@ import java.util.Map;
  *   <tr><td>{@code GET  /catalog/validate-expression}</td><td>T02a 已实现</td><td>{@link IqdCatalogNodeService#validateExpression}</td></tr>
  *   <tr><td>{@code GET  /catalog/sync-status}</td><td>T02a 已实现（{@link IqdController}）</td><td>{@link IqdAdminService#getCatalogSyncStatus}</td></tr>
  *   <tr><td>{@code POST /catalog/model}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createModel}</td></tr>
+ *   <tr><td>{@code DELETE /catalog/model/{itemKey}}</td><td><b>已实现</b></td><td>{@link IqdCatalogNodeService#deleteModel}（含物理表+scope 级联；关系/Cube 硬阻断）</td></tr>
  *   <tr><td>{@code POST /catalog/relationship}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createRelationship}</td></tr>
  *   <tr><td>{@code POST /catalog/cube}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createCube}</td></tr>
  *   <tr><td>{@code PUT  /catalog/cube}</td><td><b>T04a 已实现</b></td><td>{@link IqdCatalogNodeService#upsertCube}</td></tr>
@@ -354,6 +355,24 @@ public class IqdModelingController {
             @RequestParam(required = false) Long baseRevision,
             @RequestParam(required = false) String idempotencyKey) {
         return Result.ok(catalogNodeService.deleteCube(
+                connectionId, itemKey, baseRevision, idempotencyKey));
+    }
+
+    /**
+     * 删除模型（含物理表节点 + 列 + 范围策略/ACL 级联）。
+     * {@code DELETE /api/v1/iqd/catalog/model/{itemKey}}。
+     *
+     * <p>被关系 / Cube / sql_pair / knowledge 引用时硬阻断（42200 + dependents）；
+     * 不自动连带删关系或 Cube。
+     */
+    @DeleteMapping("/catalog/model/{itemKey}")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<Map<String, Object>> deleteModel(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return Result.ok(catalogNodeService.deleteModel(
                 connectionId, itemKey, baseRevision, idempotencyKey));
     }
 

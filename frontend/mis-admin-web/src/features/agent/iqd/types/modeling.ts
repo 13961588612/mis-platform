@@ -364,6 +364,19 @@ export interface DeleteCubeResponse {
   edit_status: IqdCatalogEditStatus;
   deleted_item_key: string;
   deleted_children: number;
+  cascade_scope_policies?: number;
+  cascade_acls?: number;
+}
+
+/** `DELETE /api/v1/iqd/catalog/model/{itemKey}` 返回（模型 + 物理表 + 范围级联）。 */
+export interface DeleteModelResponse {
+  edit_revision: number;
+  edit_status: IqdCatalogEditStatus;
+  deleted_item_key: string;
+  deleted_children: number;
+  deleted_table_key?: string | null;
+  cascade_scope_policies?: number;
+  cascade_acls?: number;
 }
 
 /** Cube 度量（§5 `Measure`）。 */

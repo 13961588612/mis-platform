@@ -44,6 +44,7 @@ import type {
   CreateModelRequest,
   CreateRelationshipRequest,
   DeleteCubeResponse,
+  DeleteModelResponse,
   DeleteRelationshipResponse,
   IqdDependents,
   IqdModelFromTableResponse,
@@ -278,6 +279,32 @@ export async function deleteCube(
     },
   );
   return unwrap(res, '删除 Cube 失败');
+}
+
+/**
+ * 删除模型（含物理表节点 + 列 + 范围策略/ACL 级联）。
+ * `DELETE /api/v1/iqd/catalog/model/{itemKey}`。
+ *
+ * <p>被关系 / Cube / sql_pair / knowledge 引用时 42200 + `data.dependents`（硬阻断，
+ * 不连带删关系/Cube）。成功后需失效 catalog 缓存。
+ */
+export async function deleteModel(
+  connectionId: number,
+  itemKey: string,
+  baseRevision?: number,
+  idempotencyKey?: string,
+): Promise<DeleteModelResponse> {
+  const res = await api.delete<ApiResult<DeleteModelResponse>>(
+    `/iqd/catalog/model/${encodeURIComponent(itemKey)}`,
+    {
+      params: {
+        connectionId,
+        ...(baseRevision != null ? { baseRevision } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      },
+    },
+  );
+  return unwrap(res, '删除模型失败');
 }
 
 /**

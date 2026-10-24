@@ -391,6 +391,22 @@ public class IqdModelingController {
                 connectionId, itemKey, baseRevision, idempotencyKey));
     }
 
+    /**
+     * 删除模型（含物理表 + 列 + 范围策略/ACL 级联）。
+     * {@code DELETE /catalog/model/{itemKey}}。
+     *
+     * <p>被关系 / Cube / sql_pair / knowledge 引用时硬阻断（42200 + dependents）。
+     */
+    @DeleteMapping("/catalog/model/{itemKey}")
+    public ResponseEntity<Result<Map<String, Object>>> deleteModel(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return forward(() -> modelingClient.deleteModel(
+                connectionId, itemKey, baseRevision, idempotencyKey));
+    }
+
     @DeleteMapping("/catalog/relationship/{itemKey}")
     public ResponseEntity<Result<Map<String, Object>>> deleteRelationship(
             @PathVariable String itemKey,

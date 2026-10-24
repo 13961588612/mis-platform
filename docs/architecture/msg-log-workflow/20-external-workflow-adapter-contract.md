@@ -29,14 +29,14 @@
 | 环节 | 等级 | 结论 |
 |------|------|------|
 | `start` 时**不落开始节点**的做法 | ✅ 确证 | `POST /seeyon/rest/bpm/process/start` 的 `data.draft`：`1` = 新建-保存待发，`0` = 新建-发送。**用 `draft=1` 即可让流程停在待发、不进入第一级审批** |
-| 是否存在独立「送出待发」API | 🔴 未知 | REST 文档目录（1.1~1.25）**没有独立章节**。V8 OpenAPI 有 `/bpm/case/send` 且 `data.caseId`（流程实例ID）可选 + `data.userCode`（发起人code）—— **强烈暗示可传已有 caseId 完成 draft→sent**，但文档未明示 |
+| 是否存在独立「送出待发」API | 🔴 **公开文档未证实**（2026-10-24 复核） | V5 REST BPM 集成全文（`biao-dan-liu-cheng-ji-cheng`）仅有 `start` 的 `draft=0|1`，**无**「已有 caseId → 送出待发」章节；过时 `flow/{templateCode}` 的 `param` 也是**新建时**发/待发。V8 `/bpm/case/send` **未见**官方明示「对已有待发 caseId 送出」。⇒ **C-1 公开文档结论：不可依赖独立 activate** |
 | 替代方案：外部**流程事件/定时任务**触发 | 🟡 推断 | 若无「送出待发」API，退化为 `draft=0` 直接发送，节点人员靠 `freeReplaceNode` 在发送后立即替换（有竞态窗口，首节点可能短暂无人） |
 
 **→ 对规划的修正**：规划 §4 步骤 3 写「start 时停在开始节点」，**正确**；但「activate」的定位需按配置二选一。🔴 **且分支点必须落在 start 那一行，不是 activate 那一行**（QA I1）：
 
 ```
 draft_mode = DIRECT_SEND       （★ 默认：draft=0 直接发送，随后立即 freeReplaceNode）
-draft_mode = DRAFT_THEN_SEND   （draft=1 保存待发 + 独立「送出待发」API；需 C-1 确认后才可启用）
+draft_mode = DRAFT_THEN_SEND   （draft=1 + 独立送出；C-1 公开文档未证实 → **P0 禁止启用**，仅沙箱翻案后按租户开）
 ```
 
 **默认 `DIRECT_SEND` 的理由**：`DRAFT_THEN_SEND` 依赖 **C-1 这条尚未确认可行**的路径；把它设为默认等于让 P0 建在未验证前提上。`DIRECT_SEND` 的代价是「首节点待办已生成但人员尚未替换」的**秒级竞态**（缓解：模板首节点预置发起人），这个代价是**已知且可控**的；而 C-1 不可控。
@@ -293,7 +293,7 @@ ExternalWorkflowAdapter                       // 统一契约，backend/mis-task
      - 抄送人员缺失         → 警告，可提交（产品已定）
   3. ★ 按 draft_mode 分支（配置生效点在本步，不在 activate 步 —— QA I1 修正）
 
-     3-A【DRAFT_THEN_SEND】★ 默认否，需 C-1 确认「送出待发」API 后才可启用
+     3-A【DRAFT_THEN_SEND】★ P0 禁止；C-1 公开文档未证实独立送出 API（2026-10-24）
          start(templateCode, initiatorRef, draft=1, payload) → externalCaseId / processId
          ★ 流程停在「待发」，不落开始节点，不进第一级审批
          ★ initiatorRef 必须显式传入（userCode / senderLoginName）
@@ -336,15 +336,17 @@ ExternalWorkflowAdapter                       // 统一契约，backend/mis-task
 
 ## 5. 联调待确认清单
 
-### 🔴 C-1 送出待发（最高优先级 · 阻塞 activate）
+### 🔴 C-1 送出待发（最高优先级 · **公开文档已复核 2026-10-24**）
 
 | 项 | 内容 |
 |----|------|
 | 问题 | `draft=1` 保存待发后，用什么把它送出到第一级审批？ |
-| 候选 | ① `POST /seeyon/rest/bpm/process/start` 传 `caseId` 复用（🟡）② V8 `/bpm/case/send` 传 `data.caseId` + `data.userCode`（🟡，参数表支持 `caseId`，语义未明示）③ `draft=0` 直接发送 + 立即 `freeReplaceNode`（✅ 一定可行，但有竞态）④ 现场致远提供专用接口（🔴） |
-| 验证方法 | 沙箱：模板 2 节点（发起人→审批人A）。`draft=1` → `freeReplaceNode` 填 A → 分别试 ① ② ③。查 `col_affair.state`：`1`=待发 / `2`=已发 / `3`=待办 |
-| 假设错误影响 | 高：整个 §4 序列重排。但 ③ 兜底可用，**平台侧只改 `draftMode` 配置** |
-| 回退 | `draft_mode=DIRECT_SEND`。代价：首节点待办生成与人员替换存在秒级竞态，可能首节点短暂无人或落到默认处理人。缓解：模板首节点人员预置为发起人 |
+| **公开文档结论** | **未找到**独立「送出待发」REST/OpenAPI。证据：① [BPM 集成 · REST](https://open.seeyon.com/book/ctp/restjie-kou/biao-dan-liu-cheng-ji-cheng.html) 仅 `POST …/bpm/process/start`，`draft=0` 新建-发送 / `draft=1` 新建-保存待发；② 同页目录无「送出待发 / waitSend / activate」章节；③ 过时 `POST …/flow/{templateCode}` 的 `param=0\|1` 同样是**新建**时发/待发，不是对已有 case 二次送出；④ V8 `/bpm/case/send` **无**公开条文写明「已有待发 caseId → 送出」 |
+| P0 决策 | **锁定 `draft_mode=DIRECT_SEND`**（`draft=0` + 立即 `freeReplaceNode`）。**禁止**把 `DRAFT_THEN_SEND` / `activate` 当 P0 默认或必经路径 |
+| 候选（仅现场沙箱可翻案） | ① `start` 复传 `caseId`（公开文档未写）② V8 `case/send`+已有 `caseId`（语义未明示）③ 甲方提供未公开接口 |
+| 现场验证（可选，Gate） | 沙箱：`draft=1` → `freeReplaceNode` → 试 ①②；查 `ctp_affair.state`：`1`待发 / `2`已发 / `3`待办。**仅当某路径稳定可用才允许租户打开 `DRAFT_THEN_SEND`** |
+| 假设错误影响 | 高：无 activate 则 `DRAFT_THEN_SEND` 整条路径不可用 |
+| 回退 / P0 正路径 | `DIRECT_SEND`。代价：首节点待办与换人有秒级竞态。缓解：**模板首节点预置发起人** |
 
 ### 🔴 C-2 审批意见/轨迹查询
 
@@ -774,7 +776,7 @@ CREATE TABLE IF NOT EXISTS ext_terminal_event (
     tenant_id          BIGINT       NOT NULL,
     external_system    VARCHAR(64)  NOT NULL,
     external_case_id   VARCHAR(128) NOT NULL,
-    terminal_status    VARCHAR(16)  NOT NULL,   -- COMPLETED / REJECTED / TERMINATED
+    terminal_status    VARCHAR(16)  NOT NULL,   -- COMPLETED / REJECTED / TERMINATED（备查列，不进唯一键）
                                                    -- （TERMINATED 涵盖外部撤销与终止，D5 不区分）
     source             VARCHAR(16)  NOT NULL,   -- POLL / CALLBACK / MANUAL
     -- 🔴 r3 简化（QA N3）：process_state 降为两值，**不需要 PENDING**
@@ -788,7 +790,9 @@ CREATE TABLE IF NOT EXISTS ext_terminal_event (
     biz_task_id        BIGINT       NULL,       -- 投递到的 biz_execution_task.id（便于排障）
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_ext_terminal_event UNIQUE (tenant_id, external_system, external_case_id, terminal_status)
+    -- 🔴 2026-10-24：唯一键按「一案一次终态投递」，勿含 terminal_status
+    --    （终态单调下同一 case 只应触发一次后置；带 status 时映射抖动会双插双投递）
+    CONSTRAINT uk_ext_terminal_event UNIQUE (tenant_id, external_system, external_case_id)
 );
 
 -- 🔴 回调/轮询反查同caseId 的全部终态事件（排障用）
@@ -797,7 +801,7 @@ CREATE INDEX IF NOT EXISTS idx_ext_terminal_event_case
 
 COMMENT ON TABLE ext_terminal_event IS '外部流程终态事件收件表：轮询与回调统一入口，DB 唯一约束保证「不重复触发后置任务」';
 COMMENT ON COLUMN ext_terminal_event.process_state IS '固定 DONE。🔴 本列【不参与任何判定】—— 幂等完全由 uk_ext_terminal_event 唯一约束保证（靠 INSERT ... ON CONFLICT DO NOTHING RETURNING id 的返回行数判断「是不是我触发的」）。实现者【不要】先查该列再决定是否投递，那既多余又引入竞态。保留列仅供将来分库场景演进';
-COMMENT ON CONSTRAINT uk_ext_terminal_event ON ext_terminal_event IS '幂等由 DB 保证：同一 (租户,系统,caseId,终态) 只处理一次；TERMINATED 不区分撤销/终止(D5)';
+COMMENT ON CONSTRAINT uk_ext_terminal_event ON ext_terminal_event IS '幂等由 DB 保证：同一 (租户,系统,caseId) 只处理一次终态投递；terminal_status 仅备查不进键；TERMINATED 不区分撤销/终止(D5)';
 
 -- ===========================================================================
 -- 2) ext_workflow_call_log —— 对外调用审计（密钥/token 脱敏）
@@ -946,3 +950,4 @@ COMMENT ON COLUMN ext_workflow_call_log.operation IS 'START/ASSIGN_NODE/ACTIVATE
 | **2026-10-16 (r4)** | **🟡 D4 修正**：`external_sent` 列注释第二分支「/待发未激活」错误 —— `DRAFT_THEN_SEND` 下 `start(draft=1)` 返回后即为 1，但流程仍停在待发根本没在跑。已改为「『已发出』指**致远侧已存在流程实例**，不是『已激活/已流转』」 |
 | **2026-10-16 (r4)** | **🟡 `process_state` 注释澄清**：写明该列**不参与任何判定**，幂等完全靠 `uk_ext_terminal_event` + `ON CONFLICT ... RETURNING id` 的返回行数；**实现者不要先查该列再决定是否投递**（多余且引入竞态） |
 | **2026-10-16 (r4)** | **🟢 §8 第 15 条扩展一格（元教训）**：「方案基石」**也包括方案自己产出的 DDL 草案与伪代码** —— **散文正确不等于代码可运行**。把本轮 6 处踩坑分成 A（引用既有组件，3 处）与 B（自己产出的 DDL/伪代码，3 处）两类列表，并建议「**提审时把 DDL 当代码审**」 |
+| **2026-10-24** | **✅ C-1 公开文档复核关闭**：§1.1 表「独立送出待发 API」改为 🔴 公开未证实；§5 C-1 写明证据链与 **P0 锁定 DIRECT_SEND**；`DRAFT_THEN_SEND` 标 P0 禁止 |

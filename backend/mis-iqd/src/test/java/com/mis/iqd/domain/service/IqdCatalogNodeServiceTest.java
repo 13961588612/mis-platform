@@ -1287,4 +1287,108 @@ class IqdCatalogNodeServiceTest {
         verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
     }
 
+    // ------------------------------------------------------------ 删除模型（含物理表 + scope 级联）
+
+    private IqdCatalogItem modelNode() {
+        IqdCatalogItem item = new IqdCatalogItem();
+        item.setId(9200L);
+        item.setConnectionId(CONN_ID);
+        item.setItemKey("mdl:model:orders");
+        item.setKind("model");
+        item.setDisplayName("orders");
+        return item;
+    }
+
+    @Test
+    void deleteModel_happyPath_deletesTableColumnsAndCascadesScope() {
+        IqdConnection c = conn(5);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem model = modelNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, model.getItemKey()))
+                .thenReturn(Optional.of(model));
+
+        IqdCatalogItem table = new IqdCatalogItem();
+        table.setItemKey("pg_main.public.orders");
+        table.setKind("table");
+        table.setDisplayName("orders");
+        when(catalogItemRepository.findByConnectionId(CONN_ID)).thenReturn(List.of(model, table));
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, table.getItemKey()))
+                .thenReturn(Optional.of(table));
+
+        IqdCatalogItem calcCol = new IqdCatalogItem();
+        calcCol.setItemKey("calc:orders.margin");
+        calcCol.setKind("column");
+        IqdCatalogItem physCol = new IqdCatalogItem();
+        physCol.setItemKey("pg_main.public.orders.amount");
+        physCol.setKind("column");
+        when(catalogItemRepository.findByConnectionIdAndParentKey(CONN_ID, model.getItemKey()))
+                .thenReturn(List.of(calcCol));
+        when(catalogItemRepository.findByConnectionIdAndParentKey(CONN_ID, table.getItemKey()))
+                .thenReturn(List.of(physCol));
+
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        when(adminService.validateCatalogRefs(eq(CONN_ID), eq(model.getItemKey()), eq("DELETE")))
+                .thenReturn(new ArrayList<>());
+        Map<String, Integer> cascade = new LinkedHashMap<>();
+        cascade.put("scope_policies", 3);
+        cascade.put("acls", 1);
+        when(adminService.cascadeDeleteScopeForItemKeys(eq(CONN_ID), any()))
+                .thenReturn(cascade);
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> result = service.deleteModel(CONN_ID, model.getItemKey(), 5L, "model-del-1");
+
+        ArgumentCaptor<java.util.Collection<String>> keysCaptor =
+                ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(adminService).cascadeDeleteScopeForItemKeys(eq(CONN_ID), keysCaptor.capture());
+        assertTrue(keysCaptor.getValue().contains(model.getItemKey()));
+        assertTrue(keysCaptor.getValue().contains(table.getItemKey()));
+        assertTrue(keysCaptor.getValue().contains(calcCol.getItemKey()));
+        assertTrue(keysCaptor.getValue().contains(physCol.getItemKey()));
+
+        verify(catalogItemRepository).delete(calcCol);
+        verify(catalogItemRepository).delete(physCol);
+        verify(catalogItemRepository).delete(table);
+        verify(catalogItemRepository).delete(model);
+        assertEquals(6L, c.getCurrentEditRevision());
+        assertEquals(model.getItemKey(), result.get("deleted_item_key"));
+        assertEquals(table.getItemKey(), result.get("deleted_table_key"));
+        assertEquals(2, ((Number) result.get("deleted_children")).intValue());
+        assertEquals(3, ((Number) result.get("cascade_scope_policies")).intValue());
+        assertEquals(1, ((Number) result.get("cascade_acls")).intValue());
+        verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
+    }
+
+    @Test
+    void deleteModel_referencedByRelationship_throws42200() {
+        IqdConnection c = conn(2);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem model = modelNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.of(model));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        Map<String, Object> dep = new LinkedHashMap<>();
+        dep.put("item_key", "mdl:relationship:orders_store");
+        dep.put("kind", "relationship");
+        when(adminService.validateCatalogRefs(anyLong(), anyString(), eq("DELETE")))
+                .thenReturn(List.of(dep));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteModel(CONN_ID, model.getItemKey(), null, null));
+        assertEquals(42200, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+        verify(adminService, never()).cascadeDeleteScopeForItemKeys(anyLong(), any());
+    }
+
+    @Test
+    void deleteModel_wrongPrefix_throws42200() {
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteModel(CONN_ID, "mdl:cube:x", null, null));
+        assertEquals(42200, ex.getCode());
+    }
+
 }

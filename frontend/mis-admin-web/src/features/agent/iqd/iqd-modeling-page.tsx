@@ -25,7 +25,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react';
+import {
+  Maximize2,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+} from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Button } from '@/components/ui/button';
@@ -142,7 +150,22 @@ export function IqdModelingPage() {
     cube: IqdCatalogItem | null;
     defaultModelKey: string | null;
   } | null>(null);
+  /** 画布工作区全屏（三栏仍可用，便于删模型 / 改属性；Esc 退出）。 */
+  const [canvasFullscreen, setCanvasFullscreen] = useState(false);
   const panesRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!canvasFullscreen) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCanvasFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canvasFullscreen]);
 
   /**
    * Keep-alive 切到其它 Tab（如「连接配置」）时本页仍挂载，但用 `invisible` 藏。
@@ -211,6 +234,18 @@ export function IqdModelingPage() {
             )}
             {/* 一键整理画布（T03d）：dagre 在浏览器算，落库复用 PUT layout */}
             <AutoLayoutButton connectionId={activeId} canEdit={canEdit} />
+            {!noConnection && canView && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                title="画布全屏编辑（Esc 退出）"
+                onClick={() => setCanvasFullscreen(true)}
+              >
+                <Maximize2 className="mr-1 h-3.5 w-3.5" />
+                全屏
+              </Button>
+            )}
           </div>
         }
       />
@@ -236,7 +271,34 @@ export function IqdModelingPage() {
       )}
 
       {canView && !noConnection && (
-        <>
+        <div
+          className={cn(
+            'flex min-h-0 flex-1 flex-col',
+            canvasFullscreen && 'fixed inset-0 z-50 bg-background',
+          )}
+        >
+          {canvasFullscreen && (
+            <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-medium">建模台 · 全屏编辑</span>
+                {activeConnection?.name && (
+                  <Badge variant="outline" className="text-[11px]">
+                    {activeConnection.name}
+                  </Badge>
+                )}
+                <span className="text-[11px] text-muted-foreground">按 Esc 退出</span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7"
+                onClick={() => setCanvasFullscreen(false)}
+              >
+                <Minimize2 className="mr-1 h-3.5 w-3.5" />
+                退出全屏
+              </Button>
+            </div>
+          )}
           {/* 发布流水线（T03d）：编辑落库 → MDL build → memory index → MCP 就绪 */}
           <PublishPipelineBar connectionId={activeId} />
           {/* 外部漂移详情面板（T04b / MR-11）：非漂移时自身返回 null（不产生空壳） */}
@@ -333,7 +395,7 @@ export function IqdModelingPage() {
             </aside>
           )}
           </div>
-        </>
+        </div>
       )}
 
       {/* ---------------- 向导（Dialog 式，T02b-3 打通入口） ---------------- */}

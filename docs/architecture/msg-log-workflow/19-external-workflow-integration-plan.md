@@ -22,15 +22,16 @@
 | D4 | 抄送缺人警告可提交；审批缺人、发起人缺号禁止提交 | 产品 | §4 |
 | **D5** | **🔴 外部撤销语义不推广到外部系统**：`affair/cancel`（外部侧撤销）同步回本地**一律按 `TERMINATED` 处理**；**EXTERNAL 界面不提供「撤销」入口，只提供「终止」**；不新增 `CANCELLED` 状态 | **产品（本轮）** | **§5.1 / §5.2 / §6.3** |
 | **D6** | **`form_record.status` 新增 `TERMINATED`**（架构提案，已核实无 CHECK 约束，采纳） | 架构（产品未反对） | **§5.2 / §9 任务 A3'** |
+| **D7** | **EXTERNAL 一律「同单不可再提」**；驳回 / 终止 / 废弃重建 **统一**为：**新建 `form_record`，复制原单字段内容，再发起新外部流程**（旧单只读；废弃时旧外部实例仍走 `ABANDONED` + `stop` 清孤儿） | **产品（2026-10-24）** | **§6.3 / §6.4；关闭 P-1** |
 
 ### 0.2 🟡 待产品确认（**架构不得自行决定**）
 
 | # | 待确认项 | 背景 | 若不确认的后果 |
 |---|---------|------|--------------|
-| **P-1** | **B3 的 `ABANDONED` 是否与「同一单据不可再提交」边界冲突** | `ABANDONED` 允许 `build_phase=FAILED` 的单据**在同一 `form_record` 上重建**；而 D1 禁止 `REJECTED` 单据重提。两者边界不同（构建失败 vs 审批驳回），但**同一句「不可再提交」是否要区分这两种情况，须产品明确** | 「废弃并重建」按钮的可见性与文案无法定稿 |
+| **P-1** | ~~B3 `ABANDONED` 与「同单不可再提」边界~~ | ✅ **已关闭 → D7**：不区分驳回 vs 构建失败，**均不可在同一 `form_record` 上再提**；统一「复制新建」 | — |
 | **P-2** | **`EMBED_URL` 跨站鉴权可行性（C-12）** | embed 页在致域名 `<iframe>` 内加载 ⇒ 第三方 Cookie 场景，现代浏览器 `SameSite=Lax` 默认拦截；签名方案则需 `expires` + HMAC 字段（DDL 已预留） | 若两者皆不可行，`EMBED_URL`（`INJECT_MODE` 第三种形态，工作量 **L**）须从 **P0 降级为 P1**，不能让它建在未验证前提上 |
 
-> ⚠️ **本轮修订明确标注**：D5 是产品主动取舍（牺牲 LOCAL/EXTERNAL 语义一致性），**任何人不得以「顺手对齐」为由推翻**。P-1 / P-2 保持开放，**架构未自行决定**。
+> ⚠️ **本轮修订明确标注**：D5 是产品主动取舍（牺牲 LOCAL/EXTERNAL 语义一致性），**任何人不得以「顺手对齐」为由推翻**。**P-1 已由 D7 关闭**；P-2 仍开放，架构未自行决定。
 
 ---
 
@@ -101,8 +102,9 @@ P0 外部系统：**致远 Seeyon A8+ 集团版 V9**。
 
 ### 2.4 回调
 
-外部终态（通过 / 终止）→ 本系统**幂等**执行后置任务（对齐现有 Outbox / `biz_execution_task`）。  
-幂等键建议：`tenant_id + external_case_id + terminal_status`。
+外部终态（通过 / 驳回 / 终止）→ 本系统**幂等**执行后置任务（对齐现有 Outbox / `biz_execution_task`）。  
+幂等键建议：`tenant_id + external_system + external_case_id`（**不要**再拼 `terminal_status`）。  
+理由：§5.1 终态单调 ⇒ 同一 `caseId` 只应有一个业务终态；键里带 `terminal_status` 时，若映射抖动先错写 `COMPLETED` 再来 `REJECTED`，会插进两行、后置任务跑两次。`terminal_status` 仍作为收件表**普通列**落库备查。
 
 ### 2.5 其他能力
 
@@ -198,6 +200,7 @@ ExternalWorkflowAdapter
 >
 > 1. `data.draft=1` = 保存待发，**流程停在待发、不落开始节点** ✅ 规划「停在开始节点」成立
 > 2. **`freeReplaceNode` 是「替换预置节点」而非「追加节点」** ✅。外部模板必须**预置 N 个槽位**；蓝图节点数 ≤ 槽位数，超出直接拒绝（不是追加第 N+1 个）
+> 3. **C-1「送出待发」公开文档未证实**（2026-10-24）✅ 复核：V5 REST 仅有 `start` 的 `draft=0\|1`，**无**对已有 case 的送出接口 ⇒ **P0 锁定 `DIRECT_SEND`**；`DRAFT_THEN_SEND`/`activate` 仅现场沙箱翻案后按租户启用
 > 3. 发起人**必须显式传** `userCode`（V8 OpenAPI ✅）/ `senderLoginName`（V5 REST ✅），不能只靠 token 主体
 
 ```
@@ -212,8 +215,8 @@ ExternalWorkflowAdapter
      ├─ 步骤 3-A【DRAFT_THEN_SEND】start(templateCode, initiatorRef, draft=1, payload) → caseId / processId
      │     ★ 流程停在「待发」，不进入第一级审批；外部发起人 / 起草人必须是 initiatorRef
      │     ★ 集成账号不得冒充发起人；仅把发起人做成抄送不够（抄送进「待阅」，进不了「已发」）
-     │     ⚠️ 该模式依赖「送出待发」API（清单 C-1，🔴 未确认）——联调确认前不得启用
-     └─ 步骤 3-B【DIRECT_SEND · 默认】start(templateCode, initiatorRef, draft=0, payload) → caseId / processId
+     │     ⚠️ 该模式依赖「送出待发」API（清单 C-1：公开文档未证实，2026-10-24）——**P0 禁止启用**；仅现场沙箱翻案后按租户开
+     └─ 步骤 3-B【DIRECT_SEND · 默认 · P0 正路径】start(templateCode, initiatorRef, draft=0, payload) → caseId / processId
            ★ 流程直接发送；外部发起人同上；随后立即逐槽位填人
            ⚠️ 代价：首节点待办已生成但人员未替换，存在秒级竞态 → 模板首节点人员预置为发起人
   4. 逐槽位 assignNode(activityId_k, people_k)   k = 1..M（M ≤ N）
@@ -376,7 +379,7 @@ t4  用户再次提交 ⇒ 平台第二次start ⇒ **致远上出现第二个�
 | `APPROVED` | `COMPLETED` | 通过；终态；触发后置任务（幂等） |
 | `REJECTED` | `REJECTED` | **已定（D1）**：外部驳回写入 `form_record=REJECTED`，终态。不回 `SAVED`，本单不可改后再提 |
 | **`TERMINATED`（🆕 D6）** | `TERMINATED` | **终止 / 撤销 / 作废统一态**。**不写成 `REJECTED`**（语义不同：驳回是「不同意」，终止是「不再走了」）；**不写成 `APPROVED`**；**不回 `SAVED`**（同单不可复活） |
-| （不变更） | `ABANDONED` | **本地处置态，不映射 `form_record`**。此时 `form_record` 仍为 `SAVED`（提交未成功，业务数据未变），用户可重新提交 |
+| （不变更） | `ABANDONED` | **本地处置态，不映射 `form_record`**。旧单只读、**不可再提**（D7）；续办靠「复制新建」 |
 
 **`TERMINATED` 侧的运行时行为**（新增后必须成立的判定）：
 
@@ -430,10 +433,10 @@ t4  用户再次提交 ⇒ 平台第二次start ⇒ **致远上出现第二个�
 
 | `ext_status` | 能否在同一 `form_record` 上再发起 | 理由 |
 |-------------|------------------------------|------|
-| `COMPLETED`（通过） | ❌ 须新建单据 | 已通过，重发= 重复业务 |
-| `REJECTED`（驳回） | ❌ 须新建单据 | D1 明确 |
-| `TERMINATED`（终止 / **撤销** / 作废） | ❌ **须新建单据** | 外部侧流程已终态，不可复活 |
-| `ABANDONED`（本地废弃） | ⚠️ **可重建** —— 🟡 **待产品确认 P-1** | 外部侧已调 `stop` 清理，属「从未真正进入审批」的状态 |
+| `COMPLETED`（通过） | ❌ 须新建单据（可「复制新建」） | 已通过，重发= 重复业务 |
+| `REJECTED`（驳回） | ❌ 须新建单据（可「复制新建」） | D1 + **D7** |
+| `TERMINATED`（终止 / **撤销** / 作废） | ❌ 须新建单据（可「复制新建」） | 外部侧流程已终态，不可复活 |
+| `ABANDONED`（本地废弃） | ❌ **同单不可再提**；UI 走「复制新建」 | **D7**：与驳回统一口径；旧实例仍 `ABANDONED`+`stop` 清孤儿 |
 
 #### ⚠️ LOCAL 与 EXTERNAL 的再发起语义差异是**有意为之**，不得「顺手对齐」
 
@@ -461,29 +464,31 @@ t4  用户再次提交 ⇒ 平台第二次start ⇒ **致远上出现第二个�
 | **让出槽位的机制** | 谓词 `ext_status IN ('NOT_STARTED','RUNNING')` **不含 `TERMINATED`** ⇒ 自动让位 | 谓词同时排除 `build_phase='FAILED'` ⇒ **自动让位**（`ABANDONED` 亦不在谓词内，双重让位） |
 | **`caseId` 是否保留** | ✅ 保留（可用于调外部 `stop` 清理/核账） | ✅ 保留（同） |
 | **外部侧是否需清理** | 已由外部终止，无需再调 | ⚠️ **需主动调 `affair/stop`** 清理外部孤儿流程 |
-| **`form_record` 结果** | `TERMINATED`（D6）—— **不可再提** | 仍 `SAVED` —— **可重新提交**（🟡 P-1 待产品确认） |
+| **`form_record` 结果** | `TERMINATED`（D6）—— **不可再提** | 旧单只读（建议保持 `SAVED` 或加标记）；**不可再提**；业务续走靠 **D7 复制新建** |
 | **是否触发后置任务** | ❌ 不触发 | ❌ 不触发 |
 
 **统一处理约定（避免开发写成两套逻辑）**：
 
 1. **单一让位判据**：判断「该 `form_record` 能否新建外部实例」时，**只看「是否存在一条命中 `uk_ext_inst_active` 谓词的行」**，不要为 `TERMINATED` / `ABANDONED` 各写一套 if。判定逻辑收敛到一处（如 `ExtProcessInstanceRepository.findActiveInstance(tenantId, formRecordId)`）。
-2. **「让出槽位」与「可否再提」是两个不同问题**：
-   - 让出槽位 = 索引谓词（**自动**，两者同一机制）；
-   - 可否再提 = `form_record.status` 的业务语义（**不同**：`TERMINATED` 不可、`ABANDONED` 可）。
-   ⇒ **两者不要混为一谈**：`TERMINATED` 让出槽位**不代表**单据可以再提交。这正是 D6 必须新增独立 `TERMINATED` 状态的原因（若复用 `REJECTED`，语义上会与驳回混淆，且 §5.2 的天然只读性丧失）。
+2. **「让出槽位」与「可否再提」是两个不同问题**（**D7 后二者口径统一为：旧单一律不可再提**）：
+   - 让出槽位 = 索引谓词（**自动**）；
+   - 可否再提 = **永远否**（驳回 / 终止 / 废弃同口径）；续办 = **复制新建 `form_record` + 新外部流程**。
 3. **`ABANDONED` 行的 `caseId` 必须可调 `stop`** —— 这是「本地处置态」与「删行」的本质区别：删行会丢失外部孤儿清理能力与审计证据。
 
-### 6.4 🟡 待产品确认：P-1「`ABANDONED` 与『同一单据不可再提交』的边界」
+### 6.4 ✅ 已拍板：P-1 → **D7「复制新建」统一口径**
 
-**架构**已把 `ABANDONED` 的技术路径设计完整（让位机制与 `TERMINATED` 统一，见上），但**产品语义边界须产品拍板**，架构**不自行决定**：
+**产品（2026-10-24）**：驳回不能重提；构建失败「废弃」也不在同单重提。**一律**：
 
-| 问题 | 说明 |
-|------|------|
-| 「同一单据不可再提交」是否**区分两种情况**？ | `REJECTED`（业务驳回）⇒ 明确不可重提（D1）；`ABANDONED`（构建失败、**外部审批从未开始**）⇒ 允许重提是合理的，但**同一句话是否要区分**，须产品明确 |
-| 若产品要求「一律不可重提」 | 则「废弃并重建」按钮**下线和新建单据**等价 ⇒ **P0「废弃并重建」失去存在意义**，需重新评估任务 C3 的范围 |
-| 若产品维持现状（可重提） | C3 保持 P0；管理台须明示「该单据外部流程未真正开始，可重新提交」以免用户误以为能改已提交内容 |
+1. 旧 `form_record` **只读、不可再提交**；
+2. 若有未完成的外部实例 → 置 `ABANDONED`（或已是 `REJECTED`/`TERMINATED`）并视需要 `affair/stop` 清孤儿；
+3. **新建**一张 `form_record`，**复制**原单业务字段（不含外部 caseId / 审批轨迹）；
+4. 用户在**新单**上发起外部流程（可提供一键「复制并打开新单」；是否自动提交由实现阶段定，默认**只复制不自动发**以防误发）。
 
-> **在此项确认前**：C3 的**技术实现**（置 `ABANDONED` + 保留 `caseId` + 调外部 `stop`）照做，但**按钮的可见性与文案**待产品拍板后定稿。
+| 原方案倾向 | D7 后果 |
+|------------|---------|
+| 同单 `ABANDONED` 后再点「提交」 | ❌ **取消** |
+| 按钮文案「废弃并重建」 | 改为「废弃并复制新建」/「复制新建后再发」（旧外部清孤儿 + 新单） |
+| 任务 C3 | **保留** `ABANDONED`+`stop`；**新增**「复制 form_record」能力（P0） |
 
 #### 🔴 N1 验收用例（QA 专项回归 · 必测）
 
@@ -565,7 +570,7 @@ RETURNING p.id;
 
 ### 8.1 P0 必须先确认（阻塞详细设计）
 
-1. **离开开始节点 API** — **已核实**：`data.draft=1` 保存待发即为「不落开始节点」✅。**送出待发**的接口仍待现场确认（清单 **C-1**）⇒ `draft_mode` 配置二选一，**默认 `DIRECT_SEND`**（✅ 确证可行；`DRAFT_THEN_SEND` 走 C-1 未确认路径）。分支生效点在 **§4 步骤 3**，不是步骤 5（QA I1）。
+1. **离开开始节点 API** — **已核实**：`data.draft=1` 保存待发即为「不落开始节点」✅。**送出待发**独立接口：**公开文档未证实**（清单 **C-1**，2026-10-24 复核）⇒ `draft_mode` 配置二选一，**P0 锁定 `DIRECT_SEND`**（✅ 确证可行）；`DRAFT_THEN_SEND` **不得**作默认/必经。分支生效点在 **§4 步骤 3**，不是步骤 5（QA I1）。
 2. **同节点多人** — **已核实**：`freeReplaceNode` 的 `data.userId` 是数组，**支持多人** ✅；会签/或签语义由外部模板节点属性决定，平台不可控 → 蓝图放开多人，但 UI 不暴露会签/或签选择。
 3. **🔴 外部模板槽位（阻塞 Phase B）** — `freeReplaceNode` 是「替换预置节点」，外部模板必须预置 N 个槽位。蓝图节点数 ≤ 槽位数，超出直接拒绝。**未完成槽位登记前不得开工 Phase B**（清单 **C-3**，Gate-1）。
 4. **🔴 流程状态枚举**（QA I2 要求提到 Gate-1）— `/flow/state/{flowId}` 官方映射表是图片未抓到 ⇒ `status_mapping` 配置化 + **启动 fail-fast**。**必须从 Phase E 提前到 Phase B 之前**：状态映射是整个联动链路的地基，且它是唯一能防住「合法枚举值被映射错 → 终止单据被判通过 → `FINALIZE_BIZ` 业务动作错误执行」的防线（清单 **C-6**）。原方案映射代码 Phase B 写、枚举 Phase E 验，**顺序倒了**。
@@ -699,7 +704,8 @@ RETURNING p.id;
 - [x] 产品拍板：驳回终态、无本地待办、提交才发、抄送警告可提交  
 - [x] 🆕 **产品拍板 D5：外部撤销按 `TERMINATED` 处理，界面不提供撤销入口**（§0.1 / §5.1）
 - [x] 🆕 **架构决定 D6：`form_record.status` 新增 `TERMINATED`**（§0.1 / §5.2，改动清单见任务 A3′）
-- [ ] 🟡 **产品待拍板**：P-1（`ABANDONED` 与「同一单据不可再提交」的边界）、P-2（`EMBED_URL` 跨站鉴权可行性）—— 见 §0.2，**架构未自行决定**  
+- [x] 🆕 **产品拍板 D7 / 关闭 P-1**：EXTERNAL 同单不可再提；驳回与废弃统一「复制新建后再发」（§0.1 / §6.4）
+- [ ] 🟡 **产品待拍板**：P-2（`EMBED_URL` 跨站鉴权可行性）—— 见 §0.2，**架构未自行决定**  
 
 - [x] **架构核实完成**（2026-10-16）：见 [20-adapter contract](./20-external-workflow-adapter-contract.md)
 - [ ] Flyway V153（绑定演进 + `external_workflow_system`）+ V154（`ext_process_instance` + **收件表** + 调用审计）→ DDL 草案见 20 文档 §6
@@ -751,7 +757,7 @@ RETURNING p.id;
 | B5 | 注入三模式：FORM_JSON 映射 / RICH_HTML 清洗 / EMBED_URL token 路由 + 鉴权 + 只读 + 吊销（🔴 前置 C-12 / **P-2 待产品确认**） | B3 | **L** | **C-12** | 新增 `.../ext/support/InjectPayloadBuilder.java`、`.../ext/support/RichHtmlSanitizer.java`、路由 `.../controller/EmbedFormController.java` |
 | C1 | 定时拉取 Job（扫 `idx_ext_inst_polling`，仅非终态，**🔴 用 `FOR UPDATE SKIP LOCKED` + `LIMIT` 领取式认领，禁止用 `biz_exec_lock`** —— 见 §7 N2 专项）+ 打开单据强制 sync + 手工重同步 + 按 `(external_system, raw_status)` 聚合退避 | A2,B4 | M | C-6 | 新增 `.../service/ExtSyncScheduler.java`（🔴 **不引入 `DistributedLockService`**） |
 | C2 | 回调入口 `notifyUrl`（**统一走 `ext_terminal_event` 收件表**，见 E1 专项）；无回调时退化为纯轮询 | B4 | M | C-7 | 新增 `.../controller/ExtCallbackController.java` |
-| **C3** | 🔴 **终止**（`terminate`，P0，**界面向用户暴露的唯一终态动作**）+ **废弃重建**（置 `ext_status='ABANDONED'` 让出槽位；caseId 保留可调外部 `stop`）。🔴 **不实现 `revoke`/撤销**（D5）。⚠️ 「废弃并重建」的可见性受 🟡 **P-1** 约束 | B3 | S | **P-1** | `.../ext/service/ExtWorkflowLaunchService` 扩展 |
+| **C3** | 🔴 **终止**（`terminate`，P0）+ **废弃**（`ABANDONED`+`stop` 清孤儿）+ **复制新建**（D7：新 `form_record` 拷贝字段，旧单不可再提）。🔴 **不实现 `revoke`**（D5）。文案勿再暗示「同单重提」 | B3 | M | **D7** | `ExtWorkflowLaunchService` + FormRecord 复制 API |
 | D1 | BFF 接入 V149 外部字段 + EXTERNAL 绑定管理端 CRUD（含槽位登记、字段映射、模板 code） | A1,A3 | M | — | `backend/mis-taskflow/src/main/java/com/mis/taskflow/controller/FormDefinitionController.java`、`.../dto/` |
 | D2 | 发起人自检提交（防抖、槽位校验、缺人阻断/警告分级、build_phase 展示、废弃重建） | C1,D1 | **L** | — | `frontend/mis-admin-web/src/features/taskflow/process-shell.tsx`（+ 同名 test） |
 | D3 | EXTERNAL 分支 UI：隐藏本地图形进度、展示外部状态/当前处理人、**意见区按 `capabilities` 隐藏或降级为深链**（🟡 P0 范围**不含**意见查询实现） | C1,**D1**,D2 | M | C-2 | 同上 + 新增 `frontend/mis-admin-web/src/features/taskflow/ext-progress-panel.tsx` |
@@ -768,7 +774,7 @@ RETURNING p.id;
   - ① **C-3 外部模板槽位 `activityId` 清单**（A0 产出文档，录入归 D1）⇒ 否则 B3 无映射目标，**Phase B 不得开工**
   - ② 🆕 **C-6 流程状态枚举**（QA I2 要求从 Phase E 提前到 Phase B 之前）⇒ 状态映射是整个联动链路的地基，且是**唯一**能防住「合法枚举值被映射错 → 终止单据被判通过 → `FINALIZE_BIZ` 业务动作错误执行」的防线。原方案映射代码 Phase B 写、枚举 Phase E 验，**顺序倒了**
   - ③ 🆕 **C-12 EMBED_URL 跨站 iframe 鉴权可行性**（待产品确认 **P-2**）⇒ 若登录态与签名皆不可行，B5（工作量 **L**）须从 **P0 降级为 P1**，**不能让 L 级任务建在未验证前提上**
-- **Gate-2**：C-1/C-4 有结论 → 否则 E2 无法验收
+- **Gate-2**：C-1 **公开侧已关闭**（P0=`DIRECT_SEND`）/ C-4 有结论 → 否则 E2 无法验收；`DRAFT_THEN_SEND` 不在 Gate-2 必选项
 - **Gate-3**：A4 完成 → `PUT /{id}/supported-forms` 若仍对外暴露，写回旧列会触发删除守卫，使表单永久不可删
 - **Gate-4** 🆕：**C-13 撤销/终止可判定性** ⇒ **不阻塞开工**（统一 `TERMINATED` 使其不影响正确性），但 `status_mapping` 配置**必须包含全部撤销/终止候选值**（`cancel=2` / `5` / `terminate=1` / `15`），否则撤销的单据会因「未识别」而永久停在 `RUNNING`
 
@@ -820,7 +826,7 @@ r2 的设计有**两个互斥的环**（QA 指出，核对后成立）：
 | 环节 | 做法 |
 |------|------|
 | **① 幂等判定（原子）** | `INSERT INTO ext_terminal_event(...) ON CONFLICT DO NOTHING RETURNING id` |
-| **② 返回 0 行** | ⇒ 已有同行（`terminal_status` 相同）⇒ 判定「已处理」⇒ **直接结束，不投递** |
+| **② 返回 0 行** | ⇒ 该 `(tenant, system, caseId)` 已收过终态 ⇒ 判定「已处理」⇒ **直接结束，不投递**（与 `terminal_status` 是否相同无关） |
 | **③ 返回 1 行** | ⇒ 同一事务内继续：更新 `ext_status` / `form_record` + `ExecutionTaskService.enqueue()` + 置 `process_state='DONE'` |
 | **④ 原子性保证** | ①②③ 同事务 ⇒ **要么全成（收件行 + 后置任务都在），要么全败（下次轮询/回调重试即可）** |
 
@@ -847,7 +853,7 @@ r2 的设计有**两个互斥的环**（QA 指出，核对后成立）：
 
 | # | 问题 | 结论 |
 |---|------|------|
-| 1 | freeReplaceNode 之后如何离开开始节点 | **部分核实**：`draft=1` 保存待发即「不落开始节点」✅；**送出待发**接口 REST 文档无独立章节，V8 `/bpm/case/send` 支持传 `caseId`（🟡）。→ 按 `draft_mode`（`DRAFT_THEN_SEND`/`DIRECT_SEND`）配置化，联调确定后填配置。**阻塞 C-1** |
+| 1 | freeReplaceNode 之后如何离开开始节点 | **公开文档已复核（2026-10-24）**：`draft=1` 保存待发 ✅；**无**独立「送出待发」章节（V5 REST / V8 均未明示对已有 case 二次送出）。→ **P0 锁定 `DIRECT_SEND`**；`DRAFT_THEN_SEND` 仅沙箱翻案后按租户启用。**C-1 公开侧关闭** |
 | 1b | start 如何指定发起人 | **已定契约**：`initiatorRef` **必填显式传**。V5 REST 用 `senderLoginName`✅；V8 OpenAPI 用 `data.userCode`✅（`bpm/process/start` 参数表未列发送人字段，需确认是否取 token 主体）。能否进「已发 / 我发起的」= 🟡 推断（creator 归属正确即在已发），**联调实测确认** |
 | 2 | 会签展开方式 | **已核实**：`freeReplaceNode` 的 `data.userId` **支持多人**✅。会签/或签由模板节点属性决定，平台不可控 → **P0 放开多人，不承诺会签语义，UI 不暴露会签/或签** |
 | 2b | 外部模板槽位映射（新增） | **🔴 阻塞**：`freeReplaceNode` 是替换非追加，外部模板须预置 N 个槽位，蓝图节点数 ≤ N。槽位 `activityId` 需甲方提供并登记到 `external_node_slots`。**阻塞 C-3** |
@@ -869,7 +875,7 @@ r2 的设计有**两个互斥的环**（QA 指出，核对后成立）：
 | 核实项 | 结论 | 等级 | 对方案的影响 |
 |--------|------|------|-------------|
 | 离开开始节点 | `POST /seeyon/rest/bpm/process/start` 的 `data.draft`：`1`=保存待发 / `0`=新建-发送。**「不落开始节点」成立** | ✅ 确证 | §4 步骤 3 成立 |
-| 「送出待发」接口 | REST 文档 25 个接口中**无独立章节**；V8 `/bpm/case/send` 的 `data.caseId` + `data.userCode` 语义未明示 | 🟡 推断 | 新增 `draft_mode` 配置化二选一；**C-1 阻塞** |
+| 「送出待发」接口 | REST/OpenAPI **无**「已有 caseId → 送出」条文（2026-10-24 复核） | 🔴 公开未证实 | **P0 锁定 `DIRECT_SEND`**；`DRAFT_THEN_SEND` 非默认；**C-1 公开侧关闭** |
 | 发起人身份 | V5：`senderLoginName`✅；V8：`data.userCode`（必填）✅；「进已发」= creator 归属 → 🟡 推断 | ✅/🟡 | Adapter `start()` 强制 `initiatorRef` 显式参数，禁止隐式取 token 主体；**C-5 阻塞** |
 | 同节点多人 | `freeReplaceNode` 的 `data.userId` 为数组，官方示例含 2 个元素 | ✅ 确证 | **放开多人**（原规划「P0 只允许串行单人」作废） |
 | 会签语义 | 由模板节点 nodePolicy 决定，`freeReplaceNode` 只填人 | 🟡 推断 | 平台不承诺会签语义；UI 不暴露会签/或签 |
@@ -884,7 +890,7 @@ r2 的设计有**两个互斥的环**（QA 指出，核对后成立）：
 | V8 OpenAPI 幂等 | `requestId` + `timestamp`(±5min) + `data.commandId` + `data.redo` | ✅ 确证 | **P0 建议改走 V8 OpenAPI**：发起人显式 + 自带幂等 + `notifyUrl` 回调 |
 | 版本/授权 | 需甲方「启用 API + 新建接入应用 + AppKey/Secret + IP 白名单」 | 🔴 未知 | 决定走 V5 REST 还是 V8 OpenAPI。**C-7 阻塞，需提前 1~2 周申请** |
 
-**结论**：三个原始问题（离开开始节点 / 发起人身份 / 会签）**均已从「完全未知」推进到「有文档依据 + 契约化 + 可配置回退」**。但核实过程**新暴露 5 个阻塞项**（C-1 送出待发、C-2 意见查询、C-3 模板槽位、C-4 手机号字段、C-6 状态枚举），其中 **C-3 是最高优先级**：不解决则「蓝图节点数 ≤ 模板槽位数」的硬约束无法落地，Phase B 不能开工。
+**结论**：三个原始问题（离开开始节点 / 发起人身份 / 会签）**均已从「完全未知」推进到「有文档依据 + 契约化 + 可配置回退」**。**C-1（2026-10-24）**：公开文档**未证实**独立「送出待发」⇒ **P0 锁定 `DIRECT_SEND`**，公开侧关闭；其余阻塞仍为 C-2 / C-3 / C-4 / C-6，其中 **C-3 最高优先级**：不解决则「蓝图节点数 ≤ 模板槽位数」硬约束无法落地，Phase B 不能开工。
 
 ---
 
@@ -931,3 +937,4 @@ r2 的设计有**两个互斥的环**（QA 指出，核对后成立）：
 | **2026-10-16 (r4)** | **🟡 补 QA 补充 a：`external_sent` 的 `start` 超时/网络中断缺口** —— 致远可能已建流程但本地没收到 `caseId` ⇒ `external_sent=0` 让位 ⇒ 第二个流程。§4 新增缺口专项：**让位前先按 `command_id` 核对外部**（三步），并诚实标注「V5 REST 无 `commandId` 参数 ⇒ 走 V5 时无法完全消除」（这是建议走 V8 的**第四条**理由）；§4 [已有映射] 与 §8.2 第 14 条同步 |
 | **2026-10-16 (r4)** | **🟡 补 QA 补充 b：`FOR UPDATE SKIP LOCKED` 的两个窗口代价**（§7 N2 专项）—— 🔴 **`batch_size ≤ 20`**（`20×15s=300s < 5min` 保护期，否则同一行被两实例并发 fetch）；🟡 **崩溃窗口安全但会被运维误判成 bug**（时间戳打在领取时 ⇒ 一轮白跑、5 分钟后自动重来，属预期） |
 | **2026-10-16 (r4)** | **🟡 补齐 N5 第三处对齐**：`§8.2` 第 10 条原写「三处对齐」但实际未改，现补上（`(external_system, raw_status)` 聚合 + **单据只记 `sync_error`、退避计数落聚合层**），另加第 14/15 条新坑位 |
+| **2026-10-24** | **✅ C-1 公开文档复核关闭**：致远 V5 REST BPM 集成仅有 `start` 的 `draft=0|1`（新建发/新建待发），**无**对已有 case 的「送出待发」章节；V8 `/bpm/case/send` 亦无明示。⇒ **P0 锁定 `DIRECT_SEND`**；`DRAFT_THEN_SEND`/`activate` 仅现场沙箱翻案后按租户启用。§0 决策注 / §4 步骤 3 / §9 核实表 / Gate-2 已同步 |
