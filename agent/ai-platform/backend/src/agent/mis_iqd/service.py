@@ -1031,6 +1031,10 @@ class IqdAskService:
             unmatched_edits=list(derived.get("unmatched_edits") or []),
         )
         await self._report_selfheal_job(client, cid, "force_rebuild", result)
+        # MDL 已落盘，但 wren serve mcp 启动即绑定 schema，运行期不热加载；
+        # 不重启则 dry_run 仍可能报 ``wren.public.<model> not found``。
+        if build_status == "success":
+            await self._reload_mcp_after_mdl_deploy(cid)
         return result
 
     async def trigger_reindex(
@@ -1829,7 +1833,7 @@ class IqdAskService:
                 client, cid, build_status, mdl_hash, build_error, index_error, 0, 0
             )
 
-        return SyncResult(
+        result = SyncResult(
             connection_id=cid,
             coalesced=False,
             build_status=build_status,
@@ -1843,6 +1847,32 @@ class IqdAskService:
             unmatched_edit_count=int(derived.get("unmatched_edit_count") or 0),
             unmatched_edits=list(derived.get("unmatched_edits") or []),
         )
+        if build_status == "success":
+            await self._reload_mcp_after_mdl_deploy(cid)
+        return result
+
+    async def _reload_mcp_after_mdl_deploy(self, connection_id: int) -> None:
+        """MDL 落盘后重启该连接 MCP，使引擎重新加载 ``target/mdl.json``。
+
+        ``wren serve mcp`` 一进程启动即绑定 MDL，运行期不热加载。只写
+        ``mdl.json`` / YAML 而不重启，问数 ``dry_run`` 会继续用旧 schema，
+        表现为 ``table 'wren.public.<model>' not found``（现网维表物化后仍
+        45205 的根因）。失败只告警，不把发布/重建打成 failed。
+        """
+        try:
+            from src.agent.mis_iqd.mcp_lifecycle import IqdMcpLifecycleService
+
+            await IqdMcpLifecycleService().restart_connection(connection_id, wait=True)
+            logger.info(
+                "IQD MCP restarted after MDL deploy",
+                connection_id=connection_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - 重启失败不阻断发布结果
+            logger.warning(
+                "IQD MCP restart after MDL deploy failed (non-blocking)",
+                connection_id=connection_id,
+                error=str(exc),
+            )
 
     async def _current_edit_revision(self, full: dict[str, Any], client: Any) -> int:
         """取 catalog 全量快照中的当前编辑版本（fail-closed，不默认 0）。
@@ -1956,7 +1986,13 @@ class IqdAskService:
         #    必须早于 _patch_mdl_node：patch 按「name 定位已有节点」，而物化才负责「新增」。
         #    T03e：``landed`` 收集「成功落入派生 MDL 的 edited_items 下标」，供 ③.1 计算未匹配清单。
         landed: set[int] = set()
-        self._materialize_missing_nodes(mdl, edited_items, landed)
+        # catalog_items：全量 catalog（含 edit_revision 为空的模型/列）。
+        # 现网：平台已纳入问数但从未进 Wren 基线的维表（如 dim_spm_chl_category_df）
+        # 只有 catalog 行、无 edited_items → 仅靠 edited 物化永远补不进 MDL → dry_run
+        # ``wren.public.<model> not found``。
+        self._materialize_missing_nodes(
+            mdl, edited_items, landed, catalog_items=catalog_items or []
+        )
 
         # ③ patch 编辑字段（item_key → MDL 节点定位）；patch 命中即为「已落入」。
         for idx, it in enumerate(edited_items):
@@ -2362,6 +2398,7 @@ class IqdAskService:
         mdl: dict[str, Any],
         edited_items: list[dict[str, Any]],
         landed: set[int] | None = None,
+        catalog_items: list[dict[str, Any]] | None = None,
     ) -> None:
         """把建模台**新建**、但 ``mdl_raw`` 基线中不存在的节点物化进派生 MDL（T03 / R-3 补丁）。
 
@@ -2384,10 +2421,14 @@ class IqdAskService:
                 expression/model_ref``；T03 起 ``IqdAdminService.getCatalogFull`` 会带上
                 后四项）。
             landed: 可选出参集合，收集已落入 MDL 的 ``edited_items`` 下标（原地更新）。
+            catalog_items: 全量 catalog（可含 ``edit_revision`` 为空的模型/列）。用于
+                ① 给「仅编辑了 model 行」补列定义；② 把「平台已有、Wren 基线没有、且从未
+                进 edited_items」的模型补进 MDL（现网 dim 维表 45205 根因）。
         """
         if landed is None:
             landed = set()
-        if not edited_items:
+        catalog_items = catalog_items or []
+        if not edited_items and not catalog_items:
             return
 
         cubes = mdl.setdefault("cubes", [])
@@ -2403,6 +2444,21 @@ class IqdAskService:
             r.get("name"): r for r in relationships if isinstance(r, dict)
         }
 
+        # 列来源：edited ∪ catalog（catalog 补「未编辑列」；同 item_key 以 edited 为准）
+        column_source: list[dict[str, Any]] = list(edited_items)
+        seen_keys = {
+            str(it.get("item_key") or "")
+            for it in edited_items
+            if isinstance(it, dict) and it.get("item_key")
+        }
+        for it in catalog_items:
+            if not isinstance(it, dict):
+                continue
+            key = str(it.get("item_key") or "")
+            if key and key not in seen_keys:
+                column_source.append(it)
+                seen_keys.add(key)
+
         # ⓪ 全新 model（from-table 路径）—— 必须先于 cube/relationship，因为它们的
         #    baseObject / models 可能引用新模型。
         #    <p><b>为什么此前刻意不做</b>：真实 MDL 的 model schema（tableReference / columns
@@ -2410,42 +2466,41 @@ class IqdAskService:
         #    <p><b>2026-09-28 已校准</b>（真机 mdl_raw 实测）：
         #    model = {name, tableReference{catalog,schema,table}, columns[{name,type,notNull,
         #    properties,isCalculated[,expression,isPrimaryKey]}], primaryKey[], cached, properties}。
-        #    因此现在可以安全物化：**以基线中任一既有 model 的 tableReference 为模板**取
-        #    catalog/schema（同连接同库），只替换 table；基线无 model 可参照时**跳过**
-        #    （fail-safe：宁可留在 unmatched 清单，也不盲猜 schema 产出非法 MDL）。
+        #    因此现在可以安全物化：**优先**用物理表 item_key 推导 tableReference；否则以基线
+        #    既有 model 的 tableReference 为模板取 catalog/schema，只替换 table；两者皆无则
+        #    **跳过**（fail-safe：宁可留在 unmatched 清单，也不盲猜 schema 产出非法 MDL）。
         template_ref: dict[str, Any] | None = None
         for m in models:
             if isinstance(m, dict) and isinstance(m.get("tableReference"), dict):
                 template_ref = dict(m["tableReference"])
                 break
-        for idx, it in enumerate(edited_items):
-            if (it.get("kind") or "") != "model":
-                continue
+
+        def _try_materialize_model(it: dict[str, Any], idx: int | None) -> bool:
+            """尝试把单个 model 行物化进 MDL；成功返回 True。"""
             item_key = str(it.get("item_key") or "")
             if not item_key.startswith("mdl:model:"):
-                continue
+                return False
             name = (it.get("display_name") or "").strip() or self._item_key_tail(item_key)
             if not name or name in model_by_name:
-                if name in model_by_name:
+                if name in model_by_name and idx is not None:
                     landed.add(idx)  # 基线已有 → 由 patch 负责改名/改描述
-                continue
-            table_key = self._table_key_of_model(it, edited_items, name)
-            # 无基线时（如 from-table 导入后尚未同步，mdl_raw 为空）：
-            # 从 table 节点的 item_key（``{datasource}.{schema}.{table}``）推导
-            # tableReference（catalog='' / schema=第二段，与真机 mdl_raw 实测一致）。
-            # 否则新建连接（无 mdl_raw）永远物化不出模型 → 发布出 0 models。
-            ref = template_ref
-            if ref is None:
-                ref = self._derive_table_reference(table_key)
-            if ref is None:
-                # 真的参照不到：不盲写（保持 unmatched，由 T03e 未匹配清单上报）。
+                return name in model_by_name
+            table_key = self._table_key_of_model(it, column_source, name)
+            # 物理键可推导时优先用它（schema 正确）；否则回落到基线模板。
+            derived = self._derive_table_reference(table_key)
+            if derived is not None:
+                ref = derived
+            elif template_ref is not None:
+                phys = str(table_key or "").rsplit(".", 1)[-1] or name
+                ref = {**template_ref, "table": phys}
+            else:
                 logger.debug(
                     "IQD new model not materialized (no tableReference derivable)",
                     model=name,
                 )
-                continue
+                return False
 
-            cols = self._columns_of_table(edited_items, table_key)
+            cols = self._columns_of_table(column_source, table_key)
             mdl_columns: list[dict[str, Any]] = []
             pk_names: list[str] = []
             for col in cols:
@@ -2474,14 +2529,12 @@ class IqdAskService:
                     pk_names.append(col_name)
                 mdl_columns.append(entry)
             if not mdl_columns:
-                # 没有可用列 → 不建空模型（build 会因无列失败）。
-                # 同样只走 unmatched 清单，不另发 warning（避免重复上报）。
                 logger.debug("IQD new model has no columns; skip", model=name)
-                continue
+                return False
 
             model: dict[str, Any] = {
                 "name": name,
-                "tableReference": {**ref, "table": name},
+                "tableReference": dict(ref),
                 "columns": mdl_columns,
                 "cached": False,
                 "properties": {},
@@ -2493,12 +2546,26 @@ class IqdAskService:
                 model["primaryKey"] = pk_names
             models.append(model)
             model_by_name[name] = model
-            landed.add(idx)
+            if idx is not None:
+                landed.add(idx)
             logger.info(
                 "IQD new model materialized",
                 model=name,
                 columns=len(mdl_columns),
+                source="edited" if idx is not None else "catalog",
             )
+            return True
+
+        for idx, it in enumerate(edited_items):
+            if not isinstance(it, dict) or (it.get("kind") or "") != "model":
+                continue
+            _try_materialize_model(it, idx)
+
+        # catalog 中有、Wren 基线没有、且从未进入 edited_items 的模型（edit_revision 为空）
+        for it in catalog_items:
+            if not isinstance(it, dict) or (it.get("kind") or "") != "model":
+                continue
+            _try_materialize_model(it, None)
 
         # ① cube 容器（先建，供 measure/dimension 挂靠）
         for idx, it in enumerate(edited_items):

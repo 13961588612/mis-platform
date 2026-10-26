@@ -198,6 +198,53 @@ def test_new_model_without_derivable_key_still_skipped() -> None:
     assert all(m["name"] != "sale_ord" for m in mdl["models"])
 
 
+def test_catalog_only_model_materialized_when_missing_from_baseline() -> None:
+    """平台 catalog 有模型、edit_revision 为空（不在 edited_items）时，仍应补进 MDL。
+
+    现网：``dim_spm_chl_category_df`` 已 SYNCED / in_scope，但 Wren 基线没有该模型 →
+    dry_run ``wren.public.dim_spm_chl_category_df not found``。根因是物化只看 edited_items。
+    """
+    mdl = _baseline()
+    catalog = [
+        {
+            "item_key": "pg_main.spm_result.dim_spm_chl_category_df",
+            "kind": "table",
+            "display_name": "dim_spm_chl_category_df",
+        },
+        {
+            "item_key": "pg_main.spm_result.dim_spm_chl_category_df.categoryid",
+            "kind": "column",
+            "parent_key": "pg_main.spm_result.dim_spm_chl_category_df",
+            "display_name": "categoryid",
+            "data_type": "VARCHAR",
+        },
+        {
+            "item_key": "pg_main.spm_result.dim_spm_chl_category_df.categoryname",
+            "kind": "column",
+            "parent_key": "pg_main.spm_result.dim_spm_chl_category_df",
+            "display_name": "categoryname",
+            "data_type": "VARCHAR",
+        },
+        {
+            "item_key": "mdl:model:dim_spm_chl_category_df",
+            "kind": "model",
+            "display_name": "dim_spm_chl_category_df",
+            "description": "品类维表",
+        },
+    ]
+    landed: set[int] = set()
+    IqdAskService()._materialize_missing_nodes(mdl, [], landed, catalog_items=catalog)
+
+    model = next(m for m in mdl["models"] if m["name"] == "dim_spm_chl_category_df")
+    assert model["tableReference"] == {
+        "catalog": "",
+        "schema": "spm_result",
+        "table": "dim_spm_chl_category_df",
+    }
+    assert [c["name"] for c in model["columns"]] == ["categoryid", "categoryname"]
+    assert model["properties"]["description"] == "品类维表"
+
+
 # ================================================================ 列 patch 大小写不敏感（2026-09-30）
 
 def _mdl_with_upper_column() -> dict:

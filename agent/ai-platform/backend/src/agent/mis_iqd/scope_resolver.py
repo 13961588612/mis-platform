@@ -730,13 +730,14 @@ class ScopeResolver:
         allowed = set(resolution.allowed_item_keys)
         if extra_allowed:
             allowed.update(extra_allowed)
-        allowed_shorts = {a.rsplit(".", 1)[-1].lower() for a in allowed if a}
+        # 短名需同时覆盖物理键（a.b.table）与语义键（mdl:model:table），
+        # 否则 scope_hint 仅留 mdl:model:* 时 SQL 裸表名会误拒（现网 45204）。
+        allowed_shorts = collect_item_key_shorts(allowed)
 
         def _in_scope(key: str) -> bool:
             if key in allowed:
                 return True
-            short = key.rsplit(".", 1)[-1].lower()
-            return bool(short) and short in allowed_shorts
+            return bool(item_key_shorts(key) & allowed_shorts)
 
         denied = [key for key in lineage if not _in_scope(key)]
         if denied:
@@ -1574,6 +1575,32 @@ def _normalize_table(name: str) -> str:
     if len(parts) > 3:
         parts = parts[-3:]
     return ".".join(parts)
+
+
+def item_key_shorts(key: str) -> set[str]:
+    """从授权/血缘键推导可匹配短名集合（小写）。
+
+    - ``pg_main.spm_result.orders`` → ``orders``
+    - ``mdl:model:orders`` / ``mdl:cube:revenue`` → ``orders`` / ``revenue``
+    """
+    text = (key or "").strip().lower()
+    if not text:
+        return set()
+    shorts: set[str] = {text}
+    if "." in text:
+        shorts.add(text.rsplit(".", 1)[-1])
+    if ":" in text:
+        shorts.add(text.rsplit(":", 1)[-1])
+    shorts.discard("")
+    return shorts
+
+
+def collect_item_key_shorts(keys: set[str] | list[str] | tuple[str, ...]) -> set[str]:
+    """合并一组 item_key 的短名（供血缘断言 / lineage_extra 共用）。"""
+    out: set[str] = set()
+    for key in keys:
+        out |= item_key_shorts(key)
+    return out
 
 
 def _quote(value: Any) -> str:

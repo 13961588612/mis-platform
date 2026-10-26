@@ -52,6 +52,18 @@ def _normalize_table(name: str) -> str:
     return ".".join(parts)
 
 
+def _collect_cte_names(expression: Any) -> set[str]:
+    """收集 WITH 子句声明的 CTE 名（小写），供血缘抽取剔除。"""
+    import sqlglot
+
+    names: set[str] = set()
+    for cte in expression.find_all(sqlglot.exp.CTE):
+        alias = cte.alias
+        if alias:
+            names.add(str(alias).strip().strip('"').strip("`").lower())
+    return names
+
+
 class LineageExtractor:
     """从最终 SQL 提取表/字段血缘（B2 表级）。"""
 
@@ -81,10 +93,15 @@ class LineageExtractor:
         必须用 ``catalog/db/name`` 拼表名，**不能** ``node.sql()``：后者会带上
         ``AS alias``（如 ``dim_xxx AS c``），导致血缘断言把已授权表误判为越权
         （现网 45204：``dim_spmrkt_chl_category_df AS c``）。
+
+        ``WITH cte AS (...)`` 声明的 CTE 名也会被 sqlglot 标成 ``Table``；
+        引用 CTE 不是物理/语义表，必须剔除，否则现网自关联 CTE（如 ``veg``）
+        会在 lineage_check 误报 45204。
         """
         import sqlglot
 
         expression = sqlglot.parse_one(sql, read=dialect or DEFAULT_DIALECT)
+        cte_names = _collect_cte_names(expression)
         tables: list[str] = []
         seen: set[str] = set()
         for node in expression.find_all(sqlglot.exp.Table):
@@ -93,12 +110,18 @@ class LineageExtractor:
                 for p in (node.catalog, node.db, node.name)
                 if p is not None and str(p).strip()
             ]
+            # 无 catalog/db 的单段名且命中 CTE → 跳过（真实表一般有 schema，或
+            # 即便同名裸表也会在 CTE 体内再以 Table 节点出现一次）。
+            if len(parts) == 1 and parts[0].lower() in cte_names:
+                continue
             name = _normalize_table(".".join(parts) if parts else node.sql(dialect=dialect))
             # 兜底：若仍混入别名，剥掉 `` AS xxx``
             if " as " in name.lower():
                 name = re.split(r"\s+[Aa][Ss]\s+", name, maxsplit=1)[0].strip()
                 name = _normalize_table(name)
             if not name:
+                continue
+            if name.lower() in cte_names and "." not in name:
                 continue
             if name not in seen:
                 seen.add(name)

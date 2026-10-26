@@ -56,7 +56,9 @@ async def test_force_rebuild_passes_connid_and_project_dir_to_cli() -> None:
 
     with patch("src.adapters.iqd_cli.IqdCli", return_value=cli), patch.object(
         IqdAskService, "_get_config_client", return_value=config
-    ):
+    ), patch.object(
+        IqdAskService, "_reload_mcp_after_mdl_deploy", new_callable=AsyncMock
+    ) as reload_mcp:
         svc = IqdAskService()
         result: SyncResult = await svc.trigger_force_rebuild(2, wait=True)
 
@@ -80,6 +82,8 @@ async def test_force_rebuild_passes_connid_and_project_dir_to_cli() -> None:
     assert config.report_sync_job.call_args.args[0]["action"] == "force_rebuild"
     assert result.connection_id == 2
     assert result.build_status == "success"
+    # MDL 落盘后必须重启 MCP，否则引擎仍用旧 schema
+    reload_mcp.assert_awaited_once_with(2)
 
 
 @pytest.mark.asyncio

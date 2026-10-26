@@ -1232,13 +1232,14 @@ class AskOrchestrator:
         allowed = [t for t in (allowed_tables or []) if t]
         if not allowed:
             return list(described_models)
+        from src.agent.mis_iqd.scope_resolver import collect_item_key_shorts, item_key_shorts
+
         allowed_norm = {a.lower() for a in allowed}
-        allowed_shorts = {a.rsplit(".", 1)[-1].lower() for a in allowed}
+        allowed_shorts = collect_item_key_shorts(allowed)
         # 任一授权键已能对上 describe 模型 → 不扩权
         for name in described_models:
             low = name.lower()
-            short = low.rsplit(".", 1)[-1]
-            if low in allowed_norm or short in allowed_shorts:
+            if low in allowed_norm or (item_key_shorts(low) & allowed_shorts):
                 return []
         return list(described_models)
 
