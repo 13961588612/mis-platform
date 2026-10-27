@@ -8,7 +8,10 @@ import java.util.Optional;
 
 public interface IqdSqlPairCategoryRepository extends JpaRepository<IqdSqlPairCategory, Long> {
 
-    List<IqdSqlPairCategory> findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(Long connectionId);
+    /**
+     * 同级按 {@code code}（编号）升序；管理面「全部样本 / 未分类」为虚拟节点，不在此结果中。
+     */
+    List<IqdSqlPairCategory> findByConnectionIdOrderByParentIdAscCodeAscIdAsc(Long connectionId);
 
     Optional<IqdSqlPairCategory> findByConnectionIdAndCode(Long connectionId, String code);
 

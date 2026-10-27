@@ -152,9 +152,11 @@ class MaskingEngine:
             new_columns.append(
                 ColumnMeta(
                     name=col.name,
-                    item_key=col.item_key,
-                    data_type=col.data_type,
-                    display_name=col.display_name,
+                    item_key=col.item_key or self._prefer_item_key(col, metas),
+                    data_type=col.data_type or self._prefer_data_type(metas),
+                    # 建模「备注」在 catalog.description；Wren 结果列只有物理名。
+                    # 这里把备注充实到 display_name，表头/对话 Agent 才能显示中文含义。
+                    display_name=self._display_label(col, metas),
                     masked=rule is not None or col.masked,
                 )
             )
@@ -225,6 +227,61 @@ class MaskingEngine:
             )
         name = str(col) if col is not None else ""
         return ColumnMeta(name=name, item_key=name, display_name=name)
+
+    @staticmethod
+    def _display_label(col: ColumnMeta, metas: list[dict[str, Any]]) -> str:
+        """从 catalog 备注/展示名解析结果列中文标题。
+
+        优先级：``description``（建模备注）→ 与物理名不同的 ``display_name``
+        → 结果集已有 display_name → 物理列名。同名多表时取首个非空备注
+        （现网 qtml 等多表缩写口径接近，足以支撑对话解释）。
+        """
+        phys = (col.name or "").strip()
+        for meta in metas:
+            if not isinstance(meta, dict):
+                continue
+            kind = str(meta.get("kind") or "column")
+            if kind and kind != "column":
+                continue
+            desc = str(meta.get("description") or "").strip()
+            if desc:
+                return desc
+        for meta in metas:
+            if not isinstance(meta, dict):
+                continue
+            dn = str(meta.get("display_name") or "").strip()
+            if dn and dn.casefold() != phys.casefold():
+                return dn
+        existing = (col.display_name or "").strip()
+        if existing:
+            return existing
+        return phys
+
+    @staticmethod
+    def _prefer_item_key(col: ColumnMeta, metas: list[dict[str, Any]]) -> str:
+        """结果列缺 item_key 时，用 catalog 完整键回填（利于前端/引用对齐）。"""
+        if (col.item_key or "").strip() and "." in (col.item_key or ""):
+            return col.item_key
+        for meta in metas:
+            if not isinstance(meta, dict):
+                continue
+            if str(meta.get("kind") or "column") != "column":
+                continue
+            key = str(meta.get("item_key") or "").strip()
+            if key:
+                return key
+        return col.item_key or col.name or ""
+
+    @staticmethod
+    def _prefer_data_type(metas: list[dict[str, Any]]) -> str:
+        """结果列缺类型时，用 catalog.data_type 回填。"""
+        for meta in metas:
+            if not isinstance(meta, dict):
+                continue
+            dtype = str(meta.get("data_type") or "").strip()
+            if dtype:
+                return dtype
+        return ""
 
     def _index_catalog(
         self, catalog_items: list[dict[str, Any]] | None

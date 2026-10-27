@@ -54,6 +54,22 @@ def test_keeps_inner_subquery_limit() -> None:
     assert limit is None
 
 
+def test_incomplete_with_cte_rejected() -> None:
+    """现网截断样例：半截 WITH 不得视为完整。"""
+    truncated = "WITH leaf AS (SELECT c4.categoryid AS leaf_id"
+    assert SqlGuard.is_structurally_complete(truncated) is False
+
+
+def test_complete_select_accepted() -> None:
+    assert (
+        SqlGuard.is_structurally_complete(
+            "SELECT store_id, SUM(xsje) AS amt FROM ads_spm_trd_cpi_category_day_df "
+            "WHERE store_id = '0001' GROUP BY store_id"
+        )
+        is True
+    )
+
+
 def test_no_limit_returns_unchanged() -> None:
     for original in ("SELECT a FROM t", "SELECT a FROM t ORDER BY a"):
         sql, limit = SqlGuard.strip_trailing_limit(original)

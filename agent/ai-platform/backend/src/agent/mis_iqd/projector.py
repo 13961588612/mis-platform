@@ -55,6 +55,18 @@ def compact_ask_payload_for_llm(
     if not isinstance(data, dict):
         return out
 
+    # 列物理名 → 中文备注（来自 catalog.description 充实后的 display_name）。
+    # SQL 已剥离，对话 Agent 只能靠这份词典解释 qtml/zhml 等缩写。
+    glossary = _column_glossary(data.get("columns"))
+    if glossary:
+        out["column_labels"] = glossary
+        gloss_note = "字段说明：" + "；".join(
+            f"{item['name']}={item['label']}" for item in glossary
+        )
+        summary = str(out.get("answer_summary") or "").strip()
+        if gloss_note not in summary:
+            out["answer_summary"] = f"{summary} {gloss_note}".strip() if summary else gloss_note
+
     rows = data.get("rows")
     if not isinstance(rows, list):
         return out
@@ -80,6 +92,31 @@ def compact_ask_payload_for_llm(
             total_rows=total,
             preview_rows=len(preview),
         )
+    return out
+
+
+def _column_glossary(columns: Any) -> list[dict[str, str]]:
+    """抽出「物理列名 ≠ 展示名」的字段说明，供 LLM 解释口径。"""
+    if not isinstance(columns, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for col in columns:
+        if isinstance(col, dict):
+            name = str(col.get("name") or "").strip()
+            label = str(col.get("display_name") or "").strip()
+        else:
+            name = str(getattr(col, "name", "") or "").strip()
+            label = str(getattr(col, "display_name", "") or "").strip()
+        if not name or not label:
+            continue
+        if label.casefold() == name.casefold():
+            continue
+        low = name.casefold()
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append({"name": name, "label": label})
     return out
 
 

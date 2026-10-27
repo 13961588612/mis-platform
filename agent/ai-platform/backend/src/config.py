@@ -519,7 +519,9 @@ class Settings(BaseSettings):
     IQD_NL2SQL_PROVIDER: str = ""
     IQD_NL2SQL_ENABLE_THINKING: bool = False
     IQD_NL2SQL_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0)
-    IQD_NL2SQL_MAX_TOKENS: int = Field(default=1024, ge=1)
+    # 复杂 WITH/多表 JOIN 用 1024 易截断半截 SQL（现网：WITH leaf AS (SELECT … AS leaf_id
+    # 无闭合括号仍送 dry_run → Expecting )）。4096 覆盖常见品类层级查询。
+    IQD_NL2SQL_MAX_TOKENS: int = Field(default=4096, ge=1)
     IQD_NL2SQL_TIMEOUT_SECONDS: int | None = Field(default=30, ge=0)
 
     # DeepSeek API

@@ -43,6 +43,47 @@ def test_apply_accepts_string_columns() -> None:
     asyncio.run(_run())
 
 
+def test_apply_enriches_display_name_from_catalog_description() -> None:
+    """建模备注 → 结果列 display_name，供表头/对话解释中文口径。"""
+    engine = MaskingEngine(config_client=_StubConfig())
+
+    async def _run() -> None:
+        outcome = await engine.apply(
+            ["qtml", "zhml", "store_id"],
+            [[1.0, 2.0, "0001"]],
+            connection_id=1,
+            catalog_items=[
+                {
+                    "item_key": "pg_main.spm_result.ads_spm_trd_cpi_category_day_df.qtml",
+                    "kind": "column",
+                    "display_name": "qtml",
+                    "description": "前台毛利（含税）",
+                    "data_type": "DOUBLE",
+                },
+                {
+                    "item_key": "pg_main.spm_result.ads_spm_trd_cpi_category_day_df.zhml",
+                    "kind": "column",
+                    "display_name": "zhml",
+                    "description": "综合毛利（含税）",
+                },
+                {
+                    "item_key": "pg_main.spm_result.ads_spm_trd_cpi_category_day_df.store_id",
+                    "kind": "column",
+                    "display_name": "store_id",
+                    "description": "",
+                },
+            ],
+            mask_rules=[],
+        )
+        by_name = {c.name: c for c in outcome.columns}
+        assert by_name["qtml"].display_name == "前台毛利（含税）"
+        assert by_name["zhml"].display_name == "综合毛利（含税）"
+        assert by_name["store_id"].display_name == "store_id"
+        assert "qtml" in by_name["qtml"].item_key
+
+    asyncio.run(_run())
+
+
 class _StubConfig:
     async def list_catalog_items(self, *_a, **_k):  # noqa: ANN001
         return []

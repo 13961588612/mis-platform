@@ -81,6 +81,30 @@ def test_store_catalog_rejects_city_name_and_accepts_city() -> None:
     assert unknown_sql_columns(GOOD_SQL, index) == []
 
 
+def test_select_alias_in_order_by_is_not_unknown_column() -> None:
+    """现网：SUM(main_sale_amt) AS sum_main_sale_amt + ORDER BY 别名，不得 45205。"""
+    table = "ads_spm_trd_cpi_category_day_df"
+    index = {
+        table: [
+            "store_id",
+            "store_name",
+            "main_sale_amt",
+            "ord_date",
+            "data_type",
+        ]
+    }
+    sql = (
+        f"SELECT store_id, store_name, SUM(main_sale_amt) AS sum_main_sale_amt "
+        f"FROM {table} "
+        "WHERE data_type = '小类' AND ord_date >= '2025-09-01' AND ord_date < '2025-10-01' "
+        "GROUP BY store_id, store_name ORDER BY sum_main_sale_amt DESC"
+    )
+    assert unknown_sql_columns(sql, index) == []
+    # 真缺列仍要拦
+    bad = sql.replace("SUM(main_sale_amt)", "SUM(not_a_real_col)")
+    assert "not_a_real_col" in unknown_sql_columns(bad, index)
+
+
 @pytest.mark.asyncio
 async def test_context_uses_catalog_columns_when_describe_is_empty() -> None:
     mock_client = AsyncMock(spec=IqdMcpClient)

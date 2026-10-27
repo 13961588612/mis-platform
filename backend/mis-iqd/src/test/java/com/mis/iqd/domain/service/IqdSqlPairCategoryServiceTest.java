@@ -115,7 +115,7 @@ class IqdSqlPairCategoryServiceTest {
         child.setEnabled(1);
         child.setCreatedAt(root.getCreatedAt());
         child.setUpdatedAt(root.getCreatedAt());
-        when(sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(CONNECTION_ID))
+        when(sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscCodeAscIdAsc(CONNECTION_ID))
                 .thenReturn(List.of(root, child));
 
         List<IqdSqlPairCategoryVO> tree = service.listSqlPairCategoryTree(CONNECTION_ID);
@@ -124,6 +124,42 @@ class IqdSqlPairCategoryServiceTest {
         assertEquals("销售", tree.get(0).getName());
         assertEquals(1, tree.get(0).getChildren().size());
         assertEquals("华东", tree.get(0).getChildren().get(0).getName());
+    }
+
+    @Test
+    @DisplayName("同级分类按 code 编号顺序（非 id / sort_order）")
+    void tree_siblingsOrderedByCode() {
+        when(connectionRepository.existsById(CONNECTION_ID)).thenReturn(true);
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        IqdSqlPairCategory laterIdButSmallerCode = new IqdSqlPairCategory();
+        laterIdButSmallerCode.setId(9003L);
+        laterIdButSmallerCode.setConnectionId(CONNECTION_ID);
+        laterIdButSmallerCode.setParentId(IqdSqlPairCategory.ROOT_PARENT_ID);
+        laterIdButSmallerCode.setCode("10");
+        laterIdButSmallerCode.setName("十");
+        laterIdButSmallerCode.setSortOrder(99);
+        laterIdButSmallerCode.setEnabled(1);
+        laterIdButSmallerCode.setCreatedAt(now);
+        laterIdButSmallerCode.setUpdatedAt(now);
+        IqdSqlPairCategory earlierIdButLargerCode = new IqdSqlPairCategory();
+        earlierIdButLargerCode.setId(9001L);
+        earlierIdButLargerCode.setConnectionId(CONNECTION_ID);
+        earlierIdButLargerCode.setParentId(IqdSqlPairCategory.ROOT_PARENT_ID);
+        earlierIdButLargerCode.setCode("02");
+        earlierIdButLargerCode.setName("二");
+        earlierIdButLargerCode.setSortOrder(0);
+        earlierIdButLargerCode.setEnabled(1);
+        earlierIdButLargerCode.setCreatedAt(now);
+        earlierIdButLargerCode.setUpdatedAt(now);
+        // 仓库已按 code 排好：02 在前，10 在后
+        when(sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscCodeAscIdAsc(CONNECTION_ID))
+                .thenReturn(List.of(earlierIdButLargerCode, laterIdButSmallerCode));
+
+        List<IqdSqlPairCategoryVO> tree = service.listSqlPairCategoryTree(CONNECTION_ID);
+
+        assertEquals(2, tree.size());
+        assertEquals("02", tree.get(0).getCode());
+        assertEquals("10", tree.get(1).getCode());
     }
 
     @Test

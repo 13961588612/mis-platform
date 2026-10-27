@@ -15,9 +15,31 @@ export interface SqlPairCategoryTreeProps {
 }
 
 /**
+ * 同级按分类编号 {@code code} 排序（自然序：1 &lt; 2 &lt; 10）；递归处理子节点。
+ * 「全部样本 / 未分类」为虚拟节点，不参与本排序。
+ */
+export function sortSqlPairCategoriesByCode(
+  nodes: IqdSqlPairCategory[] | undefined | null,
+): IqdSqlPairCategory[] {
+  if (!nodes?.length) return [];
+  return [...nodes]
+    .map((n) => ({
+      ...n,
+      children: n.children?.length ? sortSqlPairCategoriesByCode(n.children) : n.children,
+    }))
+    .sort((a, b) =>
+      String(a.code ?? '').localeCompare(String(b.code ?? ''), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }),
+    );
+}
+
+/**
  * 样本对分类树（enhance 页 sqlpair Tab 左侧）。
  *
  * <p>虚拟节点：「全部样本」清空筛选；「未分类」对应 {@code category_id IS NULL}。
+ * 真实分类同级按编号排序。
  */
 export function SqlPairCategoryTree({
   tree,
@@ -25,6 +47,7 @@ export function SqlPairCategoryTree({
   onSelect,
   loading,
 }: SqlPairCategoryTreeProps) {
+  const sorted = sortSqlPairCategoriesByCode(tree);
   return (
     <div className="space-y-0.5">
       <TreeButton
@@ -41,12 +64,12 @@ export function SqlPairCategoryTree({
         pad={0}
       />
 
-      {loading && tree.length === 0 ? (
+      {loading && sorted.length === 0 ? (
         <p className="px-2 py-2 text-sm text-muted-foreground">加载中…</p>
-      ) : tree.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <p className="px-2 py-2 text-sm text-muted-foreground">暂无分类</p>
       ) : (
-        <TreeLevel nodes={tree} depth={0} selected={selected} onSelect={onSelect} />
+        <TreeLevel nodes={sorted} depth={0} selected={selected} onSelect={onSelect} />
       )}
     </div>
   );
@@ -130,9 +153,9 @@ function TreeButton({
   );
 }
 
-/** 将嵌套分类树转为 CategorySingleTreeSelect 节点。 */
+/** 将嵌套分类树转为 CategorySingleTreeSelect 节点（同级按编号）。 */
 export function toCategoryTreeSelectNodes(tree: IqdSqlPairCategory[]): CategoryTreeNode[] {
-  return tree.map((n) => ({
+  return sortSqlPairCategoriesByCode(tree).map((n) => ({
     id: String(n.id),
     name: n.name,
     children: n.children?.length ? toCategoryTreeSelectNodes(n.children) : undefined,

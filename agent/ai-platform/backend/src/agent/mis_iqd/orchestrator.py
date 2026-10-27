@@ -362,6 +362,32 @@ class AskOrchestrator:
                 context_text=context_text,
             )
 
+        # max_tokens 截断会产出半截 WITH（现网 Expecting )）；先拦再修，勿送 dry_run。
+        sql, incomplete_error = await self._repair_incomplete_sql(
+            sql,
+            nl2sql=nl2sql,
+            request=request,
+            identity=identity,
+            query_id=query_id,
+            nl2sql_attempts=nl2sql_attempts,
+            record_attempt=_record_attempt,
+            context_text=context_text,
+            allowed_tables=resolution.allowed_item_keys,
+        )
+        if incomplete_error:
+            plan.mark(steps, "generating", "failed", detail=incomplete_error)
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=incomplete_error,
+                nl2sql_attempts=nl2sql_attempts,
+                sql=sql,
+                context_text=context_text,
+            )
+
         sql, column_error = await self._repair_unknown_columns(
             sql,
             column_index,
@@ -636,12 +662,16 @@ class AskOrchestrator:
                 context_text=context_text,
             )
 
-        # ===== masking（W2：唯一脱敏出口）=====
+        # ===== masking（W2：唯一脱敏出口；顺带用 catalog 备注充实列 display_name）=====
         mask_outcome: MaskOutcome = await self._apply_masking(run_outcome, resolution)
         data: ResultData = self._build_result_data(run_outcome, mask_outcome)
         answer_summary: str = str(run_outcome.get("summary") or "").strip()
         if not answer_summary:
             answer_summary = f"查询返回 {data.row_count} 行结果。"
+        # 把「物理列 → 中文备注」写进摘要，避免对话层只看见 qtml 等缩写却不敢解释。
+        gloss = self._column_label_note(data)
+        if gloss and gloss not in answer_summary:
+            answer_summary = f"{answer_summary} {gloss}".strip()
         plan.mark_done(
             steps,
             "executing",
@@ -999,6 +1029,53 @@ class AskOrchestrator:
         if not isinstance(items, list):
             return {}
         return index_catalog_columns(items)
+
+    async def _repair_incomplete_sql(
+        self,
+        sql: str,
+        *,
+        nl2sql: Nl2SqlGenerator,
+        request: AskRequest,
+        identity: AskIdentity,
+        query_id: str,
+        nl2sql_attempts: list[dict[str, Any]],
+        record_attempt: Any,
+        context_text: str,
+        allowed_tables: list[str],
+    ) -> tuple[str, str | None]:
+        """半截 SQL（括号未闭合 / 无法解析）触发一次重生成；仍不完整则明确失败。"""
+        del nl2sql_attempts
+        if SqlGuard.is_structurally_complete(sql):
+            return sql, None
+        hint = (
+            f"previous_sql:\n{sql}\n\n"
+            "error: SQL is truncated or structurally incomplete "
+            "(unbalanced parentheses or unparsable). "
+            "Regenerate one complete SELECT/WITH statement; prefer simple JOINs "
+            "over deep recursive category CTEs when data_type already encodes grain."
+        )
+        try:
+            repaired = await nl2sql.generate(
+                question=request.question,
+                context=context_text or hint,
+                allowed_tables=list(allowed_tables or []),
+                user_id=str(identity.user_id or ""),
+                session_id=str(request.thread_id or query_id),
+                repair_hint=hint,
+            )
+            record_attempt(repaired, label="incomplete_sql_repair")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD incomplete-sql repair failed", error=str(exc))
+            return sql, (
+                "生成的 SQL 不完整（疑似输出被截断），预检未通过。"
+                "请简化问题后重试，或联系管理员检查 NL2SQL max_tokens。"
+            )
+        repaired_sql = (getattr(repaired, "sql", None) or "").strip()
+        if not repaired_sql or str(getattr(repaired, "type", "") or "").upper() == "GENERAL":
+            return sql, "生成的 SQL 不完整（疑似输出被截断），预检未通过。"
+        if not SqlGuard.is_structurally_complete(repaired_sql):
+            return repaired_sql, "生成的 SQL 仍不完整（括号未闭合或无法解析），已拦截执行。"
+        return repaired_sql, None
 
     async def _repair_unknown_columns(
         self,
@@ -1423,6 +1500,25 @@ class AskOrchestrator:
             return self._nl2sql
         self._nl2sql = Nl2SqlGenerator(mock=prefer_mock)
         return self._nl2sql
+
+    @staticmethod
+    def _column_label_note(data: ResultData) -> str:
+        """生成「字段说明：qtml=前台毛利…」片段；无中文备注时返回空串。"""
+        bits: list[str] = []
+        seen: set[str] = set()
+        for col in data.columns:
+            name = (col.name or "").strip()
+            label = (col.display_name or "").strip()
+            if not name or not label or label.casefold() == name.casefold():
+                continue
+            low = name.casefold()
+            if low in seen:
+                continue
+            seen.add(low)
+            bits.append(f"{name}={label}")
+        if not bits:
+            return ""
+        return "字段说明：" + "；".join(bits)
 
     def _build_result_data(
         self,

@@ -121,7 +121,12 @@ def columns_for_sql(
 
 
 def unknown_sql_columns(sql: str, columns_by_table: dict[str, list[str]]) -> list[str]:
-    """返回 SQL 里引用了、但清单中不存在的列名。清单为空时不判断。"""
+    """返回 SQL 里引用了、但清单中不存在的列名。清单为空时不判断。
+
+    SELECT 别名（如 ``SUM(main_sale_amt) AS sum_main_sale_amt``）视为合法：
+    ``ORDER BY`` / ``HAVING`` 再引用该别名时**不算**缺列。现网 45205 假阳性：
+    模型把合计写成 ``SUM(...) AS sum_main_sale_amt``，校验把别名当成物理列拒掉。
+    """
     if not sql.strip() or not columns_by_table:
         return []
     try:
@@ -144,6 +149,12 @@ def unknown_sql_columns(sql: str, columns_by_table: dict[str, list[str]]) -> lis
         known.update(col.lower() for col in cols)
     if not saw_table:
         return []
+
+    # SELECT / 投影别名：ORDER BY、外层引用时仍是 Column 节点，不得当缺列。
+    for alias in expression.find_all(exp.Alias):
+        alias_name = str(alias.alias or "").strip()
+        if alias_name:
+            known.add(alias_name.lower())
 
     missing: list[str] = []
     seen: set[str] = set()

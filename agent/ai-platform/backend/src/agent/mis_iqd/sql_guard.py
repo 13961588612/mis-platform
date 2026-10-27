@@ -31,8 +31,75 @@ _TAIL_LIMIT_RE = re.compile(
 )
 
 
+def _parens_balanced(sql: str) -> bool:
+    """括号深度归零且中途不出现负深度（忽略单/双引号内字符）。"""
+    depth = 0
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if in_single:
+            if ch == "'" and i + 1 < n and sql[i + 1] == "'":
+                i += 2
+                continue
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if ch == '"' and i + 1 < n and sql[i + 1] == '"':
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+        i += 1
+    return depth == 0
+
+
 class SqlGuard:
-    """SQL 兜底处理（LIMIT 剥离）。"""
+    """SQL 兜底处理（LIMIT 剥离 + 结构完整性）。"""
+
+    @staticmethod
+    def is_structurally_complete(sql: str) -> bool:
+        """判断 SQL 是否结构完整（非 LLM max_tokens 截断的半截语句）。
+
+        现网：``WITH leaf AS (SELECT c4.categoryid AS leaf_id`` 因输出截断缺右括号，
+        却仍进入 dry_run → ``Expecting )``。括号不平衡或 sqlglot 无法解析则判定不完整。
+        """
+        text = (sql or "").strip().rstrip(";").strip()
+        if not text:
+            return False
+        upper = text.upper()
+        if not (upper.startswith("SELECT") or upper.startswith("WITH")):
+            return False
+        if not _parens_balanced(text):
+            return False
+        try:
+            import sqlglot
+
+            sqlglot.parse_one(text, read="postgres")
+        except Exception:  # noqa: BLE001 - 解析失败即视为不完整/非法
+            try:
+                import sqlglot
+
+                sqlglot.parse_one(text, read="trino")
+            except Exception:  # noqa: BLE001
+                return False
+        return True
 
     @staticmethod
     def strip_trailing_limit(sql: str) -> tuple[str, int | None]:

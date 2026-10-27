@@ -1592,8 +1592,9 @@ public class IqdAdminService {
     @Transactional(readOnly = true)
     public List<IqdSqlPairCategoryVO> listSqlPairCategoryTree(Long connectionId) {
         ensureConnection(connectionId);
+        // 同级按编号 code 排序（全部样本 / 未分类为前端虚拟节点，不在此树内）
         List<IqdSqlPairCategory> all =
-                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(connectionId);
+                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscCodeAscIdAsc(connectionId);
         Map<Long, List<IqdSqlPairCategory>> byParent = new HashMap<>();
         for (IqdSqlPairCategory c : all) {
             byParent.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c);
@@ -1832,7 +1833,7 @@ public class IqdAdminService {
 
     private Set<Long> collectSqlPairCategorySubtreeIds(Long connectionId, Long rootId) {
         List<IqdSqlPairCategory> all =
-                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(connectionId);
+                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscCodeAscIdAsc(connectionId);
         Map<Long, List<Long>> children = new HashMap<>();
         for (IqdSqlPairCategory c : all) {
             children.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c.getId());
