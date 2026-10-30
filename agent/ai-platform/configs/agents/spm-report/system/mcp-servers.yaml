@@ -1,0 +1,15 @@
+# =============================================================================
+# spm-report — MCP Server 连接配置
+# =============================================================================
+# 结构对齐 crm-assistant。当前报表 Skill 未启用 MCP；后续 Skill 需要时
+# 将 enabled 改为 true，并在 runtime.allowed_tools 放开对应工具。
+# =============================================================================
+
+mcp_servers:
+  - name: mcp-api-suite
+    transport: streamable_http
+    endpoint: "http://127.0.0.1:3333/mcp"
+    enabled: false
+    description: mcp-api-suite（预留，Skill 启用后再打开）
+    timeout: 30
+    auto_connect: false

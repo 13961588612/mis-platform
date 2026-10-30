@@ -70,7 +70,8 @@ def _build_processors(use_json: bool) -> list[Any]:
     if use_json:
         processors.append(structlog.processors.JSONRenderer(ensure_ascii=False))
     else:
-        processors.append(structlog.dev.ConsoleRenderer())
+        # 强制关闭 ANSI 颜色，避免控制台/落盘出现 \x1b[32m 等乱码
+        processors.append(structlog.dev.ConsoleRenderer(colors=False))
     return processors
 
 

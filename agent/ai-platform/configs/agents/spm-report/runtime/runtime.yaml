@@ -1,0 +1,20 @@
+# =============================================================================
+# spm-report — 运行时配置
+# =============================================================================
+
+runtime:
+  type: openharness
+  version: "1.0.0"
+  allowed_tools:
+    - skill
+    # 后续若 Skill 依赖 MCP / iqd，在此追加，例如：
+    # - mcp__mcp-api-suite__*
+    # - iqd__ask
+    # - iqd__describe_scope
+  params:
+    maxSteps: 20
+    temperature: 0.3
+    maxTokens: 4096
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}

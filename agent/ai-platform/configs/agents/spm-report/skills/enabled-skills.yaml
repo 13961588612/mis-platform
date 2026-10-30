@@ -1,0 +1,8 @@
+# =============================================================================
+# spm-report — 已启用 Skills（当前为空，后续追加 skill_id）
+# =============================================================================
+
+skills:
+  enabled: []
+  custom_skills_dir: skills/custom-skills/
+  overrides_dir: skills/skill-overrides/

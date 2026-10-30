@@ -1,0 +1,15 @@
+# =============================================================================
+# spm-report — 访问控制
+# =============================================================================
+
+access_control:
+  departments:
+    - 超市运营
+    - 门店管理
+    - 数据分析
+  roles:
+    - store_staff
+    - supermarket_operator
+    - supermarket_admin
+    - data_analyst
+  skill_permissions: {}

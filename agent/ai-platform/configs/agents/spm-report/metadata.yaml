@@ -1,0 +1,26 @@
+# =============================================================================
+# spm-report — AgentRouter 元数据（供语义检索与路由匹配）
+# =============================================================================
+
+metadata:
+  name: spm-report
+  display_name: 超市报表智能体
+  description: >
+    超市业态报表助手：在 Skill 就绪后，协助生成与解读经营报告、门店对比、
+    品类结构等报表类问题。当前为骨架，可用 Skills 为空。
+  version: "0.1.0"
+  enabled: true
+  tags:
+    - mis
+    - spm
+    - supermarket
+    - report
+  capabilities:
+    - supermarket_report
+
+  when_to_use: 超市经营报告、门店/品类报表解读与生成（Skill 上线后）
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: text
+  safety_level: read_only

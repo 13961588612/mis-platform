@@ -1,0 +1,21 @@
+metadata:
+  name: spm-analyst
+  display_name: 超市分析智能体
+  description: >
+    超市业态经营分析 Worker（MVP）：路由问题域，追问槽位，经 iqd__ask（sm-data）取数后组织结论。
+  version: "0.1.0"
+  enabled: true
+  tags:
+    - mis
+    - spm
+    - supermarket
+  capabilities:
+    - supermarket_analysis
+    - ask_data
+
+  when_to_use: 超市门店的经营日报、类目/生鲜、商品属性、促销出清、会员占比、毛利报损或明确拒答类问题需要查数时
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: text
+  safety_level: read_only

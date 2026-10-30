@@ -1,0 +1,53 @@
+# =============================================================================
+# spm-report — 超市报表智能体主配置
+# 结构参考 crm-assistant；Skills 暂空，后续按需追加。
+# =============================================================================
+
+agent:
+  name: spm-report
+  display_name: 超市报表智能体
+  description: >
+    面向超市经营与门店运营的报表助手，后续通过 Skill 扩展
+    经营报告、门店对比、品类结构等报表场景。
+  version: "0.1.0"
+  tags:
+    - mis
+    - spm
+    - supermarket
+    - report
+
+  # Coordinator–Worker 调度角色：worker = 不可再委派其他 Agent。
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: true
+    priority: 27
+    keywords:
+      - 超市报表
+      - 经营报告
+      - 门店报告
+      - 超市报告
+      - 报表导出
+      - 经营简报
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: false
+      collection: agent_memory_index
+      top_k: 5
+      write_back: false
+      user_level: false
+      ttl_days: 30
+      max_per_user: 200
+
+  push:
+    enabled: false
+    channels: []
