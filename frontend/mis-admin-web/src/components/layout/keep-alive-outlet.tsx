@@ -259,6 +259,7 @@ const DYNAMIC_PAGES: DynamicPageRule[] = [
   // 智能体运营控制台：Agent 详情子路由（V19: type=2 + visible=0，不进侧栏）。
   // 覆盖 `/agent/agents/:id` 与 `/agent/agents/:id/{skills|config|coordination}`，
   // 故 maxSegments = 2；更深的路径仍不误吞。
+  // 顶栏主 Tab 去重见 `lib/workspace-tab-id.ts`（同 agent 二级 Tab 共用一个主 Tab）。
   {
     prefix: '/agent/agents/',
     component: AgentAgentDetailPage,

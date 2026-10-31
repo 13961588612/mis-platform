@@ -1,7 +1,11 @@
 """WorkerCatalog — 可委派 Worker 目录（Coordinator–Worker 基座 C3）。
 
-数据源：``ConfigManager.list_configs()`` 过滤 ``role == worker and enabled``，
-再与 ``settings.INVOKE_AGENT_WHITELIST`` 求交集（design-impl.md §6 T03 要点 1）。
+数据源：``ConfigManager.list_configs()`` 过滤 ``role == worker and enabled``
+（**不再**与 ``INVOKE_AGENT_WHITELIST`` 求交；环境白名单已取消）。
+
+实际能否委派由 Coordinator 的 ``coordination.yaml`` → ``delegation.worker_ids``
+决定（管理台「可派发执行者」），经 ``build_scoped_catalog`` 注入 ``agent__invoke``，
+运行时再按同一列表校验。
 
 设计要点：
 
@@ -21,7 +25,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, create_model
 
-from src.config import get_settings
 from src.config_manager.file_service import agent_dir, yaml
 from src.utils.logging import get_logger
 
@@ -63,8 +66,8 @@ STATIC_WORKER_HINTS: dict[str, dict[str, Any]] = {
 #: 硬约束（R8/Q1）：后台操作员专属 Agent，绝不进 copilot 委派。
 #: 单一事实源（后端）；前端镜像常量见 agent-coordination-page.tsx 的 LOCKED_WORKERS。
 #: 这些 Agent 作为真实 worker 注册（后台操作员经 create_session 直达），故在全局
-#: catalog 中**特例收录**以保证管理台可见；但其不在 INVOKE_AGENT_WHITELIST，
-#: 运行时 L249 恒定拒绝、scoped catalog 亦过滤，四道闸 fail-closed 成立。
+#: catalog 中**特例收录**以保证管理台可见；运行时与 scoped catalog 恒定拒绝
+#: （不得进入任何 Coordinator 的 worker_ids 委派链）。
 ADMIN_HELPER_AGENT_IDS: frozenset[str] = frozenset({"mis-admin-helper"})
 
 #: ADMIN_HELPER_AGENT_IDS 在静态兜底目录里的契约提示（仅兜底路径用到）。
@@ -265,22 +268,11 @@ def _load_agent_configs() -> list[Any]:
     return []
 
 
-def _resolve_whitelist() -> frozenset[str]:
-    """解析委派白名单（复用 invoke_agent 的既有解析逻辑）。
+def _static_fallback_ids() -> frozenset[str]:
+    """配置全空时的静态兜底 Worker ID（仅用于 fallback catalog 文案，非环境闸）。"""
+    from src.skills.tools.invoke_agent import DEFAULT_WHITELIST
 
-    Returns:
-        白名单集合；未配置时为 ``DEFAULT_WHITELIST``。
-    """
-    from src.skills.tools.invoke_agent import resolve_whitelist
-
-    configured: Any = None
-    try:
-        configured = getattr(get_settings(), "INVOKE_AGENT_WHITELIST", None)
-    except Exception as exc:  # noqa: BLE001 - 配置读取失败按未配置处理
-        logger.warning("Worker catalog: settings unavailable", error=str(exc))
-    if not isinstance(configured, list):
-        configured = None
-    return resolve_whitelist(configured)
+    return DEFAULT_WHITELIST
 
 
 def _forbidden_targets() -> list[str]:
@@ -433,7 +425,6 @@ def build_worker_catalog() -> WorkerCatalog:
     Returns:
         构建好的 :class:`WorkerCatalog`；配置不可用时为静态兜底目录。
     """
-    whitelist: frozenset[str] = _resolve_whitelist()
     workers: dict[str, WorkerSpec] = {}
     coordinators: list[str] = []
     skipped: list[str] = []
@@ -446,11 +437,8 @@ def build_worker_catalog() -> WorkerCatalog:
         if role == ROLE_COORDINATOR:
             coordinators.append(agent_id)
             continue
-        # 硬约束特例：ADMIN_HELPER_AGENT_IDS 作为真实 worker 收录（管理台可见），
-        # 但其不在 whitelist，运行时 L249 与 scoped catalog 仍将其排除出 copilot（fail-closed）。
-        if agent_id not in whitelist and agent_id not in ADMIN_HELPER_AGENT_IDS:
-            skipped.append(agent_id)
-            continue
+        # 全部启用中的 worker 入全局目录；是否可被某 Coordinator 委派由
+        # coordination.worker_ids（scoped catalog + 运行时校验）决定。
         spec: WorkerSpec = _spec_from_config(config, agent_id)
         if not spec.enabled:
             skipped.append(agent_id)
@@ -458,13 +446,29 @@ def build_worker_catalog() -> WorkerCatalog:
         workers[agent_id] = spec
 
     if not workers:
-        catalog: WorkerCatalog = _static_catalog(whitelist, coordinators)
+        catalog: WorkerCatalog = _static_catalog(_static_fallback_ids(), coordinators)
         logger.info(
-            "Worker catalog fell back to static whitelist",
+            "Worker catalog fell back to static defaults",
             workers=catalog.worker_ids(),
             coordinators=catalog.coordinators,
         )
         return catalog
+
+    # 硬约束特例：有真实 worker 时额外收录 ADMIN_HELPER（管理台可见，不可委派）
+    for agent_id in sorted(ADMIN_HELPER_AGENT_IDS):
+        if agent_id in workers:
+            continue
+        hint = _ADMIN_HELPER_STATIC_HINTS.get(agent_id, {})
+        workers[agent_id] = WorkerSpec(
+            agent_id=agent_id,
+            display_name=str(hint.get("display_name", agent_id)),
+            when_to_use=str(hint.get("when_to_use", "")),
+            capabilities=list(hint.get("capabilities", [])),
+            input_contract=list(hint.get("input_contract", ["user_question"])),
+            output_contract=str(hint.get("output_contract", "text")),
+            safety_level=str(hint.get("safety_level", "read_only")),
+            enabled=True,
+        )
 
     catalog = WorkerCatalog(
         workers=workers,
@@ -523,7 +527,7 @@ def _reset_for_test() -> None:
 
 
 def build_scoped_catalog(coordinator_id: str) -> WorkerCatalog:
-    """构建某协调者的「可委派子目录」（白名单 ∩ coordination.worker_ids）。
+    """构建某协调者的「可委派子目录」（global enabled workers ∩ coordination.worker_ids）。
 
     用于为该 coordinator 装配 ``agent__invoke`` 工具时注入，使得 LLM 看到的
     ``agent_id`` 枚举里**只包含该协调者声明可委派**的 worker；``mis-admin-helper``

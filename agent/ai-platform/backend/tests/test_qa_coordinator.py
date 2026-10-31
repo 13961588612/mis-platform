@@ -459,13 +459,20 @@ class TestRedlineErrorTextVerbatim:
         )
         assert forbidden.output == "禁止委托调度器自身或其他调度 Agent：mis-copilot"
 
-        outsider = await _run(
-            tool,
-            InvokeAgentInput(agent_id="unknown-bot", content="检索差旅报销标准并给出条款依据"),
-            _ctx(), session_mgr, agent_mgr, settings,
-        )
+        with patch(
+            "src.skills.tools.invoke_agent.resolve_delegate_allowlist",
+            new=AsyncMock(return_value=frozenset(DEFAULT_WHITELIST)),
+        ):
+            outsider = await _run(
+                tool,
+                InvokeAgentInput(agent_id="unknown-bot", content="检索差旅报销标准并给出条款依据"),
+                _ctx({"session_id": "p"}),
+                session_mgr,
+                agent_mgr,
+                settings,
+            )
         allowed = ", ".join(sorted(DEFAULT_WHITELIST))
-        assert outsider.output == f"目标智能体不在白名单：unknown-bot。允许：{allowed}"
+        assert outsider.output == f"目标智能体不在可派发列表：unknown-bot。允许：{allowed}"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

@@ -337,6 +337,7 @@ def create_agent_source_registry(
     mcp_manager: McpClientManager | None,
     catalog: Any | None = None,
     allowed_skill_ids: list[str] | None = None,
+    prompt_skill_ids: list[str] | None = None,
 ) -> ToolRegistry:
     """构建 Agent 可用工具源：skill + MCP（跳过 schema 不兼容的工具）。
 
@@ -347,9 +348,16 @@ def create_agent_source_registry(
             ``agent_id`` 枚举（1.3 硬约束；详见 ``build_scoped_catalog``）。
         allowed_skill_ids: 本 Agent 启用的正式 skill_id；非空时收窄 ``skill`` 工具
             入参枚举，避免模型传裸名（如 ``member``）。
+        prompt_skill_ids: 写入工具 description 的子集（``prompt_expose``）；
+            ``None`` 时与 ``allowed_skill_ids`` 相同。
     """
     registry: ToolRegistry = ToolRegistry()
-    registry.register(PlatformSkillTool(allowed_skill_ids=allowed_skill_ids))
+    registry.register(
+        PlatformSkillTool(
+            allowed_skill_ids=allowed_skill_ids,
+            prompt_skill_ids=prompt_skill_ids,
+        )
+    )
 
     # 平台侧 FormFill 工具（ai-platform × MIS FormFill 引擎 P0）
     registry.register(FormFillExecuteTool())
@@ -635,6 +643,7 @@ def create_platform_tool_registry(
     role: Any = None,
     agent_id: str | None = None,
     allowed_skill_ids: list[str] | None = None,
+    prompt_skill_ids: list[str] | None = None,
 ) -> ToolRegistry:
     """
     从 OpenHarness 默认工具集按 allowed_tools 过滤，并包装为安全执行。
@@ -650,17 +659,19 @@ def create_platform_tool_registry(
             ``agent_id`` 枚举（1.3 硬约束·闸③）；scoped 为空时退回静态 schema
             （fail-closed，绝不回退全局目录）。
         allowed_skill_ids: 本 Agent 启用的正式 skill_id；透传给 ``PlatformSkillTool``。
+        prompt_skill_ids: Available Skills / 工具说明暴露子集。
     """
     patterns: list[str] = resolve_allowed_tool_patterns(
         allowed_tools or [], mcp_manager, role
     )
-    # 1.3 硬约束·闸③：coordinator 注入 scoped catalog，使 LLM 枚举里不含
-    # mis-admin-helper 等硬约束 Agent（即便 coordination.yaml 误配也会被运行时白名单拒）。
+    # coordinator 注入 scoped catalog（= coordination.worker_ids ∩ 启用中 worker），
+    # 使 LLM 枚举与管理台「可派发执行者」一致；mis-admin-helper 不在 worker_ids 且运行时硬拒。
     scoped_catalog: Any | None = _resolve_scoped_catalog(role, agent_id)
     source: ToolRegistry = create_agent_source_registry(
         mcp_manager,
         catalog=scoped_catalog,
         allowed_skill_ids=allowed_skill_ids,
+        prompt_skill_ids=prompt_skill_ids,
     )
     is_worker: bool = normalize_role(role) == "worker"
 

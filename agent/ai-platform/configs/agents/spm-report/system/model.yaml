@@ -3,7 +3,7 @@
 # =============================================================================
 
 model:
-  primary: qwen3.7-plus
+  primary: qwen3.8-max
   fallback: deepseek-v4-flash
   strategy: default-primary
   gateway: llm-gateway

@@ -1,8 +1,20 @@
 # =============================================================================
-# spm-report — 已启用 Skills（当前为空，后续追加 skill_id）
+# spm-report — 已启用 Skills
+# prompt_expose: 是否写入每次对话的 Available Skills（缺省 true）
+#   仅总控路由暴露；下游由 router 槽位确认后再 skill() 加载
 # =============================================================================
 
 skills:
-  enabled: []
+  enabled:
+  - skill_id: sm-report-router
+    prompt_expose: true
+  - skill_id: sm-common-info-master-data
+    prompt_expose: false
+  - skill_id: sm-common-info-calendar
+    prompt_expose: false
+  - skill_id: sm-shop-sale
+    prompt_expose: false
+  - skill_id: sm-shop-category-sale
+    prompt_expose: false
   custom_skills_dir: skills/custom-skills/
   overrides_dir: skills/skill-overrides/

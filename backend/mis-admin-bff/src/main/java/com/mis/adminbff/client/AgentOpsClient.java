@@ -57,16 +57,37 @@ public class AgentOpsClient extends AgentOpsTransport {
     /** 附件上传域（P0-1 先传后引：ai-platform 已存在 /api/v1/files/upload）。 */
     private static final String FILES = "/api/v1/files";
 
+    /**
+     * 单次响应允许缓冲的最大字节数（16MB）。
+     *
+     * <p>WebClient 默认只给 256KB。技能池 {@code GET /api/v1/skills?page_size=100}
+     * 会带回多条 Skill 的 description / 元数据（包技能增加后实测可超过 256KB），
+     * 越界抛 {@code DataBufferLimitException}，被传输层兜成「下游不可达：…
+     * Exceeded limit on max bytes to buffer : 262144」——状态其实常是下游已 200。
+     * 会话消息、配置文件全文等同理。
+     *
+     * <p>只放宽本客户端：{@code clone()} 后再 {@code codecs()}，避免污染
+     * {@code plainWebClientBuilder} 单例（与 {@link IqdClient} / {@link KbWebClient} 同口径）。
+     */
+    private static final int MAX_IN_MEMORY_BYTES = 16 * 1024 * 1024;
+
     public AgentOpsClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             AgentOpsProperties properties,
             ObjectMapper objectMapper) {
         super(
-                plainBuilder.clone().baseUrl(properties.getBackendBaseUrl()).build(),
-                plainBuilder.clone().baseUrl(properties.getGatewayBaseUrl()).build(),
+                buildClient(plainBuilder, properties.getBackendBaseUrl()),
+                buildClient(plainBuilder, properties.getGatewayBaseUrl()),
                 properties.getTimeoutMs(),
                 properties.getChatTimeoutMs(),
                 objectMapper);
+    }
+
+    private static WebClient buildClient(WebClient.Builder plainBuilder, String baseUrl) {
+        return plainBuilder.clone()
+                .baseUrl(baseUrl)
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
+                .build();
     }
 
     // ==================================================================

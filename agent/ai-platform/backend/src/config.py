@@ -339,7 +339,19 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"
     LOG_FILE: str = Field(
         default="logs/backend.log",
-        description="日志文件路径；设为空字符串则仅输出到控制台",
+        description=(
+            "日志基路径；启用文件日志时默认拆成 "
+            "`{stem}-chat.log`（对话）与 `{stem}-sys.log`（健康检查/系统）。"
+            "设为空字符串则仅输出到控制台"
+        ),
+    )
+    LOG_FILE_CHAT: str = Field(
+        default="",
+        description="对话相关日志文件；空则由 LOG_FILE 推导为 `{stem}-chat.log`",
+    )
+    LOG_FILE_SYS: str = Field(
+        default="",
+        description="系统/健康检查日志文件；空则由 LOG_FILE 推导为 `{stem}-sys.log`",
     )
     LOG_MAX_BYTES: int = Field(
         default=10_485_760,
@@ -671,21 +683,14 @@ class Settings(BaseSettings):
     )
 
     # ===== Copilot 调度（agent__invoke）=====
-    # 硬约束（R5/R8）：默认白名单移除已灰度下线的 mis-extract / mis-summary，
-    # 加入承接其能力的 mis-user-helper；**绝不**包含 mis-admin-helper
-    # （后台操作员专属，只经 create_session 直达，copilot 全链路 fail-closed）。
-    # v1.9（B1）：追加 mis-iqd（问数 Worker，role=worker、max_depth=1）。
+    # 已取消环境白名单硬闸：可派发执行者以各 Coordinator 的
+    # coordination.yaml → delegation.worker_ids（管理台保存）为准。
+    # 本字段保留仅为兼容旧 .env，**运行时与 Catalog 均忽略**；留空即可。
     INVOKE_AGENT_WHITELIST: Annotated[
         list[str], NoDecode, BeforeValidator(_parse_str_list)
     ] = Field(
-        default_factory=lambda: [
-            "mis-rag",
-            "crm-assistant",
-            "mis-user-helper",
-            "mis-iqd",
-            "bgbh-analyst",
-        ],
-        description="mis-copilot 可委托的目标 Agent 白名单（不含 mis-admin-helper）",
+        default_factory=list,
+        description="已废弃：可派发以 coordination.worker_ids 为准；本字段忽略",
     )
 
     # ===== 联网搜索（1.4 search tool）=====

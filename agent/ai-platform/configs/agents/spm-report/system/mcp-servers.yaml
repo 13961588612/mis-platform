@@ -1,15 +1,15 @@
 # =============================================================================
 # spm-report — MCP Server 连接配置
 # =============================================================================
-# 结构对齐 crm-assistant。当前报表 Skill 未启用 MCP；后续 Skill 需要时
-# 将 enabled 改为 true，并在 runtime.allowed_tools 放开对应工具。
+# 超市报表 Skills 使用 mcp-sm-api-suite（callShopSaleApi / callShopCategorySaleApi /
+# callCommonInfoApi）。endpoint 按正式/测试环境改成实际地址。
 # =============================================================================
 
 mcp_servers:
-  - name: mcp-api-suite
+  - name: mcp-sm-api-suite
     transport: streamable_http
-    endpoint: "http://127.0.0.1:3333/mcp"
-    enabled: false
-    description: mcp-api-suite（预留，Skill 启用后再打开）
-    timeout: 30
+    endpoint: "http://10.254.121.94:3334/mcp"
+    enabled: true
+    description: 超市报表 API 套件（门店销售 / 品类销售 / 公共信息）
+    timeout: 60
     auto_connect: false

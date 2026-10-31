@@ -60,6 +60,16 @@ vi.mock('./ws-client', () => ({
   buildChatWsUrl: () => '/ws/chat',
 }));
 
+vi.mock('@/lib/auth/refresh-token', () => ({
+  ensureTokenFresh: vi.fn(async () => useAuthStore.getState().accessToken),
+  refreshAccessToken: vi.fn(async () => useAuthStore.getState().accessToken),
+  getLastRefreshError: () => null,
+  initTokenRefreshScheduler: vi.fn(),
+  armTokenRefreshScheduler: vi.fn(),
+  computeRefreshDelayMs: () => 0,
+  TOKEN_REFRESH_SKEW_MS: 300_000,
+}));
+
 const SID = 'web-test-session-1';
 
 function setSession(sid: string) {

@@ -698,15 +698,31 @@ async def update_agent_skills(
                     status.HTTP_400_BAD_REQUEST,
                 )
 
-    # 写回 enabled-skills.yaml（保留 custom_skills_dir / overrides_dir）
+    # 写回 enabled-skills.yaml（保留 custom_skills_dir / overrides_dir / prompt_expose）
     path: Path = _enabled_skills_path(agent_id)
     existing: dict[str, Any] = _read_yaml_file(path)
     skills_section: dict[str, Any] = existing.get("skills", {}) if isinstance(existing, dict) else {}
     if not isinstance(skills_section, dict):
         skills_section = {}
-    # 去重且保序，避免重复 ID 污染
-    deduped: list[str] = list(dict.fromkeys(sid.strip() for sid in req.skill_ids if sid and sid.strip()))
-    skills_section["enabled"] = deduped
+    # 保留原条目的 prompt_expose（运营台目前只传 id 列表）
+    prev_expose: dict[str, bool] = {}
+    prev_enabled: Any = skills_section.get("enabled", [])
+    if isinstance(prev_enabled, list):
+        for item in prev_enabled:
+            if isinstance(item, dict) and item.get("skill_id"):
+                prev_expose[str(item["skill_id"]).strip()] = bool(
+                    item.get("prompt_expose", True)
+                )
+    deduped: list[str] = list(
+        dict.fromkeys(sid.strip() for sid in req.skill_ids if sid and sid.strip())
+    )
+    skills_section["enabled"] = [
+        {
+            "skill_id": sid,
+            "prompt_expose": prev_expose.get(sid, True),
+        }
+        for sid in deduped
+    ]
     if "custom_skills_dir" not in skills_section:
         skills_section["custom_skills_dir"] = "skills/custom-skills/"
     if "overrides_dir" not in skills_section:

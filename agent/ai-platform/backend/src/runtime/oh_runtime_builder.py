@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
 from typing import Any
@@ -84,6 +85,24 @@ def enabled_package_skill_ids(config: AgentConfig) -> list[str]:
     return sorted(ids)
 
 
+def prompt_exposed_skill_ids(config: AgentConfig) -> list[str]:
+    """应写入 ``# Available Skills`` 的正式 skill_id（``prompt_expose`` 缺省 True）。"""
+    enabled: set[str] = set(enabled_package_skill_ids(config))
+    ids: list[str] = []
+    seen: set[str] = set()
+    for ref in config.skills:
+        if not getattr(ref, "enabled", True):
+            continue
+        skill_id: str = str(getattr(ref, "skill_id", "") or "").strip()
+        if not skill_id or skill_id not in enabled or skill_id in seen:
+            continue
+        if not bool(getattr(ref, "prompt_expose", True)):
+            continue
+        seen.add(skill_id)
+        ids.append(skill_id)
+    return sorted(ids)
+
+
 def _find_package_skill_mds(
     packages_root: Path, enabled_ids: set[str]
 ) -> dict[str, Path]:
@@ -112,22 +131,59 @@ def _link_or_copy_skill_md(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _materialize_skill_subset(
+    *,
+    staging: Path,
+    found: dict[str, Path],
+    skill_ids: list[str],
+) -> list[str]:
+    """在 ``staging`` 下物化给定 skill_id 子集，返回成功挂上的 id。"""
+    staging.mkdir(parents=True, exist_ok=True)
+    keep: set[str] = set(skill_ids)
+    for child in list(staging.iterdir()):
+        if child.is_dir() and child.name not in keep:
+            shutil.rmtree(child, ignore_errors=True)
+
+    materialized: list[str] = []
+    for skill_id in skill_ids:
+        skill_md = found.get(skill_id)
+        if skill_md is None:
+            continue
+        view_md: Path = staging / skill_id / "SKILL.md"
+        try:
+            _link_or_copy_skill_md(skill_md, view_md)
+            materialized.append(skill_id)
+        except OSError as exc:
+            logger.warning(
+                "Failed to materialize OH skill view",
+                skill_id=skill_id,
+                error=str(exc),
+            )
+    return materialized
+
+
+@dataclass(frozen=True)
+class MaterializedSkillView:
+    """OH 技能视图：提示词目录与可加载目录可分离（router 模式）。"""
+
+    load_dirs: list[str]
+    prompt_dirs: list[str]
+    loadable_ids: list[str]
+    prompt_ids: list[str]
+
+
 def materialize_oh_skill_view(
     config: AgentConfig, config_base: Path
-) -> tuple[list[str], list[str]]:
+) -> MaterializedSkillView:
     """物化「目录名 = 正式 skill_id」的 OH 技能视图。
 
-    OpenHarness ``Available Skills`` 用 ``command_name``（= 父目录名）作粗体主名。
-    旧实现把整类 ``packages/crm`` 塞进去，主名变成 ``member-points-account``，
-    模型易缩写成 ``member``。此处只挂**本 Agent 启用**的技能，且目录名强制为
-    正式 ``skill_id``。
-
-    Returns:
-        ``(extra_skill_dirs, exposed_skill_ids)``；无启用包技能时两者皆空。
+    - **load** 视图：全部 enabled 包技能 → ``skill`` 工具可加载正文
+    - **prompt** 视图：仅 ``prompt_expose=true``（缺省 true）→ 写入 Available Skills
     """
+    empty = MaterializedSkillView([], [], [], [])
     enabled_ids: list[str] = enabled_package_skill_ids(config)
     if not enabled_ids:
-        return [], []
+        return empty
 
     packages_root: Path = config_base / "skills" / "packages"
     found: dict[str, Path] = _find_package_skill_mds(packages_root, set(enabled_ids))
@@ -137,63 +193,85 @@ def materialize_oh_skill_view(
             agent_id=config.agent_id,
             enabled=enabled_ids,
         )
-        return [], []
+        return empty
 
-    staging: Path = (
-        config_base / ".runtime" / "oh-skills" / (config.agent_id or "_default")
-    ).resolve()
-    staging.mkdir(parents=True, exist_ok=True)
+    agent_key: str = config.agent_id or "_default"
+    base_staging: Path = (config_base / ".runtime" / "oh-skills" / agent_key).resolve()
+    load_staging: Path = base_staging / "load"
+    prompt_staging: Path = base_staging / "prompt"
 
-    # 清理已停用残留，避免提示词继续列出旧 id
-    keep: set[str] = set(found)
-    for child in list(staging.iterdir()):
-        if child.is_dir() and child.name not in keep:
+    # 清理旧版扁平目录残留（升级前把 skill_id 直接挂在 agent 根下）
+    for child in list(base_staging.iterdir()) if base_staging.exists() else []:
+        if child.is_dir() and child.name not in {"load", "prompt"}:
             shutil.rmtree(child, ignore_errors=True)
 
-    exposed: list[str] = []
-    for skill_id, skill_md in sorted(found.items()):
-        view_md: Path = staging / skill_id / "SKILL.md"
-        try:
-            _link_or_copy_skill_md(skill_md, view_md)
-            exposed.append(skill_id)
-        except OSError as exc:
-            logger.warning(
-                "Failed to materialize OH skill view",
-                skill_id=skill_id,
-                error=str(exc),
-            )
+    loadable = _materialize_skill_subset(
+        staging=load_staging,
+        found=found,
+        skill_ids=sorted(found.keys()),
+    )
+    prompt_wanted: list[str] = [
+        sid for sid in prompt_exposed_skill_ids(config) if sid in found
+    ]
+    prompt_ids = _materialize_skill_subset(
+        staging=prompt_staging,
+        found=found,
+        skill_ids=prompt_wanted,
+    )
 
-    if not exposed:
-        return [], []
-    return [str(staging)], exposed
+    if not loadable:
+        return empty
+    return MaterializedSkillView(
+        load_dirs=[str(load_staging)],
+        prompt_dirs=[str(prompt_staging)] if prompt_ids else [],
+        loadable_ids=loadable,
+        prompt_ids=prompt_ids,
+    )
 
 
 def resolve_extra_skill_dirs(config: AgentConfig, config_base: Path) -> list[str]:
     """
-    根据已启用的 agent skills 解析 OpenHarness 的 extra_skill_dirs。
+    根据已启用的 agent skills 解析 OpenHarness 的 extra_skill_dirs（可加载全集）。
 
     OpenHarness 期望 ``<extra_skill_dir>/<skill-name>/SKILL.md``；
     此处 ``skill-name`` **等于正式 skill_id**（见 :func:`materialize_oh_skill_view`）。
     """
-    dirs, _exposed = materialize_oh_skill_view(config, config_base)
-    return dirs
+    view = materialize_oh_skill_view(config, config_base)
+    return list(view.load_dirs)
 
 
-def build_formal_skill_ids_prompt(skill_ids: list[str]) -> str:
-    """追加到系统提示：强制只用正式 skill_id 调 ``skill`` 工具。"""
-    if not skill_ids:
+def build_formal_skill_ids_prompt(
+    prompt_ids: list[str],
+    *,
+    loadable_ids: list[str] | None = None,
+) -> str:
+    """追加到系统提示：提示词暴露的正式 skill_id；可加载全集仅作约束说明。"""
+    if not prompt_ids and not loadable_ids:
         return ""
     lines: list[str] = [
         "# Formal Skill IDs",
         "",
-        "调用 `skill` 工具时，`name` **必须**是下列正式 skill_id 之一"
+        "调用 `skill` 工具时，`name` **必须**是正式 skill_id"
         "（与授权页 / 技能池一致）。禁止缩写、目录名或臆造 id"
         "（错误示例：`member`、`member-profile`）。",
         "",
     ]
-    for skill_id in skill_ids:
-        lines.append(f"- `{skill_id}`")
-    return "\n".join(lines)
+    if prompt_ids:
+        lines.append("优先按需加载（已出现在 Available Skills）：")
+        for skill_id in prompt_ids:
+            lines.append(f"- `{skill_id}`")
+        lines.append("")
+    deferred = [
+        sid
+        for sid in (loadable_ids or [])
+        if sid not in set(prompt_ids)
+    ]
+    if deferred:
+        lines.append(
+            "其余业务 skill **不要**自行抢先加载；仅在总控路由完成槽位确认并指示后，"
+            "再用正式 id 调用 `skill`（例如门店销售 / 品类销售）。"
+        )
+    return "\n".join(lines).rstrip()
 
 
 async def _connect_http_with_identity(
@@ -283,7 +361,7 @@ async def build_native_query_engine(
     settings: Any = load_settings()
     config_base: Path = Path(get_settings().CONFIG_BASE_PATH)
     cwd: str = str(config_base.resolve())
-    extra_skill_dirs, exposed_skill_ids = materialize_oh_skill_view(config, config_base)
+    skill_view: MaterializedSkillView = materialize_oh_skill_view(config, config_base)
 
     mcp_configs: dict[str, McpServerConfig] = agent_mcp_to_openharness_configs(config.mcp_servers)
     allowed_tools: Any = config.runtime.allowed_tools if config.runtime else []
@@ -291,7 +369,9 @@ async def build_native_query_engine(
     # 未配置 role 的旧配置解析为默认值，行为与改造前一致。
     agent_role: Any = getattr(config, "role", None)
     source_registry: ToolRegistry = create_agent_source_registry(
-        mcp_manager, allowed_skill_ids=exposed_skill_ids
+        mcp_manager,
+        allowed_skill_ids=skill_view.loadable_ids,
+        prompt_skill_ids=skill_view.prompt_ids,
     )
     allowed_patterns: Any = apply_role_tool_constraint(
         allowed_tools or ["skill", "mcp__*"], agent_role
@@ -310,7 +390,8 @@ async def build_native_query_engine(
         allowed_tools,
         agent_role,
         config.agent_id,
-        allowed_skill_ids=exposed_skill_ids,
+        allowed_skill_ids=skill_view.loadable_ids,
+        prompt_skill_ids=skill_view.prompt_ids,
     )
 
     model: Any = config.model.primary if config.model else "qwen3.7-plus"
@@ -322,13 +403,16 @@ async def build_native_query_engine(
     oh_system_prompt: Any = build_runtime_system_prompt(
         settings,
         cwd=cwd,
-        extra_skill_dirs=extra_skill_dirs,
+        extra_skill_dirs=skill_view.prompt_dirs,
         include_project_memory=False,
     )
     agent_prompt: Any = config.system_prompt or ""
     if config.runtime and config.runtime.prompts.get("system_prompt"):
         agent_prompt: Any = config.runtime.prompts["system_prompt"]
-    formal_ids_prompt: str = build_formal_skill_ids_prompt(exposed_skill_ids)
+    formal_ids_prompt: str = build_formal_skill_ids_prompt(
+        skill_view.prompt_ids,
+        loadable_ids=skill_view.loadable_ids,
+    )
     memory_prompt: str = ""
     if memory_context.strip():
         memory_prompt = (
@@ -371,7 +455,7 @@ async def build_native_query_engine(
         max_tokens=max_tokens,
         max_turns=max_steps,
         tool_metadata={
-            "extra_skill_dirs": extra_skill_dirs,
+            "extra_skill_dirs": skill_view.load_dirs,
             "session_id": session_id,
             "identity": mcp_identity,
         },
@@ -381,7 +465,8 @@ async def build_native_query_engine(
         "Native OpenHarness QueryEngine built",
         model=model,
         max_turns=max_steps,
-        skill_dirs=extra_skill_dirs,
+        skill_dirs=skill_view.load_dirs,
+        prompt_skill_dirs=skill_view.prompt_dirs,
         mcp_servers=list(mcp_configs.keys()),
         tools=[tool.name for tool in tool_registry.list_tools()],
     )

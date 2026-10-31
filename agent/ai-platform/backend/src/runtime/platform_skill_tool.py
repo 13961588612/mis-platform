@@ -75,22 +75,51 @@ class PlatformSkillTool(BaseTool):
     description = _STATIC_DESCRIPTION
     input_model = PlatformSkillToolInput
 
-    def __init__(self, allowed_skill_ids: Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        allowed_skill_ids: Sequence[str] | None = None,
+        prompt_skill_ids: Sequence[str] | None = None,
+    ) -> None:
         """按 Agent 启用技能收窄 schema。
 
         Args:
-            allowed_skill_ids: 本 Agent 启用的正式 skill_id 列表；
+            allowed_skill_ids: 本 Agent 可 ``skill()`` 加载的正式 skill_id（全集）；
                 空 / ``None`` 时保持自由字符串（但仍走注册表归一与拒识文案）。
+            prompt_skill_ids: 出现在 Available Skills / 工具说明中的子集；
+                ``None`` 时与 ``allowed_skill_ids`` 相同（兼容旧行为）。
         """
         self._allowed: frozenset[str] = frozenset(
             sid.strip() for sid in (allowed_skill_ids or []) if sid and str(sid).strip()
         )
+        prompt_ids: list[str] = sorted(
+            {
+                sid.strip()
+                for sid in (
+                    prompt_skill_ids
+                    if prompt_skill_ids is not None
+                    else (allowed_skill_ids or [])
+                )
+                if sid and str(sid).strip()
+            }
+        )
         self.name = type(self).name
         if self._allowed:
-            ids = ", ".join(sorted(self._allowed))
-            self.description = (
-                f"{_STATIC_DESCRIPTION} 本 Agent 允许：{ids}。"
-            )
+            # 工具 description 只列 prompt 暴露集，避免下游业务 skill 头刷屏；
+            # 入参枚举仍用可加载全集，保证 router 可 skill(下游 id)。
+            if prompt_ids:
+                shown = ", ".join(prompt_ids)
+                deferred = sorted(self._allowed - set(prompt_ids))
+                extra = (
+                    f" 其余正式 id（{', '.join(deferred)}）仅在总控路由指示后加载。"
+                    if deferred
+                    else ""
+                )
+                self.description = (
+                    f"{_STATIC_DESCRIPTION} 提示词优先：{shown}。{extra}"
+                ).strip()
+            else:
+                ids = ", ".join(sorted(self._allowed))
+                self.description = f"{_STATIC_DESCRIPTION} 本 Agent 允许：{ids}。"
             self.input_model = _build_input_model(sorted(self._allowed))
         else:
             self.description = _STATIC_DESCRIPTION

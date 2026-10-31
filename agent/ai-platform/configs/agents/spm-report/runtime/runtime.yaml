@@ -7,14 +7,14 @@ runtime:
   version: "1.0.0"
   allowed_tools:
     - skill
-    # 后续若 Skill 依赖 MCP / iqd，在此追加，例如：
-    # - mcp__mcp-api-suite__*
-    # - iqd__ask
-    # - iqd__describe_scope
+    - mcp__mcp-sm-api-suite__*
   params:
     maxSteps: 20
     temperature: 0.3
     maxTokens: 4096
+    forceLiveQuery: true
   prompts:
     system: runtime/prompts/system.md
+    turn_reminder: |
+      【强制】本轮若涉及超市门店销售/品类/门店主数据/日历时间键，必须先 skill 加载对应技能，再调用 mcp__mcp-sm-api-suite__* 工具。禁止未加载 Skill 就调 MCP。apiName 必须从本轮 Skill 返回正文原样复制。禁止仅根据对话历史作答。周/月键优先用 sm-common-info-calendar；选店优先 listAuthorizedStores。
   middleware: {}

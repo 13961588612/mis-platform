@@ -73,14 +73,18 @@ async def test_invoke_rejects_empty_content():
 
 
 @pytest.mark.asyncio
-async def test_invoke_rejects_not_in_whitelist():
+async def test_invoke_rejects_not_in_delegate_allowlist():
     tool = InvokeAgentTool()
-    result = await tool.execute(
-        InvokeAgentInput(agent_id="unknown-agent", content="x"),
-        _ctx(),
-    )
+    with patch(
+        "src.skills.tools.invoke_agent.resolve_delegate_allowlist",
+        new=AsyncMock(return_value=frozenset({"mis-rag"})),
+    ):
+        result = await tool.execute(
+            InvokeAgentInput(agent_id="unknown-agent", content="x"),
+            _ctx({"session_id": "s1"}),
+        )
     assert result.is_error
-    assert "白名单" in result.output
+    assert "可派发列表" in result.output
 
 
 @pytest.mark.asyncio

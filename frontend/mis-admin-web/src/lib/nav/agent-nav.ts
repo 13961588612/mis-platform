@@ -15,7 +15,8 @@
  *
  * <p>本清单只含 **visible=1 的侧栏页面**（V154 起 Catalog `/agent/catalog` 已隐藏并入总览）。
  * 以下三条详情子路由在 V19 中是 `type=2 + visible=0`（不进侧栏、permission 仍生效），
- * 故**刻意不出现在这里**，由 `DYNAMIC_PAGES` 提供 Tab 标题：
+ * 故**刻意不出现在这里**，由 `DYNAMIC_PAGES` 提供 Tab 标题；主 Tab 身份由
+ * `lib/workspace-tab-id.ts` 收成 `/agent/agents/:id`（避免切详情内 Tab 连开多项）：
  *   `/agent/agents/:id/skills`、`/agent/agents/:id/config`、`/agent/agents/:id/coordination`
  *
  * <p>icon 取值必须同步登记到 `lib/nav/icons.ts` 的 `ICON_MAP`，

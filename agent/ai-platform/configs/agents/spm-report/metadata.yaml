@@ -6,19 +6,26 @@ metadata:
   name: spm-report
   display_name: 超市报表智能体
   description: >
-    超市业态报表助手：在 Skill 就绪后，协助生成与解读经营报告、门店对比、
-    品类结构等报表类问题。当前为骨架，可用 Skills 为空。
-  version: "0.1.0"
+    超市（大统华）报表与主数据助手：经 MCP 查询有哪些门店/区域/分类、
+    门店销售、品类结构与日历键，组织经营报表类结论（非 Wren NL2SQL）。
+  version: "0.2.1"
   enabled: true
   tags:
     - mis
     - spm
     - supermarket
+    - 大统华
     - report
   capabilities:
     - supermarket_report
+    - shop_sale
+    - category_sale
+    - master_data
+    - calendar
 
-  when_to_use: 超市经营报告、门店/品类报表解读与生成（Skill 上线后）
+  when_to_use: >
+    超市/大统华有哪些门店、我能看哪些店、区域与分类主数据；
+    门店/品类销售报表、各大类销售占比、折扣出清结构、日历周月键查询
   input_contract:
     - user_question
     - page_context_slice

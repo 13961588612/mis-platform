@@ -18,6 +18,12 @@ import { useChatStore } from '@/stores/chat-store';
 import { hydrateA2uiFromMetadata } from '@/lib/a2ui/hydrateFromHistory';
 import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
 import { useSurfaceStore, scopeSurfaceToMessage } from '@/lib/a2ui/surface-store';
+import { recordAuthKick } from '@/lib/auth/auth-kick-log';
+import {
+  ensureTokenFresh,
+  getLastRefreshError,
+  refreshAccessToken,
+} from '@/lib/auth/refresh-token';
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
@@ -1040,45 +1046,85 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
   // ------------------------------------------------------------------ 连接生命周期
 
+  const authRecoveryRef = useRef(false);
+
+  /** SSE 401 / 连接前：refresh；成功则 token 变化触发本 effect 重连。 */
+  const recoverChatAuth = useCallback(async (triggerUrl: string): Promise<void> => {
+    if (authRecoveryRef.current) return;
+    authRecoveryRef.current = true;
+    try {
+      const newToken = await refreshAccessToken();
+      if (!newToken) {
+        recordAuthKick({
+          client: 'main',
+          triggerUrl,
+          triggerMethod: 'GET',
+          httpStatus: 401,
+          bizMessage: 'chat stream/ws auth failed',
+          refreshError: getLastRefreshError() ?? undefined,
+        });
+        window.location.href = '/login';
+      }
+    } finally {
+      authRecoveryRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     const activeSid = sessionIdRef.current;
-    const activeToken = tokenRef.current;
-    if (!autoConnect || !activeSid || !activeToken) return undefined;
+    if (!autoConnect || !activeSid || !tokenRef.current) return undefined;
 
-    // SSE 接收（经 ref 转发，避免 handleEvent 身份变化导致重连丢流）
-    const sse = subscribeChatStream({
-      sessionId: activeSid,
-      token: activeToken,
-      onEvent: (event) => handleEventRef.current(event),
-      onStateChange: (state) => {
-        useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
-      },
-    });
-    sseRef.current = sse;
+    let cancelled = false;
+    let sse: ChatSseController | null = null;
+    let ws: ChatWsClient | null = null;
 
-    // WS 发送
-    const ws = new ChatWsClient({
-      sessionId: activeSid,
-      token: activeToken,
-      onStateChange: (state) => {
-        if (state === 'connected' || state === 'reconnecting' || state === 'error') {
-          useChatStore.getState().setConnectionState(state);
-        }
-      },
-      onError: (message) => useChatStore.getState().setError(message),
-    });
-    ws.connect();
-    wsRef.current = ws;
+    void (async () => {
+      const fresh = await ensureTokenFresh();
+      if (cancelled || !fresh) return;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+
+      sse = subscribeChatStream({
+        sessionId: sid,
+        token: fresh,
+        onEvent: (event) => handleEventRef.current(event),
+        onStateChange: (state) => {
+          useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
+        },
+        onAuthError: () => {
+          void recoverChatAuth('/api/events/stream');
+        },
+      });
+      sseRef.current = sse;
+
+      ws = new ChatWsClient({
+        sessionId: sid,
+        token: fresh,
+        onStateChange: (state) => {
+          if (state === 'connected' || state === 'reconnecting' || state === 'error') {
+            useChatStore.getState().setConnectionState(state);
+          }
+          // WS 握手失败无明确 401：仅在 token 临近过期时 refresh
+          if (state === 'error') {
+            void ensureTokenFresh();
+          }
+        },
+        onError: (message) => useChatStore.getState().setError(message),
+      });
+      ws.connect();
+      wsRef.current = ws;
+    })();
 
     return () => {
+      cancelled = true;
       // 仅拆连接；生成态的清理由「拥有者卸载」effect 精确负责（见下），
       // 绝不在此处按全局 isGenerating 猜测——多实例共用 global store 会误杀他人生成。
-      sse.abort();
-      ws.close();
+      sse?.abort();
+      ws?.close();
       sseRef.current = null;
       wsRef.current = null;
     };
-  }, [autoConnect, sessionId, token]);
+  }, [autoConnect, sessionId, token, recoverChatAuth]);
 
   const closeSession = useCallback((): void => {
     const sid = sessionIdRef.current;
@@ -1105,33 +1151,41 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
   const reconnect = useCallback((): void => {
     const sid = sessionIdRef.current;
-    const activeToken = tokenRef.current;
-    if (!sid || !activeToken) return;
+    if (!sid) return;
     sseRef.current?.abort();
     wsRef.current?.close();
-    // 重新触发 effect：sessionId 不变不会重跑，这里手动重建
-    const sse = subscribeChatStream({
-      sessionId: sid,
-      token: activeToken,
-      onEvent: (event) => handleEventRef.current(event),
-      onStateChange: (state) => {
-        useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
-      },
-    });
-    sseRef.current = sse;
-    const ws = new ChatWsClient({
-      sessionId: sid,
-      token: activeToken,
-      onStateChange: (state) => {
-        if (state === 'connected' || state === 'reconnecting' || state === 'error') {
-          useChatStore.getState().setConnectionState(state);
-        }
-      },
-      onError: (message) => useChatStore.getState().setError(message),
-    });
-    ws.connect();
-    wsRef.current = ws;
-  }, []);
+    void (async () => {
+      const fresh = await ensureTokenFresh();
+      if (!fresh || sessionIdRef.current !== sid) return;
+      const sse = subscribeChatStream({
+        sessionId: sid,
+        token: fresh,
+        onEvent: (event) => handleEventRef.current(event),
+        onStateChange: (state) => {
+          useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
+        },
+        onAuthError: () => {
+          void recoverChatAuth('/api/events/stream');
+        },
+      });
+      sseRef.current = sse;
+      const ws = new ChatWsClient({
+        sessionId: sid,
+        token: fresh,
+        onStateChange: (state) => {
+          if (state === 'connected' || state === 'reconnecting' || state === 'error') {
+            useChatStore.getState().setConnectionState(state);
+          }
+          if (state === 'error') {
+            void ensureTokenFresh();
+          }
+        },
+        onError: (message) => useChatStore.getState().setError(message),
+      });
+      ws.connect();
+      wsRef.current = ws;
+    })();
+  }, [recoverChatAuth]);
 
   /**
    * 主动停止当前生成：通知后端取消 a2ui_run / Worker，并本地解锁输入。

@@ -26,6 +26,11 @@ export interface ChatSseOptions {
   onEvent: (event: ChatStreamEvent) => void;
   /** 连接状态回调（可选）。 */
   onStateChange?: (state: 'connecting' | 'connected' | 'reconnecting' | 'error' | 'closed') => void;
+  /**
+   * SSE 握手 401（JWT 过期/无效）时回调；调用方应 refresh 后依赖 token 变化重连。
+   * 触发后本连接会 abort，不再自动重试旧 token。
+   */
+  onAuthError?: () => void;
   /** 打开即重连（后台 Tab 不挂起），默认 true。 */
   openWhenHidden?: boolean;
 }
@@ -69,7 +74,10 @@ export function subscribeChatStream(options: ChatSseOptions): ChatSseController 
       if (_response.ok) {
         setState('connected');
       } else if (_response.status === 401) {
-        // 认证失败不重试，交回调用方处理
+        // 认证失败：通知调用方 refresh，不再用旧 token 自动重试
+        setState('error');
+        options.onAuthError?.();
+        active = false;
         controller.abort();
       } else {
         // 其它 HTTP 错误：抛错触发 fetch-event-source 自动重连

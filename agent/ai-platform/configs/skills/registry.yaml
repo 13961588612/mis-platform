@@ -75,3 +75,28 @@ skills:
     package: bgbh/bgbh-s7-private-domain
     name: 百购私域与投入
     status: active
+  - id: sm-report-router
+    category: supermarket
+    package: spm-report/sm-report-router
+    name: 超市报表总控路由
+    status: active
+  - id: sm-common-info-master-data
+    category: supermarket
+    package: spm-report/sm-common-info-master-data
+    name: 超市基础资料
+    status: active
+  - id: sm-common-info-calendar
+    category: supermarket
+    package: spm-report/sm-common-info-calendar
+    name: 超市日历清单
+    status: active
+  - id: sm-shop-sale
+    category: supermarket
+    package: spm-report/sm-shop-sale
+    name: 超市门店销售
+    status: active
+  - id: sm-shop-category-sale
+    category: supermarket
+    package: spm-report/sm-shop-category-sale
+    name: 超市门店品类销售
+    status: active

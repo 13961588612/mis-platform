@@ -17,6 +17,7 @@ from src.runtime.oh_runtime_builder import (
     build_formal_skill_ids_prompt,
     enabled_package_skill_ids,
     materialize_oh_skill_view,
+    prompt_exposed_skill_ids,
     resolve_extra_skill_dirs,
 )
 from src.runtime.platform_skill_tool import PlatformSkillTool
@@ -60,6 +61,26 @@ def test_from_yaml_dict_accepts_string_enabled_skills() -> None:
         "member.profile",
         "member.points-account",
     ]
+    assert all(s.prompt_expose is True for s in cfg.skills)
+
+
+def test_from_yaml_dict_prompt_expose_default_true_and_false() -> None:
+    cfg = AgentConfig.from_yaml_dict(
+        {
+            "agent": {"name": "spm-report", "display_name": "SPM"},
+            "skills": {
+                "enabled": [
+                    {"skill_id": "sm-report-router", "prompt_expose": True},
+                    {"skill_id": "sm-shop-sale", "prompt_expose": False},
+                    "sm-common-info-calendar",
+                ]
+            },
+        }
+    )
+    by_id = {s.skill_id: s for s in cfg.skills}
+    assert by_id["sm-report-router"].prompt_expose is True
+    assert by_id["sm-shop-sale"].prompt_expose is False
+    assert by_id["sm-common-info-calendar"].prompt_expose is True
 
 
 def test_materialize_oh_skill_view_uses_formal_skill_id_dirs(tmp_path: Path) -> None:
@@ -73,16 +94,47 @@ def test_materialize_oh_skill_view_uses_formal_skill_id_dirs(tmp_path: Path) -> 
     )
     cfg = _crm_config("member.points-account", "mcp-foo")
 
-    dirs, exposed = materialize_oh_skill_view(cfg, tmp_path)
-    assert exposed == ["member.points-account"]
-    assert len(dirs) == 1
-    view_md = Path(dirs[0]) / "member.points-account" / "SKILL.md"
+    view = materialize_oh_skill_view(cfg, tmp_path)
+    assert view.loadable_ids == ["member.points-account"]
+    assert view.prompt_ids == ["member.points-account"]
+    assert len(view.load_dirs) == 1
+    view_md = Path(view.load_dirs[0]) / "member.points-account" / "SKILL.md"
     assert view_md.is_file()
     assert "member.points-account" in view_md.read_text(encoding="utf-8")
 
-    # resolve_extra_skill_dirs 与物化结果一致，且不再暴露 packages/crm 整类目录
-    assert resolve_extra_skill_dirs(cfg, tmp_path) == dirs
-    assert not any(Path(d).name == "crm" for d in dirs)
+    # resolve_extra_skill_dirs 与可加载视图一致，且不再暴露 packages/crm 整类目录
+    assert resolve_extra_skill_dirs(cfg, tmp_path) == view.load_dirs
+    assert not any(Path(d).name == "crm" for d in view.load_dirs)
+
+
+def test_materialize_splits_prompt_and_load_views(tmp_path: Path) -> None:
+    packages = tmp_path / "skills" / "packages" / "spm"
+    for sid, desc in (
+        ("sm-report-router", "router"),
+        ("sm-shop-sale", "sale"),
+    ):
+        pkg = packages / sid
+        pkg.mkdir(parents=True)
+        (pkg / "SKILL.md").write_text(
+            f"---\nname: {sid}\nskill_id: {sid}\ndescription: {desc}\n---\nbody\n",
+            encoding="utf-8",
+        )
+    cfg = AgentConfig(
+        agent_id="spm-report",
+        name="spm-report",
+        display_name="SPM",
+        skills=[
+            SkillRef(skill_id="sm-report-router", enabled=True, prompt_expose=True),
+            SkillRef(skill_id="sm-shop-sale", enabled=True, prompt_expose=False),
+        ],
+    )
+    assert prompt_exposed_skill_ids(cfg) == ["sm-report-router"]
+    view = materialize_oh_skill_view(cfg, tmp_path)
+    assert view.loadable_ids == ["sm-report-router", "sm-shop-sale"]
+    assert view.prompt_ids == ["sm-report-router"]
+    assert (Path(view.load_dirs[0]) / "sm-shop-sale" / "SKILL.md").is_file()
+    assert (Path(view.prompt_dirs[0]) / "sm-report-router" / "SKILL.md").is_file()
+    assert not (Path(view.prompt_dirs[0]) / "sm-shop-sale").exists()
 
 
 @pytest.mark.asyncio
@@ -99,9 +151,9 @@ async def test_mis_iqd_business_analysis_skill_materializes(
     assert "iqd__ask" in cfg.runtime.allowed_tools
     assert "business.analysis" in {skill.skill_id for skill in cfg.skills}
 
-    dirs, exposed = materialize_oh_skill_view(cfg, config_base)
-    assert exposed == ["business.analysis"]
-    skill_md = Path(dirs[0]) / "business.analysis" / "SKILL.md"
+    view = materialize_oh_skill_view(cfg, config_base)
+    assert view.loadable_ids == ["business.analysis"]
+    skill_md = Path(view.load_dirs[0]) / "business.analysis" / "SKILL.md"
     assert skill_md.is_file()
     assert "iqd__ask" in skill_md.read_text(encoding="utf-8")
 
@@ -114,6 +166,16 @@ def test_formal_skill_ids_prompt_lists_ids_only() -> None:
     assert "member.profile" in text
     assert "禁止缩写" in text
     assert "member-profile" in text  # 作为反例
+
+
+def test_formal_skill_ids_prompt_mentions_deferred_loadables() -> None:
+    text = build_formal_skill_ids_prompt(
+        ["sm-report-router"],
+        loadable_ids=["sm-report-router", "sm-shop-sale"],
+    )
+    assert "sm-report-router" in text
+    assert "总控路由" in text
+    assert "sm-shop-sale" not in text  # 不把下游 id 刷进列表，只提示按路由加载
 
 
 def test_platform_skill_tool_enum_rejects_bare_member() -> None:

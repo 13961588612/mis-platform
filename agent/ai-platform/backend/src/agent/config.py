@@ -66,6 +66,8 @@ class SkillRef(BaseModel):
     skill_id: str
     enabled: bool = True
     overrides: dict[str, Any] = Field(default_factory=dict)
+    #: 是否写入 OpenHarness ``# Available Skills``（缺省 True；router 模式下游可 false）
+    prompt_expose: bool = True
 
 
 class MCPServerConfig(BaseModel):
@@ -257,7 +259,14 @@ class AgentConfig(BaseModel):
                 skill_id = item.strip()
                 if not skill_id:
                     continue
-                skills.append(SkillRef(skill_id=skill_id, enabled=True, overrides={}))
+                skills.append(
+                    SkillRef(
+                        skill_id=skill_id,
+                        enabled=True,
+                        overrides={},
+                        prompt_expose=True,
+                    )
+                )
                 continue
             if not isinstance(item, dict) or not item.get("skill_id"):
                 continue
@@ -266,6 +275,7 @@ class AgentConfig(BaseModel):
                     skill_id=item["skill_id"],
                     enabled=item.get("enabled", True),
                     overrides=item.get("overrides", {}),
+                    prompt_expose=item.get("prompt_expose", True),
                 )
             )
 

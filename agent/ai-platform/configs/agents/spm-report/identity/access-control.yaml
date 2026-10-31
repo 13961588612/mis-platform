@@ -12,4 +12,11 @@ access_control:
     - supermarket_operator
     - supermarket_admin
     - data_analyst
-  skill_permissions: {}
+  skill_permissions:
+    spm:report:read:
+      - store_staff
+      - supermarket_operator
+      - supermarket_admin
+      - data_analyst
+  functional_permissions:
+    - spm:report:read

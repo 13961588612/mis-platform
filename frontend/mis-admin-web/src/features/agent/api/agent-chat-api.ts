@@ -6,9 +6,10 @@
  * 前端必须对齐，否则浏览器先断。其它 agent-ops 接口仍走默认 15s 客户端，互不影响。
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
-import type { ApiResult, TokenResponse } from '@/types/api';
+import type { ApiResult } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { recordAuthKick } from '@/lib/auth/auth-kick-log';
+import { getLastRefreshError, refreshAccessToken } from '@/lib/auth/refresh-token';
 import { listSkills } from './agent-ops-api';
 import type {
   Session,
@@ -34,43 +35,6 @@ chatApi.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   }
   return config;
 });
-
-let refreshPromise: Promise<string | null> | null = null;
-let lastRefreshError: string | null = null;
-
-async function refreshAccessToken(): Promise<string | null> {
-  if (!refreshPromise) {
-    lastRefreshError = null;
-    refreshPromise = chatApi
-      .post<ApiResult<TokenResponse>>('/auth/refresh', {})
-      .then((res) => {
-        if (res.data.code !== 0 || !res.data.data) {
-          throw new Error(res.data.message || `refresh code=${res.data.code}`);
-        }
-        const { accessToken, expiresIn } = res.data.data;
-        useAuthStore.getState().setAccessToken(accessToken, expiresIn);
-        return accessToken;
-      })
-      .catch((err: unknown) => {
-        const ax = err as AxiosError<ApiResult<unknown>>;
-        lastRefreshError =
-          ax.response?.data?.message ||
-          ax.message ||
-          (err instanceof Error ? err.message : 'refresh failed');
-        console.warn('[auth-kick] chat /auth/refresh 失败', {
-          status: ax.response?.status,
-          code: ax.response?.data?.code,
-          message: lastRefreshError,
-        });
-        useAuthStore.getState().clearSession();
-        return null;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-  return refreshPromise;
-}
 
 chatApi.interceptors.response.use(
   (response) => response,
@@ -102,7 +66,7 @@ chatApi.interceptors.response.use(
         httpStatus: status,
         bizCode: code,
         bizMessage: error.response?.data?.message,
-        refreshError: lastRefreshError ?? undefined,
+        refreshError: getLastRefreshError() ?? undefined,
       });
       window.location.href = '/login';
       return Promise.reject(error);

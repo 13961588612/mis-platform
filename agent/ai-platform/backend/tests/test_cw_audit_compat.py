@@ -166,15 +166,8 @@ class TestFlagsSafeRead:
         assert s.INVOKE_AGENT_TIMEOUT_SECONDS == 1680
         # 1.3/1.4：白名单移除已灰度的 mis-extract/mis-summary、加入承接其能力的
         # mis-user-helper，与 DEFAULT_WHITELIST（兜底常量，仍保留旧 worker）解耦，
-        # 二者不再要求相等。v1.9（B1）：追加 mis-iqd；百购分析追加 bgbh-analyst。
-        assert sorted(s.INVOKE_AGENT_WHITELIST) == [
-            "bgbh-analyst",
-            "crm-assistant",
-            "mis-iqd",
-            "mis-rag",
-            "mis-user-helper",
-        ]
-        # 硬约束（R5/R8）：后台操作员专属 Agent 绝不进委派白名单
+        # 环境白名单已废弃：默认为空，运行时以 coordination.worker_ids 为准
+        assert s.INVOKE_AGENT_WHITELIST == []
         assert "mis-admin-helper" not in s.INVOKE_AGENT_WHITELIST
 
     def test_real_settings_values_are_honoured_not_swallowed(self):
@@ -281,16 +274,23 @@ class TestErrorTextVerbatim:
             "调度深度超限（depth=1，max=1）：禁止子智能体再次委托其他智能体。"
         ), repr(result.output)
 
-    async def test_whitelist_reject_text_verbatim(self):
+    async def test_delegate_allowlist_reject_text_verbatim(self):
+        """有会话且 coordination 可派发为空时，拒绝文案固定。"""
+        from unittest.mock import AsyncMock, patch
+
         tool = InvokeAgentTool()
-        result = await tool.execute(
-            InvokeAgentInput(agent_id="evil-agent", content="做点什么事情吧好吗"),
-            _ctx(),
-        )
+        with patch(
+            "src.skills.tools.invoke_agent.resolve_delegate_allowlist",
+            new=AsyncMock(return_value=frozenset({"mis-rag", "crm-assistant"})),
+        ):
+            result = await tool.execute(
+                InvokeAgentInput(agent_id="evil-agent", content="做点什么事情吧好吗"),
+                _ctx({"session_id": "sess-1"}),
+            )
         assert result.is_error is True
         assert result.output == (
-            "目标智能体不在白名单：evil-agent。"
-            "允许：crm-assistant, mis-iqd, mis-rag, mis-user-helper"
+            "目标智能体不在可派发列表：evil-agent。"
+            "允许：crm-assistant, mis-rag"
         ), repr(result.output)
 
     async def test_forbidden_self_text_verbatim(self):

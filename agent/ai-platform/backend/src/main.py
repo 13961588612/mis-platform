@@ -30,7 +30,11 @@ from src.hitl.approval import ApprovalManager
 from src.llm.gateway import LLMGateway
 from src.push.scheduler import PushScheduler
 from src.router.agent_router import AgentRouter
-from src.utils.logging import configure_logging
+from src.utils.logging import (
+    classify_request_log_bucket,
+    configure_logging,
+    set_log_bucket,
+)
 
 # ===== 生命周期管理 =====
 
@@ -443,21 +447,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ===== Trace ID 中间件 =====
+    # ===== Trace ID + 日志分桶中间件 =====
     @app.middleware("http")
     async def add_trace_id(request: Request, call_next: Any) -> Any:
-        """为每个请求注入 traceId 以支持分布式追踪。"""
+        """为每个请求注入 traceId，并按路径把日志写入 chat/sys 文件。"""
         import uuid
 
         trace_id: str = request.headers.get("X-Trace-Id", str(uuid.uuid4()))
+        log_bucket = classify_request_log_bucket(request.url.path)
+        set_log_bucket(log_bucket)
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             trace_id=trace_id,
             service=settings.APP_NAME,
+            log_bucket=log_bucket,
         )
-        response: Any = await call_next(request)
-        response.headers["X-Trace-Id"] = trace_id
-        return response
+        try:
+            response: Any = await call_next(request)
+            response.headers["X-Trace-Id"] = trace_id
+            return response
+        finally:
+            # 请求结束后回到默认 sys，避免同任务后续日志误入 chat
+            set_log_bucket("sys")
 
     # ===== 健康检查端点 =====
     @app.get("/health", tags=["system"])

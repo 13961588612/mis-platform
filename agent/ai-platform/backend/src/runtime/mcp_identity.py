@@ -35,6 +35,36 @@ IDENTITY_HEADER_MAP: dict[str, str] = {
     "channelUserId": "X-Channel-User-Id",
 }
 
+# 运行时渠道 → MCP 出站 channel（仅 arguments / X-Channel；不改会话 / Gateway）
+# Copilot / 管理台 / H5 web → mis-h5；企微机器人（及企微侧入口）→ mis-qywx
+_MCP_CHANNEL_MAP: dict[str, str] = {
+    "mis-h5": "mis-h5",
+    "mis-qywx": "mis-qywx",
+    # AI Copilot / BFF / H5 web
+    "mis_bff": "mis-h5",
+    "web": "mis-h5",
+    "h5": "mis-h5",
+    "api": "mis-h5",
+    # 企微
+    "wecom-bot": "mis-qywx",
+    "wecom_bot": "mis-qywx",
+    "wecom-h5": "mis-qywx",
+    "wecom_h5": "mis-qywx",
+    "wecom": "mis-qywx",
+}
+
+
+def map_channel_for_mcp(channel: str | None) -> str:
+    """将平台运行时渠道映射为 MCP 约定码；未登记则原样透传。
+
+    仅用于 MCP 出站（``identity.channel`` / ``X-Channel``），不改会话落库与
+    Gateway 渠道名。
+    """
+    raw: str = (channel or "").strip()
+    if not raw:
+        return ""
+    return _MCP_CHANNEL_MAP.get(raw.lower(), raw)
+
 
 def build_mcp_identity(
     *,
@@ -67,10 +97,15 @@ def build_mcp_identity(
 
 
 def identity_to_headers(identity: dict[str, str]) -> dict[str, str]:
-    """将身份字典转为 HTTP Header（空值不写入 Header）。"""
+    """将身份字典转为 HTTP Header（空值不写入 Header）。
+
+    ``channel`` 经 :func:`map_channel_for_mcp` 后再写入 ``X-Channel``。
+    """
     headers: dict[str, str] = {}
     for key, header_name in IDENTITY_HEADER_MAP.items():
         value: str = (identity.get(key) or "").strip()
+        if key == "channel":
+            value = map_channel_for_mcp(value)
         if value:
             headers[header_name] = value
     return headers
@@ -90,20 +125,23 @@ def merge_identity_into_args(
           "identity": {
             "userId": "...",
             "userMobile": "",
-            "channel": "wecom-bot",
+            "channel": "mis-qywx",
             "channelUserId": "..."
           }
         }
 
     ``userMobile`` 等字段即使为空字符串也会写入，不省略。
+    ``channel`` 仅在此出站映射为 MCP 约定码（``mis-h5`` / ``mis-qywx``）。
     """
     merged: dict[str, Any] = dict(payload)
     # 清理旧版扁平字段，避免与 identity 对象并存
     for key in IDENTITY_ARG_KEYS:
         merged.pop(key, None)
-    merged[IDENTITY_OBJECT_KEY] = {
+    out_identity: dict[str, str] = {
         key: (identity.get(key) or "").strip() for key in IDENTITY_ARG_KEYS
     }
+    out_identity["channel"] = map_channel_for_mcp(out_identity.get("channel"))
+    merged[IDENTITY_OBJECT_KEY] = out_identity
     return merged
 
 

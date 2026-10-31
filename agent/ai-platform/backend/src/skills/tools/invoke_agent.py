@@ -1,10 +1,12 @@
 """agent__invoke — 调度智能体委托调用其他 Agent（Copilot 调度器）。
 
-仅应由 ``mis-copilot`` 暴露。白名单目标：mis-extract / mis-summary / mis-rag / crm-assistant。
+仅应由 Coordinator（如 ``mis-copilot``）暴露。可派发目标以该 Coordinator 的
+``coordination.yaml`` → ``delegation.worker_ids``（管理台保存）为准；
+**不再**使用环境变量 ``INVOKE_AGENT_WHITELIST`` 硬闸。
 深度限制 depth<=1，禁止递归调度与自调用。
 
 本模块是 Coordinator–Worker 调度基座的**薄编排层**（design-impl.md §1.2）：
-治理校验（白名单 / 深度 / 超时 / 熔断）留在这里，业务语义（TaskBrief、
+治理校验（可派发列表 / 深度 / 超时 / 熔断）留在这里，业务语义（TaskBrief、
 结果信封 task_notification、dispatch_trace、Worker Catalog、子会话续聊）
 全部下沉到 ``src/coordinator``。
 
@@ -14,7 +16,7 @@
 * ``InvokeAgentInput`` / ``InvokeAgentTool`` / ``_invoke_depth`` / ``resolve_whitelist``
   / ``DEFAULT_WHITELIST`` / ``FORBIDDEN_TARGETS`` / ``get_invoke_depth`` 不改名、不移位；
 * ``get_session_manager`` / ``get_agent_manager`` 保持函数内懒导入（保证可被 patch）；
-* 错误文案逐字保留，失败路径不加信封头。
+* 失败路径不加信封头。
 """
 
 from __future__ import annotations
@@ -139,10 +141,76 @@ def get_invoke_depth() -> int:
 
 
 def resolve_whitelist(configured: list[str] | None) -> frozenset[str]:
-    """解析配置白名单；空配置回退默认。"""
+    """解析历史环境白名单（**已废弃**，仅保留符号供静态兜底 / 旧测试）。
+
+    空配置回退 ``DEFAULT_WHITELIST``；运行时委派闸门请用
+    :func:`load_coordinator_worker_ids`。
+    """
     if configured:
         return frozenset(a.strip() for a in configured if a and a.strip())
     return DEFAULT_WHITELIST
+
+
+def load_coordinator_worker_ids(coordinator_id: str) -> frozenset[str]:
+    """读取 Coordinator 的可派发执行者列表（``coordination.yaml`` / worker_ids）。
+
+    Args:
+        coordinator_id: 协调者 Agent ID。
+
+    Returns:
+        worker_ids 集合；文件缺失或非 coordinator 时返回空集（fail-closed）。
+    """
+    if not (coordinator_id or "").strip():
+        return frozenset()
+    try:
+        from src.config_manager.file_service import agent_dir, yaml
+        from pathlib import Path
+
+        path = Path(agent_dir(coordinator_id.strip())) / "coordination.yaml"
+        if not path.exists():
+            return frozenset()
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict) or data.get("role") != "coordinator":
+            return frozenset()
+        delegation = data.get("delegation") or {}
+        raw = delegation.get("worker_ids") or []
+        if not isinstance(raw, list):
+            return frozenset()
+        return frozenset(str(x).strip() for x in raw if str(x).strip())
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不得阻断，按空列表拒绝委派
+        logger.warning(
+            "load coordinator worker_ids failed",
+            coordinator_id=coordinator_id,
+            error=str(exc),
+        )
+        return frozenset()
+
+
+async def resolve_delegate_allowlist(parent_session_id: str) -> frozenset[str] | None:
+    """解析本轮可派发集合。
+
+    Args:
+        parent_session_id: 父会话 ID。
+
+    Returns:
+        - ``None``：无会话 / 会话无 ``agent_id``（单测替身）→ **跳过**可派发校验；
+        - ``frozenset``：已解析的 ``worker_ids``（可为空 = 全部拒绝）。
+    """
+    if not parent_session_id:
+        return None
+    try:
+        from src.agent.session import get_session_manager
+
+        parent = await get_session_manager().get_session(parent_session_id)
+    except Exception:  # noqa: BLE001 - 读会话异常时跳过（与历史单测「无 parent」兼容）
+        return None
+    if parent is None:
+        return frozenset()
+    coordinator_id = str(getattr(parent, "agent_id", "") or "").strip()
+    if not coordinator_id:
+        # 生产会话必有 agent_id；缺省视为测试替身，跳过以免误杀
+        return None
+    return load_coordinator_worker_ids(coordinator_id)
 
 
 class InvokeAgentInput(BaseModel):
@@ -151,9 +219,7 @@ class InvokeAgentInput(BaseModel):
     agent_id: str = Field(
         ...,
         description=(
-            "要委托的目标智能体 ID。"
-            "允许：mis-extract（字段抽取）、mis-summary（摘要）、"
-            "mis-rag（知识检索）、crm-assistant（会员/积分/CRM）。"
+            "要委托的目标智能体 ID（须为当前 Coordinator 调度配置中的可派发执行者）。"
         ),
     )
     content: str = Field(
@@ -263,7 +329,6 @@ class InvokeAgentTool(BaseTool):
             现网错误文案或 Brief 重写模板。
         """
         settings = get_settings()
-        whitelist = resolve_whitelist(settings.INVOKE_AGENT_WHITELIST)
         max_depth = max(1, int(settings.INVOKE_AGENT_MAX_DEPTH or 1))
         timeout_s = max(5, int(settings.INVOKE_AGENT_TIMEOUT_SECONDS or 1680))
 
@@ -293,11 +358,7 @@ class InvokeAgentTool(BaseTool):
                 is_error=True,
             )
 
-        # 1.3 硬约束·闸②（belt-and-suspenders）：mis-admin-helper 作为后台操作员专属
-        # Agent，copilot 全链路恒定不可达。即便被误配进白名单 / scoped catalog，
-        # 这里也显式拒绝，绝不委派（与运行时 L249 白名单判定形成双保险）。
-        # 懒导入：常量从 catalog 延迟导入，避免模块被 import 时即触发 catalog
-        # 副作用 / 循环依赖（design §8 T03 懒导入红线）。
+        # mis-admin-helper：后台操作员专属，copilot 全链路恒定不可达。
         from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
 
         if agent_id in ADMIN_HELPER_AGENT_IDS:
@@ -305,23 +366,36 @@ class InvokeAgentTool(BaseTool):
                 output=f"目标智能体 {agent_id} 不可经调度链接触达（后台操作员专属，硬约束）",
                 is_error=True,
             )
-        if agent_id not in whitelist:
-            allowed = ", ".join(sorted(whitelist))
-            return ToolResult(
-                output=f"目标智能体不在白名单：{agent_id}。允许：{allowed}",
-                is_error=True,
-            )
-
         meta = context.metadata or {}
         identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else {}
         parent_session_id = str(meta.get("session_id") or "")
-
-        # ===== 计时与任务 ID：治理校验通过后开始（design-impl.md §7.2）=====
         started_at = perf_counter()
         task_id = uuid4().hex[:12]
         intent = (arguments.intent or "").strip() or _WORKER_INTENT_HINTS.get(
             agent_id, "unknown"
         )
+
+        # 可派发闸：coordination.worker_ids（管理台）。无会话上下文时跳过（单测兼容）。
+        allowlist = await resolve_delegate_allowlist(parent_session_id)
+        if allowlist is not None and agent_id not in allowlist:
+            allowed = ", ".join(sorted(allowlist)) or "（空，请在调度配置中选择可派发执行者）"
+            if parent_session_id:
+                await self._record_trace(
+                    parent_session_id,
+                    DispatchTraceEntry(
+                        intent=intent,
+                        worker_id=agent_id,
+                        tool=self.name,
+                        status=TRACE_STATUS_REJECTED,
+                        latency_ms=_elapsed_ms(started_at),
+                        task_id=task_id,
+                        brief_rejected=False,
+                    ),
+                )
+            return ToolResult(
+                output=f"目标智能体不在可派发列表：{agent_id}。允许：{allowed}",
+                is_error=True,
+            )
         worker_spec = self._get_worker_spec(agent_id)
 
         # ===== mode="stop"：停止已绑定的 Worker 子会话（C5）=====

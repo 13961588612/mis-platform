@@ -21,6 +21,8 @@ from src.runtime.mcp_identity import (
     IDENTITY_HEADER_MAP,
     build_mcp_identity,
     identity_from_tool_metadata,
+    identity_to_headers,
+    map_channel_for_mcp,
     merge_identity_into_args,
 )
 from src.runtime.tool_registry_builder import _sanitize_tool_segment
@@ -197,6 +199,44 @@ def test_s9_merge_identity_into_args_includes_fifth_key() -> None:
     merged = merge_identity_into_args({"apiName": "x"}, build_mcp_identity(mis_user_id=7))
     assert merged["identity"]["misUserId"] == "7"
     assert set(merged["identity"].keys()) == set(IDENTITY_ARG_KEYS)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "mcp"),
+    [
+        pytest.param("mis_bff", "mis-h5", id="copilot-bff"),
+        pytest.param("h5", "mis-h5", id="gateway-h5"),
+        pytest.param("web", "mis-h5", id="web"),
+        pytest.param("api", "mis-h5", id="api"),
+        pytest.param("wecom-bot", "mis-qywx", id="wecom-bot"),
+        pytest.param("wecom_bot", "mis-qywx", id="wecom_bot"),
+        pytest.param("wecom-h5", "mis-qywx", id="wecom-h5"),
+        pytest.param("mis-h5", "mis-h5", id="already-h5"),
+        pytest.param("mis-qywx", "mis-qywx", id="already-qywx"),
+        pytest.param("iqd_test", "iqd_test", id="passthrough"),
+        pytest.param("", "", id="empty"),
+    ],
+)
+def test_map_channel_for_mcp(runtime: str, mcp: str) -> None:
+    """仅 MCP 出站映射；未登记渠道原样透传。"""
+    assert map_channel_for_mcp(runtime) == mcp
+
+
+def test_merge_identity_maps_channel_for_mcp_only() -> None:
+    """arguments.identity.channel 映射；build 侧仍保留运行时值。"""
+    identity = build_mcp_identity(channel="mis_bff", mis_user_id=1)
+    assert identity["channel"] == "mis_bff"
+    merged = merge_identity_into_args({"apiName": "x"}, identity)
+    assert merged["identity"]["channel"] == "mis-h5"
+
+
+def test_identity_to_headers_maps_x_channel() -> None:
+    """X-Channel 同样走 MCP 约定码。"""
+    headers = identity_to_headers(
+        build_mcp_identity(user_id="u1", channel="wecom-bot")
+    )
+    assert headers["X-Channel"] == "mis-qywx"
+    assert headers["X-User-Id"] == "u1"
 
 
 # ---------------------------------------------------------------------------

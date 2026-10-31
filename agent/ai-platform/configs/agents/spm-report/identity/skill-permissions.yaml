@@ -1,5 +1,15 @@
 # =============================================================================
-# spm-report — Skill 权限映射（Skills 追加后在此登记 required 权限）
+# spm-report — Skill 权限映射
 # =============================================================================
 
-skill_permissions: {}
+skill_permissions:
+  sm-report-router:
+    required: [spm:report:read]
+  sm-common-info-master-data:
+    required: [spm:report:read]
+  sm-common-info-calendar:
+    required: [spm:report:read]
+  sm-shop-sale:
+    required: [spm:report:read]
+  sm-shop-category-sale:
+    required: [spm:report:read]
