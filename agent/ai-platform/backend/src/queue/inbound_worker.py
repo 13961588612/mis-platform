@@ -38,7 +38,7 @@ from src.runtime.a2ui_run import A2uiRunLoop
 from src.runtime.events import AgentEvent, AgentEventType
 from src.skills.tools.formfill_execute import resume_formfill
 from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, set_log_bucket
 
 logger = get_logger("queue.inbound_worker")
 
@@ -331,12 +331,22 @@ class InboundStreamWorker:
     async def refresh_streams(self, agent_ids: list[str]) -> None:
         """Agent 同步后更新订阅的 stream 列表。"""
         new_keys: list[str] = await self._resolve_stream_keys(agent_ids)
+        old_keys = list(self._stream_keys)
         redis: aioredis.Redis = await self._get_redis()
         for stream_key in new_keys:
             if stream_key not in self._stream_keys:
                 await ensure_consumer_group(redis, stream_key)
         self._stream_keys = new_keys
-        logger.info("Inbound stream subscriptions updated", streams=self._stream_keys)
+        if new_keys != old_keys:
+            logger.info(
+                "Inbound stream subscriptions updated",
+                streams=self._stream_keys,
+            )
+        else:
+            logger.debug(
+                "Inbound stream subscriptions unchanged",
+                streams=self._stream_keys,
+            )
 
     def _spawn_handler(
         self,
@@ -569,7 +579,12 @@ class InboundStreamWorker:
                     )
                     return
                 try:
-                    await self._process_inbound(inbound, stream_key)
+                    # H5 / 企微 / A2UI 入站均属对话链路，写入 *-chat.log
+                    set_log_bucket("chat")
+                    try:
+                        await self._process_inbound(inbound, stream_key)
+                    finally:
+                        set_log_bucket("sys")
                     await redis.xack(stream_key, CONSUMER_GROUP, message_id)
                 except _RerouteToOwner as reroute:
                     # 非本 core 拥有的 agent：重投到 owning core 的 agent 流并 ACK 原流。

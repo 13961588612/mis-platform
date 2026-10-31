@@ -1,0 +1,62 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  [
+                 {
+                     "path":  "agent.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  773
+                 },
+                 {
+                     "path":  "memory/agent-memory.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  122
+                 },
+                 {
+                     "path":  "memory/facts/coordinator-policy.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  354
+                 },
+                 {
+                     "path":  "memory/personality.md",
+                     "type":  "md",
+                     "read_only":  false,
+                     "size_bytes":  351
+                 },
+                 {
+                     "path":  "metadata.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  351
+                 },
+                 {
+                     "path":  "runtime/prompts/system.md",
+                     "type":  "md",
+                     "read_only":  false,
+                     "size_bytes":  7662
+                 },
+                 {
+                     "path":  "runtime/runtime.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  819
+                 },
+                 {
+                     "path":  "skills/enabled-skills.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  106
+                 },
+                 {
+                     "path":  "system/model.yaml",
+                     "type":  "yaml",
+                     "read_only":  false,
+                     "size_bytes":  30
+                 }
+             ],
+    "traceId":  null,
+    "success":  true
+}

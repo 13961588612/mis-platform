@@ -75,13 +75,30 @@ export async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+/** 从 JWT payload 读取 ``exp``（毫秒）；解析失败返回 null。 */
+export function readJwtExpMs(token: string): number | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4 === 0 ? b64 : b64 + '='.repeat(4 - (b64.length % 4));
+    const payload = JSON.parse(atob(pad)) as { exp?: unknown };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 若 token 仍在 skew 外则原样返回；已过期或即将过期则 refresh。
+ * 优先用 JWT 内 ``exp``（与 Gateway 一致），避免本地 expiresAt 偏松导致空转重连。
  */
 export async function ensureTokenFresh(): Promise<string | null> {
   const { accessToken, expiresAt } = useAuthStore.getState();
   if (!accessToken) return null;
-  if (expiresAt != null && expiresAt - Date.now() > TOKEN_REFRESH_SKEW_MS) {
+  const jwtExp = readJwtExpMs(accessToken);
+  const effectiveExp = jwtExp ?? expiresAt ?? null;
+  if (effectiveExp != null && effectiveExp - Date.now() > TOKEN_REFRESH_SKEW_MS) {
     return accessToken;
   }
   return refreshAccessToken();

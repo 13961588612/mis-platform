@@ -1,0 +1,38 @@
+# =============================================================================
+# mis-copilot — Coordinator 意图预路由（JEV 选 Worker）
+# =============================================================================
+# enabled=true 且配置 INTENT_DETECT_API_KEY 后，在主模型组 TaskBrief 前跑 JEV。
+# description 会原样进入 JEV 标签表；短跟问依赖运行时传入的对话上文。
+# Worker 侧请用 engine=rules（见 spm-report/intent-router.yaml）。
+# =============================================================================
+intent_router:
+  enabled: true
+  engine: model
+  on_fail: fallback_primary
+  model:
+    name: tongyi-intent-detect-v3
+    timeout_ms: 2000
+  labels:
+    rag:
+      worker_id: mis-rag
+      intent: rag
+      description: >-
+        制度/规章/政策/知识库问答与条文检索；非超市门店主数据、非区域门店列表、
+        非销售毛利品类报表。
+    crm:
+      worker_id: crm-assistant
+      intent: crm
+      description: >-
+        客户/CRM 业务助理，会员资料，积分券账户，会员订单。
+    spm_report:
+      worker_id: spm-report
+      intent: spm_report
+      description: >-
+        超市/大统华经营与主数据：区域或城市有哪些门店、权限可见门店、门店列表、
+        销售/营业额/毛利/损耗/品类/周月报表；含承接上文的短跟问
+        （如「溧阳呢」「那江阴地区呢」「宜兴有哪些店」）。
+    chitchat:
+      worker_id: ""
+      intent: chitchat
+      description: >-
+        闲聊寒暄、与业务系统无关的闲谈；不需要查询门店/知识库/CRM。

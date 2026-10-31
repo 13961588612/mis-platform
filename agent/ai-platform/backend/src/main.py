@@ -271,7 +271,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     await asyncio.sleep(settings.AGENT_RESYNC_S)
                     # 重认领孤儿租约 + 起本 core 新拥有的 agent 运行时 + 刷注册表。
                     await agent_manager.sync_from_configs(
-                        config_manager.list_configs()
+                        config_manager.list_configs(),
+                        quiet=True,
                     )
                     # 重新订阅本 core 拥有的 agent 流（崩溃 Core 易主后及时接管）。
                     worker: Any = get_inbound_stream_worker()

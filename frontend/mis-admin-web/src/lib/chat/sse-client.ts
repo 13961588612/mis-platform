@@ -22,6 +22,8 @@ export interface ChatSseController {
 export interface ChatSseOptions {
   sessionId: string;
   token: string;
+  /** 自动重连前取最新 token，写入 Authorization（避免断线重连仍带过期 JWT）。 */
+  getToken?: () => string | null | undefined;
   /** 事件回调（已归一化为 ChatStreamEvent）。 */
   onEvent: (event: ChatStreamEvent) => void;
   /** 连接状态回调（可选）。 */
@@ -60,13 +62,22 @@ export function subscribeChatStream(options: ChatSseOptions): ChatSseController 
   };
 
   const url = buildChatStreamUrl(options.sessionId);
+  // 与 fetch-event-source 内部共用同一 headers 对象；重连前可改 Authorization
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${options.token}`,
+    Accept: 'text/event-stream',
+  };
+
+  const applyLatestToken = (): void => {
+    const latest = options.getToken?.();
+    if (typeof latest === 'string' && latest.length > 0) {
+      headers.Authorization = `Bearer ${latest}`;
+    }
+  };
 
   void fetchEventSource(url, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${options.token}`,
-      Accept: 'text/event-stream',
-    },
+    headers,
     signal: controller.signal,
     openWhenHidden: options.openWhenHidden ?? true,
     async onopen(_response) {
@@ -97,11 +108,12 @@ export function subscribeChatStream(options: ChatSseOptions): ChatSseController 
     },
     onerror(_error) {
       // 连接中断：置 reconnecting，返回 retry 延迟（ms）让 fetch-event-source 自动重连；
-      // 主动 abort 时不再重连。
+      // 主动 abort 时不再重连。重连前换上最新 token，避免过期 JWT 空转。
       if (!active || controller.signal.aborted) {
         return undefined;
       }
       setState('reconnecting');
+      applyLatestToken();
       return 2000;
     },
   });

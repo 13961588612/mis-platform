@@ -116,8 +116,9 @@ class IqdMcpSettings(BaseSettings):
         validation_alias=_wren_env("PROJECTS_ROOT", "WREN_PROJECTS_ROOT"),
     )
     wren_mcp_health_interval_seconds: float = Field(
-        default=30.0,
-        description="后台健康检查循环间隔（秒）；失败计数达阈值置 unhealthy 并触发崩溃重启",
+        default=120.0,
+        description="后台健康检查/跨机 reconcile 间隔（秒）；失败计数达阈值置 unhealthy 并触发崩溃重启。"
+        "默认 120s，避免 status+mcp-deploy 过频刷日志。",
         validation_alias=_wren_env(
             "MCP_HEALTH_INTERVAL_SECONDS", "WREN_MCP_HEALTH_INTERVAL_SECONDS"
         ),
@@ -464,8 +465,9 @@ class Settings(BaseSettings):
         description="稳定 Core 实例 ID；优先级 CORE_ID 环境变量 > os.hostname() > 告警随机；k8s StatefulSet 注入 pod 名 core-1",
     )
     AGENT_LEASE_TTL_S: int = Field(
-        default=30,
-        description="Agent 运行时租约 TTL（秒）；心跳续租未达则释放易主",
+        default=90,
+        description="Agent 运行时租约 TTL（秒）；心跳续租未达则释放易主。"
+        "须 > AGENT_RESYNC_S，保证周期再对齐能在租约过期后接管。",
     )
     AGENT_HEARTBEAT_S: int = Field(
         default=10,
@@ -486,9 +488,10 @@ class Settings(BaseSettings):
         "的极端场景。须 >= SESSION_LOCK_TTL_S，且覆盖 AGENT_MESSAGE_TIMEOUT。",
     )
     AGENT_RESYNC_S: int = Field(
-        default=15,
-        description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < 租约 TTL，使崩溃 Core 的 "
-        "agent 在租约过期后被新 owner 及时接管运行并重新订阅 aip:stream:agent:{agentId}",
+        default=45,
+        description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < AGENT_LEASE_TTL_S，使崩溃 Core 的 "
+        "agent 在租约过期后被新 owner 及时接管运行并重新订阅 aip:stream:agent:{agentId}。"
+        "默认 45s（配合 quiet resync）：过短会在多 Core/多副本下刷屏。",
     )
 
     # ===== Qdrant =====
@@ -543,6 +546,25 @@ class Settings(BaseSettings):
     # Qwen API（须用 compatible-mode，与 OpenAI SDK 对齐）
     QWEN_API_KEY: str = ""
     QWEN_API_ENDPOINT: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # ===== 意图检测 / JEV（与主对话 QWEN_* 分离，独立 Key）=====
+    INTENT_DETECT_MODEL: str = Field(
+        default="tongyi-intent-detect-v3",
+        description="意图预路由专用模型（JEV）；勿写入 agent model.primary",
+    )
+    INTENT_DETECT_API_KEY: str = Field(
+        default="",
+        description="意图检测专用 API Key；空则 JEV 步骤失败并按 on_fail 回退",
+    )
+    INTENT_DETECT_ENDPOINT: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        description="意图检测 OpenAI 兼容 endpoint（北京专域可覆盖）",
+    )
+    INTENT_DETECT_TIMEOUT_MS: int = Field(
+        default=2000,
+        ge=200,
+        description="单次意图检测超时（毫秒）",
+    )
 
     # ===== 出站代理 =====
     OUTBOUND_PROXY_ENABLED: bool = True

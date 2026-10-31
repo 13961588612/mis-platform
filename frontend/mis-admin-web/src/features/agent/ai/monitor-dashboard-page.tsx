@@ -8,7 +8,7 @@
  * - Token 用量统计 + 路由统计（含成功率进度条）
  * - Agent 配置概览表
  *
- * <p>每 30s 自动刷新；各指标 Promise.allSettled 逐项降级，单点失败不阻塞看板。
+ * <p>每 120s 自动刷新；各指标 Promise.allSettled 逐项降级，单点失败不阻塞看板。
  * UI 规范：表格吸顶单层滚动、圆角 4px、表头 13px。
  */
 
@@ -31,7 +31,8 @@ import {
   type TokenUsageSummary,
 } from './services/monitor';
 
-const REFRESH_INTERVAL_MS = 30000;
+/** 监控看板轮询间隔；过短会打爆 route_logs / 健康检查。 */
+const REFRESH_INTERVAL_MS = 120_000;
 
 function formatNumber(n: number | undefined | null): string {
   if (n == null || Number.isNaN(n)) return '0';

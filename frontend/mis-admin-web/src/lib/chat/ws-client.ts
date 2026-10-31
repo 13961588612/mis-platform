@@ -14,6 +14,13 @@ export type WsClientState = 'idle' | 'connecting' | 'connected' | 'reconnecting'
 export interface WsClientOptions {
   sessionId: string;
   token: string;
+  /** 每次建连读取最新 token（避免重连仍带过期 JWT）。 */
+  getToken?: () => string | null | undefined;
+  /**
+   * 自动重连前调用（可 refresh）；返回 false 则停止重连并进入 error。
+   * 用于会话中途 token 过期时避免「重连中」空转半分钟。
+   */
+  onBeforeReconnect?: () => Promise<boolean>;
   onStateChange?: (state: WsClientState) => void;
   onError?: (message: string) => void;
 }
@@ -43,13 +50,17 @@ export class ChatWsClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private intentionalClose = false;
   private readonly sessionId: string;
-  private readonly token: string;
+  private readonly initialToken: string;
+  private readonly getToken?: () => string | null | undefined;
+  private readonly onBeforeReconnect?: () => Promise<boolean>;
   private readonly onStateChange?: (state: WsClientState) => void;
   private readonly onError?: (message: string) => void;
 
   constructor(options: WsClientOptions) {
     this.sessionId = options.sessionId;
-    this.token = options.token;
+    this.initialToken = options.token;
+    this.getToken = options.getToken;
+    this.onBeforeReconnect = options.onBeforeReconnect;
     this.onStateChange = options.onStateChange;
     this.onError = options.onError;
   }
@@ -74,10 +85,16 @@ export class ChatWsClient {
     this.onStateChange?.(next);
   }
 
+  private resolveToken(): string {
+    const latest = this.getToken?.();
+    if (typeof latest === 'string' && latest.length > 0) return latest;
+    return this.initialToken;
+  }
+
   private openSocket(): void {
     if (this.intentionalClose) return;
     this.setState('connecting');
-    const ws = new WebSocket(buildChatWsUrl(this.sessionId, this.token));
+    const ws = new WebSocket(buildChatWsUrl(this.sessionId, this.resolveToken()));
     this.ws = ws;
 
     ws.onopen = () => {
@@ -114,9 +131,29 @@ export class ChatWsClient {
       const delay = RECONNECT_BASE_DELAY * 2 ** (this.reconnectAttempts - 1);
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
-        this.openSocket();
+        void this.openAfterRefresh();
       }, delay);
     };
+  }
+
+  private async openAfterRefresh(): Promise<void> {
+    if (this.intentionalClose) return;
+    if (this.onBeforeReconnect) {
+      try {
+        const ok = await this.onBeforeReconnect();
+        if (!ok) {
+          this.setState('error');
+          this.onError?.('登录已过期，请重新登录');
+          return;
+        }
+      } catch {
+        this.setState('error');
+        this.onError?.('登录刷新失败，请重新登录');
+        return;
+      }
+    }
+    if (this.intentionalClose) return;
+    this.openSocket();
   }
 
   private startHeartbeat(ws: WebSocket): void {

@@ -1,0 +1,26 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "agent_id":  "mis-copilot",
+                 "role":  "coordinator",
+                 "routing_enabled":  false,
+                 "delegation":  {
+                                    "spawn_tools_enabled":  true,
+                                    "enforce_task_brief":  true,
+                                    "max_depth":  1,
+                                    "timeout_seconds":  1680,
+                                    "emit_dispatch_trace":  true,
+                                    "forbid_self_invoke":  true,
+                                    "worker_ids":  [
+                                                       "crm-assistant",
+                                                       "mis-rag",
+                                                       "bgbh-analyst",
+                                                       "spm-report"
+                                                   ]
+                                },
+                 "catalog":  null
+             },
+    "traceId":  null,
+    "success":  true
+}

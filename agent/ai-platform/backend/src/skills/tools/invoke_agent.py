@@ -867,6 +867,7 @@ class InvokeAgentTool(BaseTool):
         Returns:
             工具结果。
         """
+        latency_ms = notification.latency_ms or _elapsed_ms(started_at)
         await self._record_trace(
             parent_session_id,
             DispatchTraceEntry(
@@ -874,11 +875,39 @@ class InvokeAgentTool(BaseTool):
                 worker_id=notification.worker_id,
                 tool=self.name,
                 status=notification.status.value,
-                latency_ms=notification.latency_ms or _elapsed_ms(started_at),
+                latency_ms=latency_ms,
                 task_id=notification.task_id,
                 brief_rejected=False,
                 sub_stages=sub_stages,
             ),
+        )
+        try:
+            from src.runtime.step_timing import log_turn_step
+
+            log_turn_step(
+                session_id=parent_session_id or "-",
+                step_name=f"委派执行·{notification.worker_id or 'worker'}",
+                duration_ms=latency_ms,
+                agent_id=notification.worker_id or "",
+                detail=(
+                    f"status={notification.status.value}；"
+                    f"intent={intent or '-'}；"
+                    f"task={notification.task_id}"
+                    + ("；失败" if is_error else "")
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info(
+            "invoke_agent_timing",
+            parent_session_id=parent_session_id or None,
+            task_id=notification.task_id,
+            intent=intent,
+            worker_id=notification.worker_id,
+            status=notification.status.value,
+            latency_ms=latency_ms,
+            is_error=is_error,
+            sub_stages=sub_stages,
         )
         # Coordinator 下一轮 LLM 吃不下超长 Worker 正文（尤其 mis-iqd 全量 JSON）会超时。
         raw_output = notification.to_tool_output()

@@ -393,7 +393,9 @@ class AgentManager:
             new_runtime=runtime_type,
         )
 
-    async def sync_from_configs(self, configs: list[AgentConfig]) -> int:
+    async def sync_from_configs(
+        self, configs: list[AgentConfig], *, quiet: bool = False
+    ) -> int:
         """根据 ConfigManager 的配置创建并启动 agent（幂等 + 多 Core 租约门控）。
 
         多 Core（T8 / 决策 1）：对每个 agent 先 ``claim`` 租约，仅当成为/保持 owner 时
@@ -403,6 +405,7 @@ class AgentManager:
 
         Args:
             configs: Agent 配置列表。
+            quiet: True 时仅 debug 记录成功汇总（周期 resync 用，避免刷屏）。
 
         Returns:
             本核心成功同步（拥有并运行）的 agent 数量。
@@ -447,7 +450,10 @@ class AgentManager:
                 await self._write_registry(agent_id, synced_instance)
                 synced += 1
 
-        logger.info("Agents synced from configs", count=synced)
+        if quiet:
+            logger.debug("Agents synced from configs", count=synced, quiet=True)
+        else:
+            logger.info("Agents synced from configs", count=synced)
         return synced
 
     async def _stop_local(self, agent_id: str) -> None:

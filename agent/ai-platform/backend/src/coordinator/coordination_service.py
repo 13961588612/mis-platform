@@ -64,6 +64,10 @@ class CoordinationDelegation(BaseModel):
     emit_dispatch_trace: bool = True
     forbid_self_invoke: bool = True
     worker_ids: list[str] = Field(default_factory=list)
+    #: invoke 成功且本轮仅此一次委派时，跳过 Coordinator 第二轮 LLM，Worker 正文直出
+    passthrough_workers: list[str] = Field(default_factory=list)
+    #: 意图预路由命中这些 Worker 时，跳过 Coordinator 首轮 LLM，直接 agent__invoke
+    hard_dispatch_workers: list[str] = Field(default_factory=list)
 
 
 class CoordinationCatalog(BaseModel):

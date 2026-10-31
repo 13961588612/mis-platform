@@ -1,0 +1,38 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  [
+                 {
+                     "name":  "mcp-api-suite",
+                     "transport":  "http",
+                     "endpoint":  "http://10.254.3.2:3333/mcp",
+                     "args":  [
+
+                              ],
+                     "env":  {
+
+                             },
+                     "timeout":  30.0,
+                     "auto_connect":  false,
+                     "description":  "mcp-api-suite",
+                     "connected":  false
+                 },
+                 {
+                     "name":  "mcp-sm-api-suite",
+                     "transport":  "http",
+                     "endpoint":  "http://10.254.121.94:3334/mcp",
+                     "args":  [
+
+                              ],
+                     "env":  {
+
+                             },
+                     "timeout":  60.0,
+                     "auto_connect":  false,
+                     "description":  "è¶\u0085å¸æ¥è¡¨ API å¥ä»¶ï¼é¨åºéå® / åç±»éå® / å\u0085¬å\u0085±ä¿¡æ¯ï¼",
+                     "connected":  false
+                 }
+             ],
+    "traceId":  null,
+    "success":  true
+}

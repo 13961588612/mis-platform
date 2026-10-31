@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from src.agent.config import AgentConfig
@@ -28,6 +29,17 @@ from src.runtime.oh_runtime_builder import (
     build_native_query_engine,
     connect_mcp_manager,
     resolve_extra_skill_dirs,
+)
+from src.runtime.step_timing import (
+    FORMFILL_TOOL_PREFIX as _FORMFILL_TOOL_PREFIX,
+    INVOKE_TOOL_NAMES as _INVOKE_TOOL_NAMES,
+    elapsed_ms as _elapsed_ms,
+    infer_route_kind,
+    intent_from_tool_input as _intent_from_tool_input,
+    log_agent_step_timing as _log_agent_step_timing,
+    log_route_timing as _log_route_timing,
+    skill_id_from_tool_input as _skill_id_from_tool_input,
+    worker_from_tool_input as _worker_from_tool_input,
 )
 from src.utils.logging import get_logger
 
@@ -290,6 +302,22 @@ def _apply_force_live_query(
     return result
 
 
+def _append_user_turn_hint(messages: list[Any], hint: str) -> list[Any]:
+    """在本轮最后一条用户消息末尾追加预路由提示（不改历史）。"""
+    text = (hint or "").strip()
+    if not messages or not text or not _OPENHARNESS_AVAILABLE:
+        return messages
+    result: list[Any] = list(messages)
+    last = result[-1]
+    role: str = getattr(last, "role", "") or ""
+    if role != "user":
+        return messages
+    original: str = (getattr(last, "text", None) or "").strip()
+    combined: str = f"{original}\n\n{text}" if original else text
+    result[-1] = ConversationMessage.from_user_text(combined)
+    return result
+
+
 class OpenHarnessRuntime(AgentRuntime):
     """基于原生 OpenHarness QueryEngine 的 Agent 运行时。"""
 
@@ -442,6 +470,33 @@ class OpenHarnessRuntime(AgentRuntime):
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
             "",
         )
+        agent_id_early: str = getattr(agent_config, "agent_id", "") or ""
+        # Worker 规则引擎 → router skill；步骤可配 JEV（INTENT_DETECT_* 独立 Key）
+        try:
+            from src.intent_router.service import (
+                format_router_skill_hint,
+                resolve_intent_route,
+            )
+
+            user_text_for_route = (
+                last_user_msg if isinstance(last_user_msg, str) else str(last_user_msg or "")
+            )
+            route_decision = await resolve_intent_route(
+                agent_id_early,
+                user_text_for_route,
+                session_id=session_id or "",
+            )
+            if route_decision is not None and route_decision.router_skill:
+                oh_messages = _append_user_turn_hint(
+                    oh_messages,
+                    format_router_skill_hint(route_decision.router_skill),
+                )
+        except Exception:  # noqa: BLE001 - 预路由失败不阻断对话
+            logger.warning(
+                "intent route resolve failed",
+                agent_id=agent_id_early,
+                exc_info=True,
+            )
 
         skill_dirs: list[str] = resolve_extra_skill_dirs(
             agent_config, Path(get_settings().CONFIG_BASE_PATH)
@@ -458,6 +513,68 @@ class OpenHarnessRuntime(AgentRuntime):
 
         total_usage: TokenUsage = TokenUsage()
         step: int = 0
+        turn_t0: float = perf_counter()
+        ms_to_first_text: int | None = None
+        ms_to_first_tool: int | None = None
+        first_tool: str | None = None
+        ms_to_first_invoke: int | None = None
+        invoke_intent: str | None = None
+        invoke_worker: str | None = None
+        ms_to_first_formfill: int | None = None
+        agent_id: str = getattr(agent_config, "agent_id", "") or ""
+        role_value: str = str(getattr(getattr(agent_config, "role", None), "value", "") or "")
+        model_name: str = str(self._model or "")
+        # Worker/Coordinator 逐步耗时：每轮 LLM、每次 skill/tool
+        llm_segment_t0: float | None = None
+        llm_ttft_ms: int | None = None
+        llm_turn_index: int = 0
+        tool_call_index: int = 0
+        skill_call_index: int = 0
+        sum_llm_ms: int = 0
+        sum_tool_ms: int = 0
+        sum_skill_ms: int = 0
+        pending_tools: list[tuple[str, str | None, float]] = []
+
+        def _emit_route_timing(
+            *,
+            dispatch_items: list[dict[str, Any]] | None = None,
+        ) -> None:
+            items = dispatch_items or []
+            first_dispatch_latency: int | None = None
+            for entry in items:
+                raw_latency = entry.get("latency_ms")
+                if isinstance(raw_latency, (int, float)):
+                    first_dispatch_latency = int(raw_latency)
+                    break
+            route_kind = infer_route_kind(
+                ms_to_first_invoke=ms_to_first_invoke,
+                ms_to_first_formfill=ms_to_first_formfill,
+                ms_to_first_tool=ms_to_first_tool,
+                ms_to_first_text=ms_to_first_text,
+            )
+            _log_route_timing(
+                agent_id=agent_id,
+                role=role_value,
+                session_id=session_id,
+                model=model_name,
+                total_ms=_elapsed_ms(turn_t0),
+                ms_to_first_text=ms_to_first_text,
+                ms_to_first_tool=ms_to_first_tool,
+                first_tool=first_tool,
+                ms_to_first_invoke=ms_to_first_invoke,
+                invoke_intent=invoke_intent,
+                invoke_worker=invoke_worker,
+                ms_to_first_formfill=ms_to_first_formfill,
+                route_kind=route_kind,
+                dispatch_count=len(items),
+                dispatch_worker_latency_ms=first_dispatch_latency,
+                llm_turns=llm_turn_index,
+                tool_calls=tool_call_index,
+                skill_calls=skill_call_index,
+                sum_llm_ms=sum_llm_ms,
+                sum_tool_ms=sum_tool_ms,
+                sum_skill_ms=sum_skill_ms,
+            )
 
         try:
             self._native_mcp_manager = await _ensure_native_mcp_manager(
@@ -506,14 +623,34 @@ class OpenHarnessRuntime(AgentRuntime):
             else:
                 prompt: Any = ConversationMessage.from_user_text("")
 
+            # 首轮 LLM 计时从真正开跑引擎算起（不含上面 MCP/引擎构建）
+            llm_segment_t0 = perf_counter()
+            llm_ttft_ms = None
+
             async for event in engine.submit_message(prompt):
                 step += 1
                 if isinstance(event, AssistantTextDelta):
+                    if ms_to_first_text is None:
+                        ms_to_first_text = _elapsed_ms(turn_t0)
+                    if llm_segment_t0 is not None and llm_ttft_ms is None:
+                        llm_ttft_ms = _elapsed_ms(llm_segment_t0)
                     yield AgentEvent.text_delta(event.text)
                     _log_agent_trace(
                         session_id, step=step, phase="text_delta", assistant_text=event.text
                     )
                 elif isinstance(event, ToolExecutionStarted):
+                    tool_name = str(event.tool_name or "")
+                    skill_id = _skill_id_from_tool_input(tool_name, event.tool_input)
+                    pending_tools.append((tool_name, skill_id, perf_counter()))
+                    if ms_to_first_tool is None:
+                        ms_to_first_tool = _elapsed_ms(turn_t0)
+                        first_tool = tool_name or None
+                    if tool_name in _INVOKE_TOOL_NAMES and ms_to_first_invoke is None:
+                        ms_to_first_invoke = _elapsed_ms(turn_t0)
+                        invoke_intent = _intent_from_tool_input(event.tool_input)
+                        invoke_worker = _worker_from_tool_input(event.tool_input)
+                    if tool_name.startswith(_FORMFILL_TOOL_PREFIX) and ms_to_first_formfill is None:
+                        ms_to_first_formfill = _elapsed_ms(turn_t0)
                     yield AgentEvent.tool_call(event.tool_name, event.tool_input)
                     _log_agent_trace(
                         session_id,
@@ -523,6 +660,37 @@ class OpenHarnessRuntime(AgentRuntime):
                         args=event.tool_input,
                     )
                 elif isinstance(event, ToolExecutionCompleted):
+                    tool_name = str(event.tool_name or "")
+                    tool_t0: float | None = None
+                    skill_id: str | None = None
+                    for i in range(len(pending_tools) - 1, -1, -1):
+                        if pending_tools[i][0] == tool_name:
+                            _name, skill_id, tool_t0 = pending_tools.pop(i)
+                            break
+                    duration_ms = _elapsed_ms(tool_t0) if tool_t0 is not None else 0
+                    tool_call_index += 1
+                    sum_tool_ms += duration_ms
+                    if tool_name == "skill":
+                        skill_call_index += 1
+                        sum_skill_ms += duration_ms
+                    _log_agent_step_timing(
+                        agent_id=agent_id,
+                        role=role_value,
+                        session_id=session_id,
+                        model=model_name,
+                        kind="tool",
+                        step=step,
+                        index=tool_call_index,
+                        duration_ms=duration_ms,
+                        since_turn_ms=_elapsed_ms(turn_t0),
+                        tool=tool_name or None,
+                        skill_id=skill_id,
+                        is_error=bool(event.is_error),
+                    )
+                    if not pending_tools:
+                        # 本批工具结束，下一轮 LLM 计时起点
+                        llm_segment_t0 = perf_counter()
+                        llm_ttft_ms = None
                     result: dict[str, Any] = {"output": event.output}
                     if event.is_error:
                         result["error"] = event.output
@@ -537,17 +705,44 @@ class OpenHarnessRuntime(AgentRuntime):
                     )
                 elif isinstance(event, AssistantTurnComplete):
                     usage: Any = event.usage
+                    turn_tokens = usage.input_tokens + usage.output_tokens
                     total_usage: TokenUsage = TokenUsage(
                         prompt=usage.input_tokens,
                         completion=usage.output_tokens,
-                        total=usage.input_tokens + usage.output_tokens,
+                        total=turn_tokens,
                     )
+                    finish_reason = (
+                        "tool_calls" if event.message.tool_uses else "stop"
+                    )
+                    llm_turn_index += 1
+                    duration_ms = (
+                        _elapsed_ms(llm_segment_t0) if llm_segment_t0 is not None else 0
+                    )
+                    sum_llm_ms += duration_ms
+                    _log_agent_step_timing(
+                        agent_id=agent_id,
+                        role=role_value,
+                        session_id=session_id,
+                        model=model_name,
+                        kind="llm",
+                        step=step,
+                        index=llm_turn_index,
+                        duration_ms=duration_ms,
+                        since_turn_ms=_elapsed_ms(turn_t0),
+                        finish_reason=finish_reason,
+                        tokens=turn_tokens,
+                        ttft_ms=llm_ttft_ms,
+                    )
+                    # 若本轮无工具，下一轮（若有）从现在重新计；有工具则等工具批结束后重置
+                    if finish_reason == "stop":
+                        llm_segment_t0 = perf_counter()
+                        llm_ttft_ms = None
                     _log_agent_trace(
                         session_id,
                         step=step,
                         phase="llm_response",
                         assistant_text=event.message.text,
-                        finish_reason="tool_calls" if event.message.tool_uses else "stop",
+                        finish_reason=finish_reason,
                         tokens=total_usage.total,
                     )
                 elif isinstance(event, ErrorEvent):
@@ -603,6 +798,7 @@ class OpenHarnessRuntime(AgentRuntime):
                 total_steps=step,
                 total_tokens=total_usage.total,
             )
+            _emit_route_timing(dispatch_items=dispatch_items)
             logger.info(
                 "Agent run completed",
                 session_id=session_id,
@@ -618,6 +814,10 @@ class OpenHarnessRuntime(AgentRuntime):
                 error=str(exc),
                 exc_info=True,
             )
+            try:
+                _emit_route_timing(dispatch_items=[])
+            except Exception:  # noqa: BLE001 - 观测日志失败不得掩盖原异常
+                pass
             yield AgentEvent.error("RUNTIME_ERROR", str(exc))
             yield AgentEvent.done()
 

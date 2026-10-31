@@ -436,6 +436,8 @@ export interface CoordinationDelegation {
   emit_dispatch_trace: boolean;
   forbid_self_invoke: boolean;
   worker_ids: string[];
+  /** invoke 成功且本轮仅一次委派时跳过 Coordinator 收尾 LLM，Worker 正文直出 */
+  passthrough_workers?: string[];
 }
 
 /** Worker Catalog 段（真实 wire `catalog`）。 */

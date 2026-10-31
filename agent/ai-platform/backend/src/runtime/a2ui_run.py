@@ -35,17 +35,37 @@ from typing import Any
 import json
 import uuid
 from pathlib import Path
+from time import perf_counter
 
 from openharness.tools.base import ToolExecutionContext, ToolRegistry
 
 from src.agent.session import SessionManager, get_session_manager
 from src.agent.session_timing import RedisTimingStore, SessionTimingRecorder
 from src.config import get_settings
+from src.coordinator.passthrough import (
+    build_hard_dispatch_invoke_args,
+    extract_passthrough_worker_text,
+    load_delegation_worker_sets,
+    should_hard_dispatch,
+    should_passthrough_invoke,
+)
+from src.coordinator.trace import peek_dispatch_traces
 from src.llm.gateway import LLMGateway
 from src.llm.models import LLMMessage, LLMRequest, LLMRole, LLMResponse
 from src.queue.a2ui_outbound import A2uiOutboundPublisher
 from src.runtime.events import A2UI_CATALOG_ID, A2UI_COMPONENTS, AgentEvent, TokenUsage
 from src.runtime.mcp_identity import build_mcp_identity
+from src.runtime.step_timing import (
+    FORMFILL_TOOL_PREFIX,
+    INVOKE_TOOL_NAMES,
+    elapsed_ms,
+    infer_route_kind,
+    intent_from_tool_input,
+    log_agent_step_timing,
+    log_route_timing,
+    skill_id_from_tool_input,
+    worker_from_tool_input,
+)
 from src.utils.exceptions import SessionNotFoundError
 from src.utils.logging import get_logger
 
@@ -634,11 +654,71 @@ class A2uiRunLoop:
             )
 
             # 持久化本轮用户文本（工具/系统消息不入历史，保持上下文干净）
+            last_user_for_route = ""
             for msg in messages:
                 if isinstance(msg, dict) and msg.get("role") == "user":
                     user_text: str = _agui_content_to_text(msg.get("content")).strip()
                     if user_text:
+                        last_user_for_route = user_text
                         await self._persist_user(session_id, user_text)
+
+            # Coordinator：可选 JEV / 规则预路由（INTENT_DETECT_* 独立 Key）
+            # 传入对话上文，避免短跟问（如「溧阳呢」）脱离超市门店语境。
+            route_decision: Any = None
+            try:
+                from src.intent_router.service import (
+                    format_coordinator_route_hint,
+                    format_router_skill_hint,
+                    resolve_intent_route,
+                )
+
+                history_for_jev: list[dict[str, str]] = []
+                for msg in combined:
+                    role = getattr(msg.role, "value", None) or str(msg.role or "")
+                    role_s = str(role).lower()
+                    if role_s not in {"user", "assistant"}:
+                        continue
+                    content_s = str(msg.content or "").strip()
+                    if not content_s:
+                        continue
+                    history_for_jev.append({"role": role_s, "content": content_s})
+
+                route_decision = await resolve_intent_route(
+                    resolved_agent_id,
+                    last_user_for_route,
+                    history_messages=history_for_jev,
+                    session_id=session_id,
+                )
+                if route_decision is not None:
+                    hint = ""
+                    if route_decision.worker_id or route_decision.intent:
+                        hint = format_coordinator_route_hint(
+                            worker_id=route_decision.worker_id,
+                            intent=route_decision.intent,
+                            router_skill=route_decision.router_skill,
+                        )
+                    elif route_decision.router_skill:
+                        hint = format_router_skill_hint(route_decision.router_skill)
+                    if hint:
+                        for i in range(len(llm_messages) - 1, -1, -1):
+                            if llm_messages[i].role == LLMRole.USER:
+                                base = (llm_messages[i].content or "").rstrip()
+                                llm_messages[i] = LLMMessage(
+                                    role=LLMRole.USER,
+                                    content=f"{base}\n\n{hint}" if base else hint,
+                                )
+                                break
+            except Exception:  # noqa: BLE001 - 预路由失败不阻断对话
+                logger.warning(
+                    "intent route resolve failed (a2ui)",
+                    agent_id=resolved_agent_id,
+                    exc_info=True,
+                )
+
+            (
+                passthrough_workers,
+                hard_dispatch_workers,
+            ) = await load_delegation_worker_sets(resolved_agent_id)
 
             # Gateway 注入 render_a2ui + 平台委派工具（agent__invoke 等）。
             # 缺后者时 LLM 只会瞎编 A2UI /「外部资料」，走不到 mis-rag。
@@ -659,7 +739,179 @@ class A2uiRunLoop:
             error_message: str | None = None
             completed: bool = False
 
+            # 与 openharness 对齐的路由/逐步耗时基线（Copilot 主路径）
+            turn_t0: float = perf_counter()
+            role_value = "coordinator"
+            ms_to_first_text: int | None = None
+            ms_to_first_tool: int | None = None
+            first_tool: str | None = None
+            ms_to_first_invoke: int | None = None
+            invoke_intent: str | None = None
+            invoke_worker: str | None = None
+            ms_to_first_formfill: int | None = None
+            llm_turn_index = 0
+            tool_call_index = 0
+            skill_call_index = 0
+            sum_llm_ms = 0
+            sum_tool_ms = 0
+            sum_skill_ms = 0
+            route_timing_emitted = False
+
+            async def _emit_a2ui_route_timing() -> None:
+                nonlocal route_timing_emitted
+                if route_timing_emitted:
+                    return
+                route_timing_emitted = True
+                dispatch_items: list[dict[str, Any]] = []
+                try:
+                    dispatch_items = await peek_dispatch_traces(session_id)
+                except Exception:  # noqa: BLE001 - 观测失败不影响主链路
+                    dispatch_items = []
+                first_dispatch_latency: int | None = None
+                for entry in dispatch_items:
+                    raw_latency = entry.get("latency_ms")
+                    if isinstance(raw_latency, (int, float)):
+                        first_dispatch_latency = int(raw_latency)
+                        break
+                log_route_timing(
+                    agent_id=resolved_agent_id,
+                    role=role_value,
+                    session_id=session_id,
+                    model=model,
+                    total_ms=elapsed_ms(turn_t0),
+                    ms_to_first_text=ms_to_first_text,
+                    ms_to_first_tool=ms_to_first_tool,
+                    first_tool=first_tool,
+                    ms_to_first_invoke=ms_to_first_invoke,
+                    invoke_intent=invoke_intent,
+                    invoke_worker=invoke_worker,
+                    ms_to_first_formfill=ms_to_first_formfill,
+                    route_kind=infer_route_kind(
+                        ms_to_first_invoke=ms_to_first_invoke,
+                        ms_to_first_formfill=ms_to_first_formfill,
+                        ms_to_first_tool=ms_to_first_tool,
+                        ms_to_first_text=ms_to_first_text,
+                    ),
+                    dispatch_count=len(dispatch_items),
+                    dispatch_worker_latency_ms=first_dispatch_latency,
+                    llm_turns=llm_turn_index,
+                    tool_calls=tool_call_index,
+                    skill_calls=skill_call_index,
+                    sum_llm_ms=sum_llm_ms,
+                    sum_tool_ms=sum_tool_ms,
+                    sum_skill_ms=sum_skill_ms,
+                )
+
+            # JEV/规则命中 hard_dispatch_workers → 跳过 Coordinator 首轮 LLM，直接 invoke
+            hard_worker = ""
+            if route_decision is not None:
+                hard_worker = str(getattr(route_decision, "worker_id", None) or "").strip()
+            if (
+                hard_worker
+                and last_user_for_route
+                and should_hard_dispatch(
+                    worker_id=hard_worker,
+                    hard_dispatch_workers=hard_dispatch_workers,
+                )
+            ):
+                from src.runtime.step_timing import log_turn_step
+
+                invoke_args = build_hard_dispatch_invoke_args(
+                    worker_id=hard_worker,
+                    user_text=last_user_for_route,
+                    intent=str(getattr(route_decision, "intent", None) or ""),
+                )
+                log_turn_step(
+                    session_id=session_id,
+                    step_name="协调者·硬委派(跳过选人LLM)",
+                    duration_ms=0,
+                    agent_id=resolved_agent_id,
+                    detail=(
+                        f"Worker={hard_worker}；"
+                        f"intent={invoke_args.get('intent') or '-'}"
+                    ),
+                )
+                logger.info(
+                    "coordinator_hard_dispatch",
+                    session_id=session_id,
+                    coordinator_id=resolved_agent_id,
+                    worker_id=hard_worker,
+                    intent=invoke_args.get("intent") or None,
+                )
+                await emit(AgentEvent.tool_call("agent__invoke", invoke_args))
+                tool_t0 = perf_counter()
+                if ms_to_first_tool is None:
+                    ms_to_first_tool = elapsed_ms(turn_t0)
+                    first_tool = "agent__invoke"
+                if ms_to_first_invoke is None:
+                    ms_to_first_invoke = elapsed_ms(turn_t0)
+                    invoke_intent = str(invoke_args.get("intent") or "") or None
+                    invoke_worker = hard_worker
+                hard_result = await self._execute_tool(
+                    "agent__invoke",
+                    invoke_args,
+                    session_id,
+                    identity=identity,
+                    agent_id=resolved_agent_id,
+                    ask_tool_metadata=ask_meta,
+                )
+                tool_duration = elapsed_ms(tool_t0)
+                tool_call_index += 1
+                sum_tool_ms += tool_duration
+                log_agent_step_timing(
+                    agent_id=resolved_agent_id,
+                    role=role_value,
+                    session_id=session_id,
+                    model=model,
+                    kind="tool",
+                    step=0,
+                    index=tool_call_index,
+                    duration_ms=tool_duration,
+                    since_turn_ms=elapsed_ms(turn_t0),
+                    tool="agent__invoke",
+                    skill_id=None,
+                    is_error=bool(
+                        hard_result.get("error") or hard_result.get("ok") is False
+                    ),
+                )
+                await emit(AgentEvent.tool_result("agent__invoke", hard_result))
+                hard_body = extract_passthrough_worker_text(
+                    str(hard_result.get("output") or "")
+                )
+                if hard_body:
+                    log_turn_step(
+                        session_id=session_id,
+                        step_name="协调者·透传收尾(跳过复述LLM)",
+                        duration_ms=0,
+                        agent_id=resolved_agent_id,
+                        detail=f"Worker={hard_worker}；正文{len(hard_body)}字；来源=hard_dispatch",
+                    )
+                    logger.info(
+                        "coordinator_passthrough",
+                        session_id=session_id,
+                        coordinator_id=resolved_agent_id,
+                        worker_id=hard_worker,
+                        body_chars=len(hard_body),
+                        source="hard_dispatch",
+                    )
+                    if ms_to_first_text is None:
+                        ms_to_first_text = elapsed_ms(turn_t0)
+                    await emit(AgentEvent.text_delta(hard_body))
+                    assistant_parts.append(hard_body)
+                    completed = True
+                else:
+                    logger.warning(
+                        "coordinator_hard_dispatch fallback_to_llm",
+                        session_id=session_id,
+                        worker_id=hard_worker,
+                        ok=bool(hard_result.get("ok")),
+                        error=hard_result.get("error"),
+                    )
+
             for turn in range(1, self._max_turns + 1):
+                if completed:
+                    break
+                llm_t0 = perf_counter()
                 try:
                     response: LLMResponse = await self._gateway.chat(
                         LLMRequest(
@@ -684,14 +936,36 @@ class A2uiRunLoop:
                     error_message = f"LLM 调用失败：{exc}"
                     break
 
+                llm_duration = elapsed_ms(llm_t0)
+                llm_turn_index += 1
+                sum_llm_ms += llm_duration
+                turn_tokens = 0
                 if response.usage.total_tokens > 0:
+                    turn_tokens = response.usage.total_tokens
                     total_usage += TokenUsage(
                         prompt=response.usage.prompt_tokens,
                         completion=response.usage.completion_tokens,
                         total=response.usage.total_tokens,
                     )
+                finish_reason = "tool_calls" if response.tool_calls else "stop"
+                log_agent_step_timing(
+                    agent_id=resolved_agent_id,
+                    role=role_value,
+                    session_id=session_id,
+                    model=model,
+                    kind="llm",
+                    step=turn,
+                    index=llm_turn_index,
+                    duration_ms=llm_duration,
+                    since_turn_ms=elapsed_ms(turn_t0),
+                    finish_reason=finish_reason,
+                    tokens=turn_tokens or None,
+                    ttft_ms=llm_duration if response.content else None,
+                )
 
                 if response.content:
+                    if ms_to_first_text is None:
+                        ms_to_first_text = elapsed_ms(turn_t0)
                     assistant_parts.append(response.content)
                     await emit(AgentEvent.text_delta(response.content))
 
@@ -708,6 +982,10 @@ class A2uiRunLoop:
                 )
 
                 processed: bool = False
+                invoke_count_in_turn = 0
+                other_tool_count_in_turn = 0
+                passthrough_text: str | None = None
+                passthrough_worker: str | None = None
                 for tc in response.tool_calls:
                     function: Any = tc.get("function") if isinstance(tc, dict) else None
                     if not isinstance(function, dict):
@@ -718,7 +996,23 @@ class A2uiRunLoop:
                         function.get("arguments", "{}")
                     )
                     processed = True
+                    skill_id = skill_id_from_tool_input(tool_name, args)
+                    worker_id_for_tool = worker_from_tool_input(args)
+                    if ms_to_first_tool is None:
+                        ms_to_first_tool = elapsed_ms(turn_t0)
+                        first_tool = tool_name or None
+                    if tool_name in INVOKE_TOOL_NAMES:
+                        invoke_count_in_turn += 1
+                        if ms_to_first_invoke is None:
+                            ms_to_first_invoke = elapsed_ms(turn_t0)
+                            invoke_intent = intent_from_tool_input(args)
+                            invoke_worker = worker_id_for_tool
+                    else:
+                        other_tool_count_in_turn += 1
+                    if tool_name.startswith(FORMFILL_TOOL_PREFIX) and ms_to_first_formfill is None:
+                        ms_to_first_formfill = elapsed_ms(turn_t0)
                     await emit(AgentEvent.tool_call(tool_name, args))
+                    tool_t0 = perf_counter()
                     result: dict[str, Any] = await self._execute_tool(
                         tool_name,
                         args,
@@ -727,11 +1021,40 @@ class A2uiRunLoop:
                         agent_id=resolved_agent_id,
                         ask_tool_metadata=ask_meta,
                     )
+                    tool_duration = elapsed_ms(tool_t0)
+                    tool_call_index += 1
+                    sum_tool_ms += tool_duration
+                    if tool_name == "skill":
+                        skill_call_index += 1
+                        sum_skill_ms += tool_duration
+                    log_agent_step_timing(
+                        agent_id=resolved_agent_id,
+                        role=role_value,
+                        session_id=session_id,
+                        model=model,
+                        kind="tool",
+                        step=turn,
+                        index=tool_call_index,
+                        duration_ms=tool_duration,
+                        since_turn_ms=elapsed_ms(turn_t0),
+                        tool=tool_name or None,
+                        skill_id=skill_id,
+                        is_error=bool(result.get("error") or result.get("ok") is False),
+                    )
                     # 快照成功的 render_a2ui，供切会话后历史还原表格/卡片。
                     if tool_name == RENDER_A2UI_TOOL_NAME and result.get("ok"):
                         snap = _snapshot_render_a2ui_args(args)
                         if snap is not None:
                             a2ui_surfaces.append(snap)
+                    body = should_passthrough_invoke(
+                        tool_name=tool_name,
+                        worker_id=worker_id_for_tool,
+                        tool_result=result,
+                        passthrough_workers=passthrough_workers,
+                    )
+                    if body is not None:
+                        passthrough_text = body
+                        passthrough_worker = worker_id_for_tool
                     await emit(AgentEvent.tool_result(tool_name, result))
                     llm_messages.append(
                         LLMMessage(
@@ -742,6 +1065,37 @@ class A2uiRunLoop:
                     )
                 if not processed:
                     error_message = "A2UI run 工具调用格式无法解析"
+                    break
+                # 透传：本轮仅一次成功 invoke 且目标在 passthrough_workers → 跳过收尾 LLM
+                if (
+                    passthrough_text
+                    and invoke_count_in_turn == 1
+                    and other_tool_count_in_turn == 0
+                ):
+                    from src.runtime.step_timing import log_turn_step
+
+                    log_turn_step(
+                        session_id=session_id,
+                        step_name="协调者·透传收尾(跳过复述LLM)",
+                        duration_ms=0,
+                        agent_id=resolved_agent_id,
+                        detail=(
+                            f"Worker={passthrough_worker or '-'}；"
+                            f"正文{len(passthrough_text)}字"
+                        ),
+                    )
+                    logger.info(
+                        "coordinator_passthrough",
+                        session_id=session_id,
+                        coordinator_id=resolved_agent_id,
+                        worker_id=passthrough_worker,
+                        body_chars=len(passthrough_text),
+                    )
+                    if ms_to_first_text is None:
+                        ms_to_first_text = elapsed_ms(turn_t0)
+                    await emit(AgentEvent.text_delta(passthrough_text))
+                    assistant_parts.append(passthrough_text)
+                    completed = True
                     break
                 # 本轮有工具调用 → 继续下一轮 LLM（直到无工具调用或达到轮数上限）
 
@@ -772,6 +1126,7 @@ class A2uiRunLoop:
                         session_id=session_id,
                     )
                 )
+                await _emit_a2ui_route_timing()
                 return
 
             # 与文本通道 inbound_worker 对齐：委派 mis-rag 时 pending_kb_sources_fence
@@ -821,8 +1176,15 @@ class A2uiRunLoop:
                     session_id=session_id,
                 )
             )
+            await _emit_a2ui_route_timing()
         except Exception:
             recorder.fail()
+            emit_timing = locals().get("_emit_a2ui_route_timing")
+            if callable(emit_timing):
+                try:
+                    await emit_timing()
+                except Exception:  # noqa: BLE001
+                    pass
             raise
         finally:
             # 与 AgentInstance.process_message 同口径：按轮写入 Redis（TTL 24h）。

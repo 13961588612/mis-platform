@@ -1053,8 +1053,16 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     if (authRecoveryRef.current) return;
     authRecoveryRef.current = true;
     try {
+      // 先停掉 WS 自动重连，避免过期 token 下「重连中」空转半分钟
+      wsRef.current?.close();
+      wsRef.current = null;
+      sseRef.current?.abort();
+      sseRef.current = null;
+      useChatStore.getState().setConnectionState('reconnecting');
       const newToken = await refreshAccessToken();
       if (!newToken) {
+        useChatStore.getState().setConnectionState('error');
+        useChatStore.getState().setError('登录已过期，请重新登录');
         recordAuthKick({
           client: 'main',
           triggerUrl,
@@ -1065,6 +1073,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         });
         window.location.href = '/login';
       }
+      // 成功：accessToken 变化会触发下方 effect 用新 token 重建 SSE/WS
     } finally {
       authRecoveryRef.current = false;
     }
@@ -1087,6 +1096,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       sse = subscribeChatStream({
         sessionId: sid,
         token: fresh,
+        getToken: () => useAuthStore.getState().accessToken,
         onEvent: (event) => handleEventRef.current(event),
         onStateChange: (state) => {
           useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
@@ -1100,13 +1110,14 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       ws = new ChatWsClient({
         sessionId: sid,
         token: fresh,
+        getToken: () => useAuthStore.getState().accessToken,
+        onBeforeReconnect: async () => {
+          const t = await ensureTokenFresh();
+          return Boolean(t);
+        },
         onStateChange: (state) => {
           if (state === 'connected' || state === 'reconnecting' || state === 'error') {
             useChatStore.getState().setConnectionState(state);
-          }
-          // WS 握手失败无明确 401：仅在 token 临近过期时 refresh
-          if (state === 'error') {
-            void ensureTokenFresh();
           }
         },
         onError: (message) => useChatStore.getState().setError(message),
@@ -1160,6 +1171,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       const sse = subscribeChatStream({
         sessionId: sid,
         token: fresh,
+        getToken: () => useAuthStore.getState().accessToken,
         onEvent: (event) => handleEventRef.current(event),
         onStateChange: (state) => {
           useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
@@ -1172,12 +1184,14 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       const ws = new ChatWsClient({
         sessionId: sid,
         token: fresh,
+        getToken: () => useAuthStore.getState().accessToken,
+        onBeforeReconnect: async () => {
+          const t = await ensureTokenFresh();
+          return Boolean(t);
+        },
         onStateChange: (state) => {
           if (state === 'connected' || state === 'reconnecting' || state === 'error') {
             useChatStore.getState().setConnectionState(state);
-          }
-          if (state === 'error') {
-            void ensureTokenFresh();
           }
         },
         onError: (message) => useChatStore.getState().setError(message),

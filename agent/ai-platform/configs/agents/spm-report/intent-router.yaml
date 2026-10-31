@@ -1,0 +1,50 @@
+# =============================================================================
+# spm-report — Worker 意图预路由（规则引擎 → router skill）
+# =============================================================================
+# 流程：规则命中 → 返回 router_skill → 运行时强制先 skill 加载该 Skill，再走 SKILL.md。
+# 任一步 when.type=jev 时调用 INTENT_DETECT_*（独立 Key），不占用 model.primary。
+# =============================================================================
+intent_router:
+  enabled: true
+  engine: rules
+  on_fail: fallback_router_skill
+  fallback_router_skill: sm-report-router
+  model:
+    name: tongyi-intent-detect-v3
+    timeout_ms: 2000
+  rules:
+    # 示例：纯关键词直达报表总控（不调 JEV）
+    - id: supermarket_ops_keywords
+      when:
+        type: keyword
+        any:
+          - 门店
+          - 超市
+          - 大统华
+          - 销售
+          - 毛利
+          - 品类
+          - 宜兴
+          - 区域
+          - 周
+          - 月
+      then:
+        router_skill: sm-report-router
+        intent: spm_report
+    # 示例：可选 JEV 步骤（启用需配置 INTENT_DETECT_API_KEY；未配 Key 时本条不命中）
+    # - id: jev_report_bucket
+    #   when:
+    #     type: jev
+    #     labels:
+    #       report: 超市门店列表、区域门店、销售毛利品类报表、日历周月
+    #       other: 其他与超市报表无关的问题
+    #     match_label: report
+    #   then:
+    #     router_skill: sm-report-router
+    #     intent: spm_report
+    - id: default_router
+      when:
+        type: always
+      then:
+        router_skill: sm-report-router
+        intent: spm_report

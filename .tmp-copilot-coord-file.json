@@ -1,0 +1,7 @@
+﻿{
+    "code":  7004,
+    "message":  "Invalid config file path: coordination.yaml â not in editable whitelist",
+    "data":  null,
+    "traceId":  "0e3fad56473848859509fed5336c6810",
+    "success":  false
+}

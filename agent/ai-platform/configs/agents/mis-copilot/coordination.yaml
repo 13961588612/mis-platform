@@ -21,8 +21,11 @@ delegation:
   worker_ids:
   - crm-assistant
   - mis-rag
-  - mis-user-helper
-  - mis-iqd
-  - bgbh-analyst
   - spm-analyst
+  - spm-report
+  # invoke 成功且本轮仅一次委派时：跳过 Coordinator 收尾 LLM，Worker 正文透传给用户
+  passthrough_workers:
+  - spm-report
+  # 意图预路由命中后：跳过 Coordinator 首轮 LLM，直接 agent__invoke（失败则回退软提示+主模型）
+  hard_dispatch_workers:
   - spm-report

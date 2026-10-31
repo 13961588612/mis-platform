@@ -35,6 +35,7 @@ T03 的 :func:`~src.api.deps.require_ops_permission` fail-closed 权限闸门由
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import hmac
@@ -66,6 +67,10 @@ from src.utils.exceptions import AIPlatformError
 from src.utils.logging import get_logger
 
 logger = get_logger("api.routes.channels")
+
+#: 未配置 GATEWAY_INTERNAL_TOKEN 时的告警节流（秒）；探针每 30s 打一次也不刷屏。
+_GATEWAY_TOKEN_WARN_INTERVAL_S = 300.0
+_gateway_token_missing_warned_at: float = 0.0
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 
@@ -155,9 +160,13 @@ async def list_wecom_bots_runtime(
     """
     expected: str = get_settings().GATEWAY_INTERNAL_TOKEN
     if not expected:
-        logger.warning(
-            "Gateway runtime endpoint disabled: GATEWAY_INTERNAL_TOKEN not configured"
-        )
+        global _gateway_token_missing_warned_at
+        now = time.monotonic()
+        if now - _gateway_token_missing_warned_at >= _GATEWAY_TOKEN_WARN_INTERVAL_S:
+            _gateway_token_missing_warned_at = now
+            logger.warning(
+                "Gateway runtime endpoint disabled: GATEWAY_INTERNAL_TOKEN not configured"
+            )
         return error_response(
             5003,
             "Gateway internal token not configured; runtime bot list is disabled",

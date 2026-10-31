@@ -78,6 +78,8 @@ WHITELIST_PATTERNS: tuple[str, ...] = (
     "runtime/prompts/*.md",
     "skills/enabled-skills.yaml",
     "system/*.yaml",
+    "intent-router.yaml",
+    "coordination.yaml",
 )
 
 #: 只读文件（运营台不得整体保存，含访问控制 / 连接密钥）。
