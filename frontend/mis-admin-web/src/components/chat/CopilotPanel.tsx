@@ -50,6 +50,8 @@ import { AttachmentList } from '@/components/chat/AttachmentList';
 import { AssistantAvatar, UserAvatar } from '@/components/chat/CopilotAvatars';
 import { CopilotCurrentUser, useCopilotUserLabel } from '@/components/chat/CopilotCurrentUser';
 import { MessageFeedbackBar } from '@/components/chat/MessageFeedbackBar';
+import { DispatchTraceHint } from '@/components/chat/DispatchTraceHint';
+import { ToolStepsBar } from '@/components/chat/ToolStepsBar';
 import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
 import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
@@ -65,10 +67,28 @@ import {
 } from '@/components/common/kb-chat-sources';
 import { KbSourceHostProvider } from '@/components/common/kb-source-host-context';
 import type { A2uiComponentName } from '@/lib/a2ui/types';
-import type { ChatMessage } from '@/lib/chat/types';
+import type { ChatMessage, DispatchTraceEntry, ToolStep } from '@/lib/chat/types';
 import { useAuthStore } from '@/stores/auth-store';
+import { useChatStore } from '@/stores/chat-store';
 import { batchDeleteSessions, listSessions } from '@/features/agent/api/agent-ops-api';
 import { formatTime, type Session } from '@/features/agent/types';
+
+/** 本轮调度/工具进度（贴在「正在思考」文字下方，无头像占位）。 */
+function TurnProgressInline({
+  dispatchTrace,
+  toolSteps,
+}: {
+  dispatchTrace: DispatchTraceEntry[];
+  toolSteps: ToolStep[];
+}) {
+  if (dispatchTrace.length === 0 && toolSteps.length === 0) return null;
+  return (
+    <div className="min-w-0 max-w-[min(100%,28rem)] space-y-1.5">
+      <DispatchTraceHint entries={dispatchTrace} className="mx-0 mt-0" />
+      <ToolStepsBar steps={toolSteps} className="mx-0 mt-0" />
+    </div>
+  );
+}
 
 /** Copilot 侧栏只列本 Coordinator，避免混入 Worker 子会话。 */
 const COPILOT_AGENT_ID = 'mis-copilot';
@@ -236,6 +256,8 @@ export function CopilotPanel({
   const chat = useChat();
   const { closeSession, ensureSession, switchSession } = chat;
   const composer = useAttachmentComposer();
+  const dispatchTrace = useChatStore((s) => s.dispatchTrace);
+  const toolSteps = useChatStore((s) => s.toolSteps);
   const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
   const [input, setInput] = useState('');
   const [dragOver, setDragOver] = useState(false);
@@ -586,47 +608,81 @@ export function CopilotPanel({
               </div>
             ) : (
               <div className="space-y-3">
-                {chat.messages.map((msg, index) => {
-                  const emptyAssistant =
-                    msg.role === 'assistant' &&
-                    !(msg.content?.trim()) &&
-                    !msg.surfaceId &&
-                    !msg.a2ui;
-                  const laterHasPayload =
-                    emptyAssistant &&
-                    chat.messages.slice(index + 1).some(
-                      (m) =>
-                        m.role === 'assistant' &&
-                        (Boolean(m.surfaceId) ||
-                          Boolean(m.a2ui) ||
-                          (m.content?.trim().length ?? 0) > 0),
-                    );
+                {(() => {
+                  // 只挂到本轮 streaming 助手；勿回退到上一轮已完成气泡（否则步骤会出现在「正在思考」上面）
+                  let activeAssistantIndex = -1;
+                  if (chat.isGenerating) {
+                    for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+                      const m = chat.messages[i];
+                      if (m.role === 'assistant' && m.status === 'streaming') {
+                        activeAssistantIndex = i;
+                        break;
+                      }
+                    }
+                  }
+                  const showTurnProgress =
+                    chat.isGenerating &&
+                    (dispatchTrace.length > 0 || toolSteps.length > 0);
+
+                  // 尚无 streaming 助手气泡时，末尾补「正在思考」+ 步骤
+                  const showOrphanThinking =
+                    chat.isGenerating && activeAssistantIndex < 0;
+
                   return (
-                    <ChatBubble
-                      key={msg.role + "-" + msg.id + "-" + index}
-                      message={msg}
-                      hideEmptyDuplicate={laterHasPayload}
-                    />
+                    <>
+                      {chat.messages.map((msg, index) => {
+                        // 工具步骤统一进折叠条；气泡列表不再刷 tool 行
+                        if (msg.role === 'tool') return null;
+                        const emptyAssistant =
+                          msg.role === 'assistant' &&
+                          !(msg.content?.trim()) &&
+                          !msg.surfaceId &&
+                          !msg.a2ui;
+                        const laterHasPayload =
+                          emptyAssistant &&
+                          chat.messages.slice(index + 1).some(
+                            (m) =>
+                              m.role === 'assistant' &&
+                              (Boolean(m.surfaceId) ||
+                                Boolean(m.a2ui) ||
+                                (m.content?.trim().length ?? 0) > 0),
+                          );
+                        const attachProgress =
+                          showTurnProgress && index === activeAssistantIndex;
+                        return (
+                          <ChatBubble
+                            key={msg.role + '-' + msg.id + '-' + index}
+                            message={msg}
+                            hideEmptyDuplicate={laterHasPayload}
+                            turnProgress={
+                              attachProgress
+                                ? { dispatchTrace, toolSteps }
+                                : undefined
+                            }
+                          />
+                        );
+                      })}
+                      {showOrphanThinking ? (
+                        <div className="flex items-start gap-3 py-1">
+                          <AssistantAvatar className="mt-0.5 h-8 w-8" />
+                          <div className="max-w-[85%] space-y-1.5 rounded-2xl border bg-card px-3.5 py-2.5 text-xs text-muted-foreground shadow-sm">
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              正在思考…
+                            </div>
+                            {showTurnProgress ? (
+                              <TurnProgressInline
+                                dispatchTrace={dispatchTrace}
+                                toolSteps={toolSteps}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
                   );
-                })}
+                })()}
                 {orphanSurface ? <SurfaceRenderer className="w-full" /> : null}
-                {chat.isGenerating &&
-                !chat.messages.some(
-                  (m) =>
-                    m.role === 'assistant' &&
-                    (m.status === 'streaming' ||
-                      Boolean(m.surfaceId) ||
-                      Boolean(m.a2ui) ||
-                      (m.content?.trim().length ?? 0) > 0),
-                ) ? (
-                  <div className="flex items-start gap-3 py-1">
-                    <AssistantAvatar className="mt-0.5 h-8 w-8" />
-                    <div className="flex items-center gap-2 rounded-2xl border bg-card px-3.5 py-2.5 text-xs text-muted-foreground shadow-sm">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      正在思考…
-                    </div>
-                  </div>
-                ) : null}
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -739,10 +795,13 @@ export function CopilotPanel({
 function ChatBubble({
   message,
   hideEmptyDuplicate,
+  turnProgress,
 }: {
   message: ChatMessage;
   /** 后面已有带内容的助手气泡时，隐藏本条空气泡（避免双「正在思考」）。 */
   hideEmptyDuplicate?: boolean;
+  /** 本轮调度/工具步骤：渲染在「正在思考」或正文下方。 */
+  turnProgress?: { dispatchTrace: DispatchTraceEntry[]; toolSteps: ToolStep[] };
 }) {
   const userLabel = useCopilotUserLabel();
   const surface = useSurfaceStore((s) =>
@@ -849,8 +908,8 @@ function ChatBubble({
           ) : message.attachments && message.attachments.length > 0 ? null : (
             <p className="text-xs text-primary-foreground/70">（无文本）</p>
           )
-        ) : showBody || showEmptyDeliveredHint ? (
-          <div className="space-y-1">
+        ) : showBody || showEmptyDeliveredHint || turnProgress ? (
+          <div className="space-y-1.5">
             {body.trim().length > 0 ? (
               <MarkdownView content={body} className="prose prose-sm max-w-none dark:prose-invert" />
             ) : showEmptyDeliveredHint ? (
@@ -865,6 +924,13 @@ function ChatBubble({
             ) : null}
             {isStreaming && body.trim().length > 0 ? (
               <span className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-foreground/40 align-middle" />
+            ) : null}
+            {/* 步骤条必须在「正在思考」同一气泡内、文字下方 */}
+            {turnProgress ? (
+              <TurnProgressInline
+                dispatchTrace={turnProgress.dispatchTrace}
+                toolSteps={turnProgress.toolSteps}
+              />
             ) : null}
           </div>
         ) : null}

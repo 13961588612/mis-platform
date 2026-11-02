@@ -14,7 +14,9 @@ MemoryInjector — 将记忆编织到 Agent 运行生命周期中的中间件。
   从对话中识别值得记忆的内容。只有 ``importance > 0.3`` 的提取记忆会被
   持久化（A19）。
 
-注入器设计为非阻塞的：记忆检索和提取失败会被记录日志，但不会中断 Agent 运行。
+注入器设计为尽力而为：记忆检索和提取失败会被记录日志，但不会中断 Agent 运行。
+``AgentInstance.process_message`` 在对话结束后以 **后台 Task** 调度
+``after_agent_run``，用户侧回复不再等待抽取 LLM / 向量写入完成。
 """
 
 from __future__ import annotations
@@ -121,7 +123,7 @@ class MemoryInjector:
 
         # ... 使用 context.assembled_context 运行 agent ...
 
-        # 在 agent 运行之后
+        # 在 agent 运行之后（生产路径由 manager 异步调度，示例仍可直接 await）
         context.assistant_response = agent_reply
         await injector.after_agent_run(context)
     """

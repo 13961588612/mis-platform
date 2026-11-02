@@ -120,6 +120,8 @@ class LLMChunk(BaseModel):
         default=None, description="Token 用量（通常在最后一个数据块中）"
     )
     index: int = Field(default=0, description="选项索引")
+    #: 流式 tool_calls 增量（带 index，arguments 需跨 chunk 拼接）
+    tool_call_deltas: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LLMResponse(BaseModel):

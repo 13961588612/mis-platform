@@ -58,6 +58,11 @@ class ModelConfig(BaseModel):
     fallback: str = Field(default="deepseek-v4-flash", description="回退模型")
     strategy: str = Field(default="default-primary", description="模型选择策略")
     gateway: str = Field(default="llm-gateway", description="LLM gateway 引用")
+    #: Qwen 等：``False`` 关闭思考链以降低时延；``None`` 用模型默认（常为开）。
+    enable_thinking: bool | None = Field(
+        default=None,
+        description="是否启用模型 thinking；False=关闭；None=不传参",
+    )
 
 
 class SkillRef(BaseModel):
@@ -213,11 +218,25 @@ class AgentConfig(BaseModel):
 
         # Parse model section
         model_data: dict[str, Any] = agent_section.get("model", data.get("model", {}))
+        enable_thinking_raw: Any = model_data.get("enable_thinking", model_data.get("enableThinking"))
+        enable_thinking: bool | None
+        if isinstance(enable_thinking_raw, bool):
+            enable_thinking = enable_thinking_raw
+        elif isinstance(enable_thinking_raw, str) and enable_thinking_raw.strip().lower() in {
+            "true",
+            "false",
+            "1",
+            "0",
+        }:
+            enable_thinking = enable_thinking_raw.strip().lower() in {"true", "1"}
+        else:
+            enable_thinking = None
         model: ModelConfig = ModelConfig(
             primary=model_data.get("primary", "qwen3.7-plus"),
             fallback=model_data.get("fallback", "deepseek-v4-flash"),
             strategy=model_data.get("strategy", "default-primary"),
             gateway=model_data.get("gateway", "llm-gateway"),
+            enable_thinking=enable_thinking,
         )
 
         # Parse routing section

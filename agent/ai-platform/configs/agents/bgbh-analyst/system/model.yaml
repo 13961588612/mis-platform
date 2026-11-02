@@ -1,2 +1,4 @@
 model:
   primary: qwen3.8-flash
+  # qwen3.8-flash 开 thinking + tools 易出空名 tool_calls → Unknown tool
+  enable_thinking: false

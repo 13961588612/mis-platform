@@ -16,5 +16,5 @@ runtime:
   prompts:
     system: runtime/prompts/system.md
     turn_reminder: |
-      【强制】本轮若涉及超市门店销售/品类/门店主数据/日历时间键，必须先 skill 加载对应技能，再调用 mcp__mcp-sm-api-suite__* 工具。禁止未加载 Skill 就调 MCP。apiName 必须从本轮 Skill 返回正文原样复制。禁止仅根据对话历史作答。周/月键优先用 sm-common-info-calendar；选店优先 listAuthorizedStores。
+      【强制】本轮若涉及超市门店销售/品类/门店主数据/日历时间键，必须先 skill 加载对应技能，再调用 mcp__mcp-sm-api-suite__* 工具。禁止未加载 Skill 就调 MCP。apiName 必须从本轮 Skill 返回正文原样复制。禁止仅根据对话历史作答。历史助手正文已清空：禁止输出 [prior_assistant_answer_omitted] 或任何「已省略」类占位当作对本轮用户的回答；必须重新查数后作答。周/月键优先用 sm-common-info-calendar；选店优先 listAuthorizedStores。
   middleware: {}

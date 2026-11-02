@@ -52,6 +52,36 @@ export interface AgentSessionDetailDialogProps {
 
 type TimingStatus = 'loaded' | 'expired' | 'never' | 'mismatch';
 
+/**
+ * Worker 旧采样常落在 `{sessionId}:latest`，与消息 id 对不齐。
+ * 若没有任何 key 命中 assistant 消息，把最近一轮挂到最后一条 assistant 上。
+ */
+function alignOrphanTimingTurns(
+  turns: SessionTimingMap,
+  messages: SessionMessage[],
+  sessionId: string,
+): SessionTimingMap {
+  const assistants = messages.filter((m) => m.role === 'assistant');
+  if (assistants.length === 0) return turns;
+  const assistantIds = new Set(assistants.map((m) => m.id));
+  if (Object.keys(turns).some((k) => assistantIds.has(k))) return turns;
+
+  const latestKey = `${sessionId}:latest`;
+  let orphan = turns[latestKey];
+  if (!orphan) {
+    const entries = Object.entries(turns);
+    if (entries.length === 0) return turns;
+    entries.sort((a, b) =>
+      String(b[1]?.sampled_at ?? '').localeCompare(String(a[1]?.sampled_at ?? '')),
+    );
+    orphan = entries[0]?.[1];
+  }
+  if (!orphan) return turns;
+  const lastId = assistants[assistants.length - 1]?.id;
+  if (!lastId) return turns;
+  return { ...turns, [lastId]: orphan };
+}
+
 function resolveTimingStatus(
   timingResult: PromiseSettledResult<Awaited<ReturnType<typeof getSessionTiming>>>,
   turns: SessionTimingMap | null,
@@ -127,7 +157,11 @@ export function AgentSessionDetailDialog({
       let turns: SessionTimingMap =
         timingResult.status === 'fulfilled' ? { ...(timingResult.value?.turns ?? {}) } : {};
 
-      // 尽力合并绑定 Worker 子会话的按轮耗时（key 仍是各子会话 message.id）
+      // 本会话（含点进 Worker 子会话）：`:latest` 等孤儿键对齐到最后一条助手消息
+      turns = alignOrphanTimingTurns(turns, msgs, activeId);
+
+      // 尽力合并绑定 Worker 子会话的按轮耗时（key 仍是各子会话 message.id；
+      // 父会话消息流用不上这些 key，点进 Worker 时再靠本会话对齐）。
       const workerIds = (meta?.worker_sessions ?? [])
         .map((w) => w.session_id)
         .filter(Boolean);

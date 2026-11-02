@@ -120,6 +120,34 @@ def test_format_conversation_context_for_jev_includes_prior_user() -> None:
     assert ctx.strip().endswith("溧阳地区呢")
 
 
+def test_format_conversation_context_keeps_only_recent_turns() -> None:
+    history = [
+        {"role": "user", "content": "旧问1"},
+        {"role": "assistant", "content": "旧答1"},
+        {"role": "user", "content": "旧问2"},
+        {"role": "assistant", "content": "旧答2"},
+        {"role": "user", "content": "宜兴有哪些店"},
+        {"role": "assistant", "content": "宜兴区共 8 家"},
+        {"role": "user", "content": "各柜组销售情况"},
+    ]
+    ctx = format_conversation_context_for_jev(
+        "各柜组销售情况",
+        history,
+        max_context_turns=1,
+    )
+    assert "宜兴有哪些店" in ctx
+    assert "宜兴区共 8 家" in ctx
+    assert "旧问1" not in ctx
+    assert "旧问2" not in ctx
+    assert ctx.strip().endswith("各柜组销售情况")
+
+
+def test_intent_router_config_accepts_context_turns() -> None:
+    cfg = IntentRouterConfig(enabled=True, engine="model", max_context_turns=2)
+    assert cfg.max_context_turns == 2
+    assert cfg.max_context_msg_chars == 240
+
+
 @pytest.mark.asyncio
 async def test_model_engine_passes_context_and_description() -> None:
     cfg = IntentRouterConfig(

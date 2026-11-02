@@ -1,2 +1,4 @@
 model:
   primary: qwen3.8-flash
+  # Coordinator 默认关 thinking；Worker 等其它 Agent 不配则保持开启
+  enable_thinking: false

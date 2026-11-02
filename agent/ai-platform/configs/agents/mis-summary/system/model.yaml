@@ -1,2 +1,3 @@
 model:
   primary: qwen3.8-flash
+  enable_thinking: false

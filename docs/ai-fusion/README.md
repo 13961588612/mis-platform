@@ -20,7 +20,7 @@
 
 管理台对话采用 **Coordinator–Worker** 架构：将 Agent **`mis-copilot` 配置为 Coordinator 模式**作为默认入口。本需求全部文档见：
 
-**→ [coordinator-worker/](coordinator-worker/README.md)**（PRD · 架构 · ADR · Spec · 开发设计）
+**→ [coordinator-worker/](coordinator-worker/README.md)**（PRD · 架构 · ADR · Spec · 开发设计 · [调度加速落地](coordinator-worker/perf-routing-notes.md)）
 
 | 入口 | 行为 |
 |------|------|

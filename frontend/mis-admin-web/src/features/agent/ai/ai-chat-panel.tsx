@@ -26,6 +26,7 @@ import { useAttachmentComposer } from '@/lib/chat/useAttachmentComposer';
 import { useChatStore } from '@/stores/chat-store';
 import { AttachmentChips } from '@/components/chat/AttachmentChips';
 import { AttachmentList } from '@/components/chat/AttachmentList';
+import { DispatchTraceHint } from '@/components/chat/DispatchTraceHint';
 import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
 import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
@@ -39,8 +40,7 @@ import { IqdCitationBlock, splitIqdCitations } from './components/iqd-citation-b
 import { IqdPlanSteps, splitIqdPlan } from './components/iqd-plan-steps';
 import { IqdFeedbackButtons } from './components/iqd-feedback-buttons';
 import type { A2uiComponentName } from '@/lib/a2ui/types';
-import type { ChatMessage } from '@/lib/chat/types';
-import type { DispatchTraceEntry } from '@/lib/chat/types';
+import type { ChatMessage, DispatchTraceEntry } from '@/lib/chat/types';
 
 export interface AiChatPanelProps {
   /** 页标题（面板头部展示）。 */
@@ -73,24 +73,6 @@ function A2uiMessageRenderer({ render }: { render: NonNullable<ChatMessage['a2ui
     <A2uiPermissionGate requiredPermission={entry.requiredPermission} deniedText={entry.deniedText}>
       <Comp component={render.component as A2uiComponentName} props={render.props} />
     </A2uiPermissionGate>
-  );
-}
-
-/** dispatch.trace 调度轻提示（仅展示，不暴露 Worker 选择器）。 */
-function DispatchTraceHint({ entries }: { entries: DispatchTraceEntry[] }) {
-  if (entries.length === 0) return null;
-  const latest = entries[entries.length - 1];
-  const workerId = latest.worker_id ?? '';
-  const status = latest.status ?? '';
-  return (
-    <div className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-      <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
-      <span className="truncate">
-        {latest.tool ?? '调度'}
-        {workerId ? ` · ${workerId}` : ''}
-        {status ? ` · ${status}` : ''}
-      </span>
-    </div>
   );
 }
 

@@ -29,6 +29,8 @@ class AgentEventType(str, Enum):
     # 追加在末尾：Coordinator 委派轨迹（通道 C，默认关闭，C4 前端就绪后再开）。
     # 既有取值一律不改，保证 Gateway / BFF / 前端的现网映射零回归。
     DISPATCH_TRACE = "dispatch.trace"
+    # Worker→父会话步骤条：只走 CUSTOM，避免嵌套 tool.call 被 A2UI 中间件吞掉。
+    TOOL_STEP = "tool.step"
 
 
 # ============================================================================
@@ -89,6 +91,7 @@ class AgentEvent(BaseModel):
     - error:            error_code、message
     - done:             token_usage、message_id、session_id
     - dispatch.trace:   trace（Coordinator 委派轨迹，默认不产出）
+    - tool.step:        trace（父会话步骤条载荷，仅 CUSTOM，无 TOOL_CALL_*）
 
     ``done`` 的 ``message_id`` / ``session_id`` 为评价锚点（feedback-enhance §2.2
     方案 C）：分别透传本轮 assistant 消息 UUID 与平台会话 UUID，与
@@ -111,7 +114,7 @@ class AgentEvent(BaseModel):
     error_code: str | None = None
     message: str | None = None
     token_usage: TokenUsage | None = None
-    # dispatch.trace：本轮 Coordinator 委派轨迹（{"entries": [...]}）。
+    # dispatch.trace / tool.step：自由 dict 载荷。
     # 新增**可选**字段，默认 None → 既有事件的序列化结果不变。
     trace: dict[str, Any] | None = None
     # done：评价锚点（feedback-enhance §2.2 方案 C）——本轮 assistant 消息 UUID，
@@ -206,6 +209,37 @@ class AgentEvent(BaseModel):
             默认关闭，避免 Gateway ``toH5Event`` 无 default 分支导致语义误标。
         """
         return cls(type=AgentEventType.DISPATCH_TRACE, trace={"entries": entries})
+
+    @classmethod
+    def tool_step(
+        cls,
+        *,
+        phase: str,
+        tool_name: str,
+        tool_call_id: str = "",
+        args: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> AgentEvent:
+        """创建一个 tool.step 事件（父会话 Copilot 步骤条，仅 CUSTOM）。
+
+        Args:
+            phase: ``start`` / ``result``。
+            tool_name: 工具名。
+            tool_call_id: 起止配对 ID。
+            args: start 阶段参数摘要。
+            result: result 阶段结果摘要。
+        """
+        return cls(
+            type=AgentEventType.TOOL_STEP,
+            tool_name=tool_name,
+            trace={
+                "phase": phase,
+                "toolName": tool_name,
+                "toolCallId": tool_call_id,
+                "args": args or {},
+                "result": result or {},
+            },
+        )
 
 
 class HealthStatus(BaseModel):

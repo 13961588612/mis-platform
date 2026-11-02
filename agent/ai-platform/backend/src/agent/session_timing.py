@@ -51,10 +51,12 @@ TIMING_KEY_PREFIX = "agent:session:"
 TIMING_KEY_SUFFIX = ":timings"
 #: 调试数据过期时间（秒）：24h。过期后前端显示「已过期 / 暂无」。
 TIMING_TTL_SECONDS = 86400
-#: 当前 timing schema 版本，结构变更时 +1（v2：per-turn snapshot 顶层新增 sub_stages）。
-TIMING_SCHEMA_VERSION = 2
+#: 当前 timing schema 版本，结构变更时 +1（v2：sub_stages；v3：steps 逐步耗时）。
+TIMING_SCHEMA_VERSION = 3
 #: 每个会话最多保留的轮次条数（环形缓冲，仅保留最近 N 轮调试耗时）。
 TIMING_RING_SIZE = 50
+#: 单轮最多保留的逐步条目（防超长 Worker 循环撑爆 Redis）。
+TURN_STEPS_MAX = 80
 
 
 class StageTiming:
@@ -120,6 +122,14 @@ class SessionTimingRecorder:
         # turn_key：本轮对应的 assistant 消息 id（由调用方在落库前生成并复用）。
         # 为 None 时回退为 session 级单键，保证未改造的调用方仍能写入（仅无法前端逐条映射）。
         self.turn_key = turn_key or f"{session_id}:latest"
+        # 绑定逐步耗时采集（与 log_turn_step / 对话步骤 同源）；委派镜像见 TURN_STEPS_MIRROR_CV。
+        self._steps_token: Any = None
+        try:
+            from src.runtime.step_timing import begin_turn_steps
+
+            self._steps, self._steps_token = begin_turn_steps()
+        except Exception:  # noqa: BLE001
+            self._steps = []
         self._start = time.monotonic()
         self._first_external: float | None = None
         self._last_external: float | None = None
@@ -312,6 +322,12 @@ class SessionTimingRecorder:
         """
         if self._end_t is None:
             self._end_t = time.monotonic()
+        try:
+            from src.runtime.step_timing import end_turn_steps
+
+            end_turn_steps(getattr(self, "_steps_token", None))
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- 子阶段计算 ----
 
@@ -362,6 +378,7 @@ class SessionTimingRecorder:
             generation_ms=generation_ms,
             post_process_ms=post_process_ms,
         )
+        steps = self._snapshot_steps()
 
         return {
             # turn_key：本轮对应的 assistant 消息 id，供前端按 message.id 映射。
@@ -375,9 +392,49 @@ class SessionTimingRecorder:
                 "post_process_ms": round(post_process_ms),
             },
             "sub_stages": sub_stages,
+            # v3：与日志「对话步骤」同源的逐步时间线（运营台会话详情按轮展示）
+            "steps": steps,
             "sampled_at": datetime.now(timezone.utc).isoformat(),
             "schema_version": TIMING_SCHEMA_VERSION,
         }
+
+    def _snapshot_steps(self) -> list[dict[str, Any]] | None:
+        """导出本轮逐步耗时；空则 None（前端不渲染步骤条）。
+
+        优先 ``self._steps``（与 begin_turn_steps 同一 list）；若为空再读
+        ``TURN_STEPS_CV``（防止 CV 被替换后引用漂移）。
+        """
+        raw = list(getattr(self, "_steps", None) or [])
+        if not raw:
+            try:
+                from src.runtime.step_timing import TURN_STEPS_CV
+
+                cv_steps = TURN_STEPS_CV.get()
+                if cv_steps:
+                    raw = list(cv_steps)
+            except Exception:  # noqa: BLE001
+                raw = []
+        if not raw:
+            return None
+        clipped = raw[-TURN_STEPS_MAX:]
+        out: list[dict[str, Any]] = []
+        for item in clipped:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            ms = item.get("duration_ms")
+            out.append(
+                {
+                    "name": name,
+                    "duration_ms": int(ms) if isinstance(ms, (int, float)) else 0,
+                    "detail": item.get("detail"),
+                    "agent_id": item.get("agent_id"),
+                    "session_id": item.get("session_id"),
+                }
+            )
+        return out or None
 
     def _build_sub_stages(
         self,

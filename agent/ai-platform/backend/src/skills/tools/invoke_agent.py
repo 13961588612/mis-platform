@@ -793,6 +793,19 @@ class InvokeAgentTool(BaseTool):
         # 子任务（worker 内 qa_pipeline）对其 update 的变异对父任务可见。
         sub_stages_acc: dict[str, int] = {}
         cv_token = QA_SUB_STAGES_CV.set(sub_stages_acc)
+        # 镜像父会话逐步耗时列表：Worker 的「对话步骤」双写到 Coordinator 本轮 timing.steps
+        # （ContextVar 镜像为主；结束后再从 Worker Redis 显式合并兜底）。
+        mirror_token = None
+        parent_steps: list[dict[str, Any]] | None = None
+        try:
+            from src.runtime.step_timing import TURN_STEPS_CV, mirror_turn_steps
+
+            parent_steps = TURN_STEPS_CV.get()
+            if parent_steps is not None:
+                mirror_token = mirror_turn_steps(parent_steps)
+        except Exception:  # noqa: BLE001
+            mirror_token = None
+            parent_steps = None
         try:
             coro = _run_child_agent(
                 agent_id=agent_id,
@@ -824,11 +837,48 @@ class InvokeAgentTool(BaseTool):
                     await get_worker_session_registry().bind(
                         parent_session_id, agent_id, result.child_session_id
                     )
+            # 从 Worker Redis 回填逐步耗时 → 父会话 steps + 工具下钻 sub_stages
+            # （镜像失败 / 未部署 ContextVar 路径时仍可见「执行者·大模型/MCP」）。
+            try:
+                from src.runtime.step_timing import (
+                    load_latest_turn_steps,
+                    merge_steps_into,
+                    steps_to_sub_stage_map,
+                )
+
+                worker_steps = await load_latest_turn_steps(result.child_session_id)
+                if worker_steps:
+                    merged = merge_steps_into(parent_steps, worker_steps)
+                    if merged:
+                        logger.info(
+                            "invoke_agent_merged_worker_steps",
+                            parent_session_id=parent_session_id or None,
+                            worker_id=agent_id,
+                            child_session_id=result.child_session_id or None,
+                            merged_steps=merged,
+                        )
+                    if not sub_stages_acc:
+                        step_map = steps_to_sub_stage_map(worker_steps)
+                        if step_map:
+                            sub_stages_acc.update(step_map)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "invoke_agent worker step merge skipped",
+                    worker_id=agent_id,
+                    exc_info=True,
+                )
             # 把共享 dict 中的 worker 细分计时回填到结果（空则 None，不可得）
             result.sub_stages = sub_stages_acc if sub_stages_acc else None
             return result
         finally:
             QA_SUB_STAGES_CV.reset(cv_token)
+            if mirror_token is not None:
+                try:
+                    from src.runtime.step_timing import reset_mirror_turn_steps
+
+                    reset_mirror_turn_steps(mirror_token)
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _record_trace(
         self, parent_session_id: str, entry: DispatchTraceEntry
@@ -1095,6 +1145,9 @@ async def _run_child_agent(
     tool_uses: int = 0
     tokens: int = 0
     kb_retrieve_hits: list[Any] = []
+    # 与文本通道一致：预先生成 assistant 消息 UUID，计时 turn_key / 落库共用，
+    # 运营台打开 Worker 子会话时可按 message.id 映射到逐步耗时。
+    assistant_message_id: str = str(uuid4())
 
     from contextlib import nullcontext
 
@@ -1111,18 +1164,67 @@ async def _run_child_agent(
         if lock_result is not None and not lock_result.locked:
             raise RuntimeError("child session is busy")
 
+        # 落库用户回合（与 /sessions/{id}/messages 同口径；失败不阻断委派）
+        try:
+            await session_manager.add_message(
+                session_id=child_session.session_id,
+                role="user",
+                content=content,
+                metadata=metadata,
+            )
+            # add_message 可能换了内存对象，刷新引用
+            child_session = await session_manager.get_session(child_session.session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "worker user message persist failed (degraded)",
+                agent_id=agent_id,
+                child_session_id=child_session.session_id,
+                error=str(exc),
+            )
+
         async for event in instance.process_message(
             session=child_session,
             message=Message(role="user", content=content, metadata=metadata),
+            assistant_message_id=assistant_message_id,
         ):
             if event.type == AgentEventType.TEXT_DELTA and event.content:
-                response_parts.append(event.content)
+                # 拦截 Worker 把 forceLiveQuery 历史占位复述成正文
+                from src.runtime.openharness import (
+                    is_force_live_stub_echo,
+                    strip_force_live_stub_markers,
+                )
+                from src.runtime.gateway_api_client import is_model_garbage_payload
+
+                delta = strip_force_live_stub_markers(event.content)
+                if is_force_live_stub_echo(event.content) or not delta:
+                    continue
+                # 乱码哨兵 / 碎片：不回灌父会话，整轮按失败处理
+                if is_model_garbage_payload(delta):
+                    response_parts.append(delta)
+                    continue
+                response_parts.append(delta)
+                # 实时回灌父会话，A2UI Copilot 报告真流式
+                from src.coordinator.parent_progress import emit_parent_text_delta
+
+                await emit_parent_text_delta(delta)
             elif event.type == AgentEventType.TOOL_CALL:
                 tool_uses += 1
+                # 转发到父会话 SSE，供 Copilot 工具步骤折叠条（不仅显示「委派执行」）
+                from src.coordinator.parent_progress import emit_parent_tool_progress
+
+                await emit_parent_tool_progress(event)
             elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                from src.coordinator.parent_progress import emit_parent_tool_progress
+
+                await emit_parent_tool_progress(event)
                 err: Any | None = event.result.get("error")
                 if err:
-                    tool_errors.append(f"{event.tool_name}: {err}")
+                    # 空名 Unknown tool 对用户无信息量，且常由 thinking+tools 畸形调用引起
+                    tname = (event.tool_name or "").strip()
+                    err_s = str(err).strip()
+                    if not tname and err_s.startswith("Unknown tool:"):
+                        continue
+                    tool_errors.append(f"{tname}: {err_s}" if tname else err_s)
                 elif event.tool_name == "kb_retrieve":
                     output = event.result.get("output")
                     if isinstance(output, str) and output.strip():
@@ -1137,8 +1239,43 @@ async def _run_child_agent(
     text = "".join(response_parts).strip()
     child_session_id = str(getattr(child_session, "session_id", "") or "")
 
+    from src.runtime.gateway_api_client import (
+        MODEL_GARBAGE_RETRY_MESSAGE,
+        is_model_garbage_payload,
+    )
+
+    garbage_output = bool(text) and is_model_garbage_payload(text)
+    persist_text = (
+        MODEL_GARBAGE_RETRY_MESSAGE
+        if garbage_output
+        else (text or f"（{agent_id} 未返回文本内容）")
+    )
+
+    # 落库助手回合（与 timing turn_key 对齐）；空正文也写一条便于详情映射
+    try:
+        await session_manager.add_message(
+            session_id=child_session_id,
+            role="assistant",
+            content=persist_text,
+            message_id=assistant_message_id,
+            metadata={
+                "delegated_from": "mis-copilot",
+                "parent_session_id": str(metadata.get("parent_session_id") or "") or None,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker assistant message persist failed (degraded)",
+            agent_id=agent_id,
+            child_session_id=child_session_id,
+            error=str(exc),
+        )
+
     if runtime_error:
         raise RuntimeError(runtime_error)
+
+    if garbage_output:
+        raise RuntimeError(MODEL_GARBAGE_RETRY_MESSAGE)
 
     if not text and tool_errors:
         # 典型：crm-assistant MCP 未连接时工具失败且无正文

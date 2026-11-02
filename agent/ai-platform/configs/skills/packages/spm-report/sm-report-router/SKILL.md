@@ -66,11 +66,11 @@ required_permissions:
 
 ### 1.2 槽位需求矩阵
 
-| 意图 | store | year+period+时间键 | categoryLevel 或 parentCategoryId |
-|------|-------|---------------------|-----------------------------------|
+| 意图 | store | year+period+时间键 | 品类范围 |
+|------|-------|---------------------|----------|
 | M1～M4 / C1 | 否 | C1 仅需 year+period | M4 按接口 |
 | S1～S6 | **是**（`storeId` 或明确 `areaId`） | **是** | 否 |
-| P1～P6 | **是** | **是** | **是（二选一）** |
+| P1～P6 | **是** | **是** | 部门/柜组→`categoryLevel`；大类/中类/小类→**必须**`parentCategoryId` |
 | X | — | — | — |
 
 ---
@@ -116,6 +116,15 @@ target_skill / target_apiName
 
 ## 4. 门店槽位 STORE
 
+### 4.0 默认口径（硬约束）
+
+- **经营取数默认只查一家店**（单个 `storeId`）。
+- **未**经用户明确确认「多店一起查 / 对比多家 / 全部权限店汇总」时：
+  - **禁止**一次对多家店循环取数或默认「所有权限店」；
+  - **禁止**擅自挑第一家 / 最大店 / 最近聊过的店顶上。
+- 权限门店 **≥ 2** 且本轮尚未选定唯一 `storeId` → **必须先列表请用户选店**，本轮不调销售 MCP。
+- 仅当用户明确要多店对比/汇总，且下游接口与槽位支持时，才按用户指定范围取数（仍须先确认店清单）。
+
 ### 4.1 取权限门店（必做）
 
 ```
@@ -128,31 +137,33 @@ skill(name="sm-common-info-master-data")
 | `items=[]` 且有 `notice` | 转述 `notice`，**停止** |
 | `items=[]` 无 notice | 「当前账号无超市门店数据权限」，停止 |
 | 恰好 1 家 | 复述「将查询：**{storeId} {storeName}（{areaname}）**，请确认是否使用该店？回复「确认」或另选。」 |
-| 多家 | **必须列表请选**，禁止擅自指定 |
+| **2 家及以上** | **必须列表请选一家**（见 4.2），禁止擅自指定、禁止默认查全部 |
 
 ### 4.2 多店选择展示（操作员）
 
 ```
-已查询到您有权限的门店如下，请回复【门店号】或【门店名称】：
+当前按【单店】查询。您有权限的门店如下，请回复【门店号】或【门店名称】选一家：
 
 | 序号 | 门店号 | 门店名称 | 区域 |
 |------|--------|----------|------|
 | 1 | … | … | … |
 ```
 
-- 用户回复后在 `items` 内匹配；唯一命中 → 写入 `storeId`/`storeName`。
+- 用户回复后在 `items` 内匹配；唯一命中 → 写入 **一个** `storeId`/`storeName`。
 - 匹配 0 → 「未在权限列表中找到，请从下表重选」并再贴表。
 - 匹配多个 → 「匹配到多家，请用门店号精确指定」。
+- 用户说「都查 / 全部 / 一起查」但未点名店：先确认是否多店对比/汇总及范围，**不要**默认全权限店开查。
 - **禁止**改调 `listStores` 绕过权限。
 
 ### 4.3 用户已口述店名/店号
 
-仍先拉 `listAuthorizedStores`，再匹配；不在列表 → 无权限说明 + 再列可选店。
+仍先拉 `listAuthorizedStores`，再匹配；不在列表 → 无权限说明 + 再列可选店。  
+唯一命中后按单店写入；未命中不得用口述名绕过选店。
 
 ### 4.4 区域汇总
 
 仅当用户明确「按区域汇总 / 查某区域」且接口支持 `areaId`：确认区域（可先 `listAreas`）后写 `areaId`，**不要**同时瞎填 `storeId`。  
-未明确区域汇总时默认单店 `storeId`。
+未明确区域汇总时 **默认单店** `storeId`（权限多店时仍走 4.2 请选）。
 
 ---
 
@@ -237,15 +248,16 @@ skill(name="sm-common-info-calendar")
 
 | 用户意图 | 槽位 | 操作员交互 |
 |----------|------|------------|
-| 「各大类/各部门/各柜组…占比」 | `categoryLevel` ∈ {部门,柜组,大类,中类,小类} | 若未说级别：列出五级请选 |
-| 「某某分类下面有哪些 / 下钻」 | `parentCategoryId` | 名称不清时：`listCategories` / `listChildCategories` / `getCategoryById` 列出候选请选 |
+| 「各部门 / 各柜组…占比」 | **仅** `categoryLevel` ∈ {部门, 柜组} | 未说级别时只在这两种里请选 |
+| 「各大类 / 中类 / 小类…」 | **必须** `parentCategoryId`（指定分类或父分类） | 未给父类：先列候选父类请选；**禁止**裸传 `categoryLevel=大类/中类/小类` |
+| 「某某分类下面有哪些 / 下钻」 | `parentCategoryId` | 名称不清：`listCategories` / `listChildCategories` / `getCategoryById` |
 
-二者缺一不可；都缺则追问：
+都缺则追问：
 
 ```
 请选择品类查看方式：
-① 按级别：部门 / 柜组 / 大类 / 中类 / 小类
-② 按父分类下钻：请给出分类名称或编号
+① 按级别（仅）：部门 / 柜组
+② 按父分类下钻（大类/中类/小类必选此项）：请给出分类名称或编号
 ```
 
 ---
@@ -297,7 +309,7 @@ skill(name="sm-common-info-calendar")
 }
 ```
 
-品类总览示例：
+品类总览示例（部门级可裸级别；大类须父分类）：
 
 ```json
 {
@@ -306,7 +318,19 @@ skill(name="sm-common-info-calendar")
     "period": "week",
     "storeId": "6001",
     "ordWeek": "2026-W40",
-    "categoryLevel": "大类"
+    "categoryLevel": "部门"
+  }
+}
+```
+
+```json
+{
+  "apiName": "getShopCategoryOverview",
+  "params": {
+    "period": "week",
+    "storeId": "6001",
+    "ordWeek": "2026-W40",
+    "parentCategoryId": "1024"
   }
 }
 ```
@@ -319,6 +343,9 @@ skill(name="sm-common-info-calendar")
 | `items=[]` 且 `meta.notice` | **转述 notice**，不编造经营数 |
 | 工具硬错误 | 如实说明错误摘要，建议稍后重试或联系管理员 |
 | 用户改店/改时间 | 回到对应槽位步骤，已确认部分可保留 |
+| 出现 `Tool output truncated` | 用预览中的 **`summary` + 可见 `items`** 直接作答；**禁止**同一 `apiName`+`params` 反复重调 |
+
+> 截断后仍缺行：可请用户缩小范围（指定父分类 / 部门柜组），不要同参重试碰运气。
 
 ---
 
@@ -348,8 +375,9 @@ skill(name="sm-common-info-calendar")
 ## 10. 自检清单（每次经营取数前）
 
 - [ ] 意图已归到 M/C/S/P/X  
-- [ ] S/P：权限门店已确认（或合法 areaId）  
+- [ ] S/P：已确认**单店** `storeId`（或用户明确的合法 `areaId`）；权限≥2 店时已请用户选店，未默认多店/全店  
 - [ ] S/P：year + period + 时间键均来自日历清单或已校验日  
-- [ ] P：categoryLevel 或 parentCategoryId 已确认  
+- [ ] P：部门/柜组 → categoryLevel；大类/中类/小类 → parentCategoryId 已确认  
 - [ ] 已 `skill()` 正确下游且 `apiName` 来自 Skill 正文  
 - [ ] 未传 identity / serviceName  
+- [ ] 若结果 truncated：已用 summary/可见 items 作答，未同参重调  

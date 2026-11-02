@@ -158,6 +158,18 @@ export interface StageTiming {
   post_process_ms: number | null;
 }
 
+/**
+ * 单步耗时（v3，与后端日志「对话步骤」同源）。
+ * 硬委派时 Worker 步骤会镜像进 Coordinator 本轮，可用 agent_id 区分。
+ */
+export interface TurnTimingStep {
+  name: string;
+  duration_ms: number;
+  detail?: string | null;
+  agent_id?: string | null;
+  session_id?: string | null;
+}
+
 export interface SessionTiming {
   /** 本轮对应的 assistant 消息 id（2.1 按轮存储的 turn_key）。 */
   turn_key?: string;
@@ -172,6 +184,11 @@ export interface SessionTiming {
    * 各子段为毫秒整数或 ``null``（不可得，前端显示「—」）。
    */
   sub_stages?: SubStages | null;
+  /**
+   * 逐步时间线（v3，schema_version >= 3；与运行时「对话步骤」日志对齐）。
+   * 缺测 / 旧采样为 null 或空。
+   */
+  steps?: TurnTimingStep[] | null;
 }
 
 /**

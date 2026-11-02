@@ -27,6 +27,7 @@ import {
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
+import { summarizeToolArgs } from './tool-step-label';
 import { useEmbedStore } from '@/embed/embedStore';
 
 /** 会话 id 持久化 key（Copilot 面板最近会话）。 */
@@ -157,6 +158,41 @@ export interface UseChatOptions {
   autoConnect?: boolean;
   /** 是否启用 A2UI 对话通道（默认取 A2UI_CHAT_OPT_IN_DEFAULT；false 回退旧 text 通道）。 */
   a2uiEnabled?: boolean;
+}
+
+/** 将 tool.step / 旧协议工具事件写入 toolSteps（按 toolCallId 或同名 running 合并）。 */
+function applyToolStepEvent(
+  store: ReturnType<typeof useChatStore.getState>,
+  event: Extract<ChatStreamEvent, { type: 'tool.step' }>,
+): void {
+  const toolName = (event.toolName ?? 'unknown').trim() || 'unknown';
+  const now = Date.now();
+  if (event.phase === 'start') {
+    const id = (event.toolCallId ?? '').trim() || generateClientId('tool');
+    store.upsertToolStep({
+      id,
+      toolName,
+      status: 'running',
+      summary: summarizeToolArgs(event.args),
+      startedAt: now,
+    });
+    return;
+  }
+  // result：优先按 toolCallId；否则收尾最近一条同名 running
+  const id = (event.toolCallId ?? '').trim();
+  const existing = id
+    ? store.toolSteps.find((s) => s.id === id)
+    : [...store.toolSteps].reverse().find((s) => s.toolName === toolName && s.status === 'running');
+  const resultObj = event.result ?? {};
+  const ok = resultObj.ok !== false && resultObj.error == null;
+  store.upsertToolStep({
+    id: existing?.id || id || generateClientId('tool'),
+    toolName: existing?.toolName ?? toolName,
+    status: ok ? 'done' : 'error',
+    summary: existing?.summary ?? summarizeToolArgs(event.args),
+    startedAt: existing?.startedAt ?? now,
+    finishedAt: now,
+  });
 }
 
 /**
@@ -398,8 +434,15 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         armGenerateTimeout();
         const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
         const existing = store.messages.find((m) => m.id === targetId);
+        const prev = existing?.content ?? '';
+        // 透传收尾整段重推：已流式到齐则跳过；若整段覆盖当前前缀则替换（补齐丢帧）。
+        if (prev && delta === prev) break;
+        const nextContent =
+          prev && delta.startsWith(prev) && delta.length > prev.length
+            ? delta
+            : prev + delta;
         store.updateMessage(targetId, {
-          content: (existing?.content ?? '') + delta,
+          content: nextContent,
           status: 'streaming',
         });
         break;
@@ -425,7 +468,15 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         break;
       }
 
+      case 'tool.step': {
+        applyToolStepEvent(store, event);
+        break;
+      }
+
       case 'done': {
+        // 回合结束收起顶部步骤/调度条，避免一直挂在对话顶
+        store.setToolSteps([]);
+        store.setDispatchTrace([]);
         const streamingId = streamingMessageIdRef.current;
         const streamingMsg = streamingId
           ? store.messages.find((m) => m.id === streamingId)
@@ -466,6 +517,8 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
       case 'error': {
         clearGenerateTimeout();
+        store.setToolSteps([]);
+        store.setDispatchTrace([]);
         const streamingId = streamingMessageIdRef.current;
         const isCancelled = (event.errorCode ?? '').toUpperCase() === 'CANCELLED';
         if (isCancelled) {
@@ -505,14 +558,27 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         armGenerateTimeout();
         const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
         const existing = store.messages.find((m) => m.id === targetId);
+        const prev = existing?.content ?? '';
+        if (prev && delta === prev) break;
+        const nextContent =
+          prev && delta.startsWith(prev) && delta.length > prev.length
+            ? delta
+            : prev + delta;
         store.updateMessage(targetId, {
-          content: (existing?.content ?? '') + delta,
+          content: nextContent,
           status: 'streaming',
         });
         break;
       }
 
       case 'tool.call': {
+        applyToolStepEvent(store, {
+          type: 'tool.step',
+          phase: 'start',
+          toolName: event.toolName,
+          args: event.args,
+        });
+        // 旧协议仍写入 tool 气泡（运营台兼容）；Copilot 折叠条另读 toolSteps。
         store.addMessage({
           id: generateClientId('msg'),
           sessionId: sid,
@@ -527,6 +593,12 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
 
       case 'tool.result': {
+        applyToolStepEvent(store, {
+          type: 'tool.step',
+          phase: 'result',
+          toolName: event.toolName,
+          result: event.result,
+        });
         // 兼容：更新最近一条同名 tool 消息
         const messages = store.messages;
         const lastTool = [...messages].reverse().find((m) => m.role === 'tool' && m.toolName === event.toolName);
@@ -889,6 +961,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       useSurfaceStore.getState().clear();
       useChatStore.getState().setError(null);
       useChatStore.getState().setDispatchTrace([]);
+      useChatStore.getState().setToolSteps([]);
       useChatStore.getState().setHistoryState('idle');
 
       sessionIdRef.current = nextSid;
@@ -949,6 +1022,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       store.setGenerating(true);
       armGenerateTimeout();
       store.setDispatchTrace([]);
+      store.setToolSteps([]);
       store.setError(null);
 
       // 构造 metadata（含附件引用）；旧 text 通道不携附件，灰度回退不受影响
@@ -1158,6 +1232,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     useSurfaceStore.getState().clear();
     // surface 清理
     useChatStore.getState().setDispatchTrace([]);
+    useChatStore.getState().setToolSteps([]);
   }, [sendInbound, persistSession, clearGenerateTimeout]);
 
   const reconnect = useCallback((): void => {

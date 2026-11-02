@@ -4,10 +4,15 @@
 - ``对话步骤``：中文可读（会话号 / 步骤名 / 耗时）
 - ``agent_step_timing``：单轮 LLM 或单次 tool/skill（结构化）
 - ``route_timing``：本轮汇总（含 ``ms_to_first_invoke``）
+
+采集：``log_turn_step`` 在写日志的同时写入 ContextVar 列表，供
+``SessionTimingRecorder.snapshot()`` 落入 Redis（会话详情按轮展示）。
+委派时父会话可通过 ``TURN_STEPS_MIRROR_CV`` 镜像 Worker 步骤。
 """
 
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
 from time import perf_counter
 from typing import Any
 
@@ -17,6 +22,158 @@ logger = get_logger("runtime.step_timing")
 
 INVOKE_TOOL_NAMES: frozenset[str] = frozenset({"agent__invoke", "agent"})
 FORMFILL_TOOL_PREFIX: str = "formfill__"
+
+#: 本会话 recorder 绑定的步骤列表（顶层采集器）。
+TURN_STEPS_CV: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "turn_steps", default=None
+)
+#: 可选镜像目标（通常为父 Coordinator 的步骤列表）；Worker 步骤会双写一份。
+TURN_STEPS_MIRROR_CV: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "turn_steps_mirror", default=None
+)
+
+
+def begin_turn_steps() -> tuple[list[dict[str, Any]], Token]:
+    """为本轮新建步骤采集列表并绑定到 ``TURN_STEPS_CV``。
+
+    Returns:
+        (steps, token)：关闭时用 ``end_turn_steps(token)`` 恢复外层绑定（委派嵌套）。
+    """
+    steps: list[dict[str, Any]] = []
+    token = TURN_STEPS_CV.set(steps)
+    return steps, token
+
+
+def end_turn_steps(token: Token | None = None) -> None:
+    """解除本轮步骤采集绑定（幂等；有 token 则 reset 以恢复父层 ContextVar）。"""
+    try:
+        if token is not None:
+            TURN_STEPS_CV.reset(token)
+        else:
+            TURN_STEPS_CV.set(None)
+    except Exception:  # noqa: BLE001 — 观测不得影响主链路
+        pass
+
+
+def mirror_turn_steps(parent_steps: list[dict[str, Any]] | None) -> Token:
+    """委派前：把父步骤列表设为镜像目标，使 Worker ``log_turn_step`` 双写到父会话。"""
+    return TURN_STEPS_MIRROR_CV.set(parent_steps)
+
+
+def reset_mirror_turn_steps(token: Token) -> None:
+    """委派结束：恢复镜像 ContextVar。"""
+    try:
+        TURN_STEPS_MIRROR_CV.reset(token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _append_turn_step(entry: dict[str, Any]) -> None:
+    for acc in (TURN_STEPS_CV.get(), TURN_STEPS_MIRROR_CV.get()):
+        if acc is None:
+            continue
+        try:
+            acc.append(entry)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _step_dedup_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(item.get("session_id") or ""),
+        str(item.get("name") or ""),
+        int(item.get("duration_ms") or 0),
+        str(item.get("detail") or ""),
+    )
+
+
+def merge_steps_into(
+    target: list[dict[str, Any]] | None,
+    steps: list[dict[str, Any]] | None,
+) -> int:
+    """把 ``steps`` 追加进 ``target``（按 session/name/ms/detail 去重）。
+
+    用于委派结束后从 Worker Redis timing 回填父会话；镜像已写入时跳过重复项。
+
+    Returns:
+        实际追加条数。
+    """
+    if target is None or not steps:
+        return 0
+    seen = {_step_dedup_key(s) for s in target if isinstance(s, dict)}
+    added = 0
+    for item in steps:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        key = _step_dedup_key(item)
+        if key in seen:
+            continue
+        entry = {
+            "name": name,
+            "duration_ms": int(item.get("duration_ms") or 0),
+            "detail": item.get("detail"),
+            "agent_id": item.get("agent_id"),
+            "session_id": item.get("session_id"),
+        }
+        try:
+            target.append(entry)
+        except Exception:  # noqa: BLE001
+            break
+        seen.add(key)
+        added += 1
+    return added
+
+
+def steps_to_sub_stage_map(
+    steps: list[dict[str, Any]] | None,
+) -> dict[str, int] | None:
+    """把逐步耗时压成工具下钻用的 ``SubStageMap``（同名累加）。"""
+    if not steps:
+        return None
+    out: dict[str, int] = {}
+    for item in steps:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        # 「本轮汇总」是整轮汇总行，挂进工具下钻会误导
+        if "本轮汇总" in name:
+            continue
+        try:
+            ms = int(item.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            continue
+        out[name] = out.get(name, 0) + max(0, ms)
+    return out or None
+
+
+async def load_latest_turn_steps(session_id: str) -> list[dict[str, Any]]:
+    """从 Redis timing 取该会话最近一轮的 ``steps``（失败返回空列表）。"""
+    sid = (session_id or "").strip()
+    if not sid:
+        return []
+    try:
+        from src.agent.session_timing import RedisTimingStore
+        from src.config import get_settings
+
+        turns = await RedisTimingStore(get_settings()).get(sid)
+        if not turns:
+            return []
+        latest_key = max(
+            turns.items(),
+            key=lambda kv: str((kv[1] or {}).get("sampled_at", "")),
+        )[0]
+        snap = turns.get(latest_key) or {}
+        raw = snap.get("steps") if isinstance(snap, dict) else None
+        if not isinstance(raw, list):
+            return []
+        return [s for s in raw if isinstance(s, dict)]
+    except Exception:  # noqa: BLE001 — 观测回填不得影响主链路
+        return []
 
 _ROLE_ZH: dict[str, str] = {
     "coordinator": "协调者",
@@ -32,14 +189,24 @@ def log_turn_step(
     agent_id: str = "",
     detail: str = "",
 ) -> None:
-    """本轮一步耗时（中文）：会话号、步骤名、耗时。"""
+    """本轮一步耗时（中文）：会话号、步骤名、耗时；并写入采集列表（若已绑定）。"""
+    ms = max(0, int(duration_ms))
     logger.info(
         "对话步骤",
         会话号=session_id or "-",
         步骤=step_name,
-        耗时_ms=max(0, int(duration_ms)),
+        耗时_ms=ms,
         agent_id=agent_id or None,
         说明=detail or None,
+    )
+    _append_turn_step(
+        {
+            "name": (step_name or "").strip() or "步骤",
+            "duration_ms": ms,
+            "detail": (detail or "").strip() or None,
+            "agent_id": (agent_id or "").strip() or None,
+            "session_id": (session_id or "").strip() or None,
+        }
     )
 
 

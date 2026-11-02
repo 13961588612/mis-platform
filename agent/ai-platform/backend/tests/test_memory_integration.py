@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -194,6 +195,15 @@ async def test_agent_instance_calls_memory_injector_before_and_after() -> None:
         with patch("src.agent.manager.RedisTimingStore") as timing_store_cls:
             timing_store_cls.return_value.save = AsyncMock()
             events = [event async for event in instance.process_message(session, message)]
+            # after_agent_run 已改为后台 Task，需让出事件循环后再断言
+            await asyncio.sleep(0)
+            pending = [
+                t
+                for t in asyncio.all_tasks()
+                if t.get_name().startswith("memory-writeback:") and not t.done()
+            ]
+            if pending:
+                await asyncio.gather(*pending)
 
     assert [event.type for event in events] == [event.type for event in runtime.events]
     injector.before_agent_run.assert_awaited_once()

@@ -29,6 +29,36 @@ from src.utils.logging import get_logger
 
 logger = get_logger("agent.manager")
 
+#: 对话结束后异步 memory 写回任务集合（持有引用，避免 Task 被 GC）。
+_MEMORY_WRITEBACK_TASKS: set[asyncio.Task[Any]] = set()
+
+
+async def _memory_writeback_job(
+    injector: Any,
+    context: AgentRunContext,
+) -> None:
+    """后台执行 ``after_agent_run``；失败只打日志，不影响已返回的用户回复。"""
+    try:
+        await injector.after_agent_run(context)
+    except Exception:  # noqa: BLE001 — 记忆写回不得反噬主对话
+        logger.exception(
+            "async memory writeback failed",
+            agent_id=getattr(context, "agent_id", None),
+            agent_name=getattr(context, "agent_name", None),
+            session_id=getattr(context, "session_id", None),
+        )
+
+
+def _schedule_memory_writeback(injector: Any, context: AgentRunContext) -> asyncio.Task[Any]:
+    """将 memory 抽取/写回放到事件循环后台，立即让会话返回。"""
+    task = asyncio.create_task(
+        _memory_writeback_job(injector, context),
+        name=f"memory-writeback:{getattr(context, 'session_id', '') or '-'}",
+    )
+    _MEMORY_WRITEBACK_TASKS.add(task)
+    task.add_done_callback(_MEMORY_WRITEBACK_TASKS.discard)
+    return task
+
 
 class AgentInstance:
     """
@@ -132,7 +162,11 @@ class AgentInstance:
                 yield event
 
             memory_context.assistant_response = "".join(response_parts)
-            await memory_injector.after_agent_run(memory_context)
+            # Memory 抽取/写回改为后台任务：用户回复与委派 return 不再等待
+            # DashScope 抽取 LLM（曾出现 Worker 已答完仍阻塞 ~60s）。
+            # 所有走 process_message 的 Agent（含 Worker 委派）共用此行为；
+            # Agent 若 write_back=false 仍在 after_agent_run 内直接跳过。
+            _schedule_memory_writeback(memory_injector, memory_context)
             # 注：成功路径不再在此 complete() 钉死 _end_t；计时窗交由 finally 末
             # 的 recorder.close() 收口到 post_process 完成之后（Q5 / T05）。
         except Exception:

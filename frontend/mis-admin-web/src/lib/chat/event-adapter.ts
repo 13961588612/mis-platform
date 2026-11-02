@@ -46,9 +46,17 @@ export function parseStreamLine(raw: RawStreamLine): ChatStreamEvent | null {
     }
     case 'custom': {
       // F3：Gateway EventConverter CUSTOM 分支 → { type:'custom', eventType, data }。
-      // 仅归一 dispatch.trace 自定义事件；其它 custom 事件忽略（绝不中断流）。
-      if (raw.eventType !== 'dispatch.trace') return null;
-      return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
+      // dispatch.trace → 调度提示；tool.step → Copilot 工具步骤折叠条；其它忽略。
+      if (raw.eventType === 'dispatch.trace') {
+        return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
+      }
+      if (raw.eventType === 'tool.step') {
+        return adaptToolStep(raw.data);
+      }
+      return null;
+    }
+    case 'tool.step': {
+      return adaptToolStep(raw);
     }
     case 'done': {
       return {
@@ -117,6 +125,23 @@ function adaptTrace(raw: unknown): DispatchTracePayload {
   if (!Array.isArray(entries)) return { entries: [] };
   return {
     entries: entries.filter((e): e is NonNullable<typeof entries>[number] => e != null && typeof e === 'object'),
+  };
+}
+
+/** Gateway CUSTOM tool.step / 直出 tool.step → 内部事件。 */
+function adaptToolStep(raw: unknown): ChatStreamEvent | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const phaseRaw = String(data.phase ?? '').trim();
+  const phase = phaseRaw === 'result' ? 'result' : phaseRaw === 'start' ? 'start' : null;
+  if (!phase) return null;
+  return {
+    type: 'tool.step',
+    phase,
+    toolName: asString(data.toolName ?? data.tool_name),
+    toolCallId: asString(data.toolCallId ?? data.tool_call_id),
+    args: asRecord(data.args),
+    result: asRecord(data.result),
   };
 }
 

@@ -7,3 +7,6 @@ model:
   fallback: deepseek-v4-flash
   strategy: default-primary
   gateway: llm-gateway
+  # 必须关：qwen3.8-flash 开 thinking + tools 时，常见空 name 的 tool_calls
+  # → OpenHarness「Unknown tool:」×N，并把异常「行为控制」类正文透传到 Copilot。
+  enable_thinking: false

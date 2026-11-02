@@ -71,6 +71,10 @@ class IntentRouterConfig(BaseModel):
     labels: dict[str, IntentThen] = Field(default_factory=dict)
     on_fail: OnFailType = "fallback_router_skill"
     fallback_router_skill: str = ""
+    #: JEV 携带最近几轮对话（一轮≈user+assistant）；0=不带上文
+    max_context_turns: int = Field(default=3, ge=0, le=20)
+    #: JEV 上文单条截断长度（助手长表不灌满意图模型）
+    max_context_msg_chars: int = Field(default=240, ge=40, le=2000)
     #: 未命中时是否仍提示主模型自行判断（仅日志/观测语义）
     notes: str = ""
 

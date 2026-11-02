@@ -101,6 +101,18 @@ export interface DispatchTracePayload {
   entries: DispatchTraceEntry[];
 }
 
+/** 工具步骤（Gateway CUSTOM tool.step / 旧协议 tool.call|result）。 */
+export interface ToolStep {
+  /** 与 Gateway toolCallId 对齐；缺省时前端生成。 */
+  id: string;
+  toolName: string;
+  status: 'running' | 'done' | 'error';
+  /** 可选摘要（如 skill 名、apiName），仅展示用。 */
+  summary?: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 /** 单轮 token 用量。 */
 export interface TokenUsage {
   prompt: number;
@@ -127,6 +139,14 @@ export type ChatStreamEvent =
   | { type: 'text.delta'; content?: string }
   | { type: 'tool.call'; toolName?: string; args?: Record<string, unknown> }
   | { type: 'tool.result'; toolName?: string; result?: Record<string, unknown> }
+  | {
+      type: 'tool.step';
+      phase: 'start' | 'result';
+      toolName?: string;
+      toolCallId?: string;
+      args?: Record<string, unknown>;
+      result?: Record<string, unknown>;
+    }
   | { type: 'ui.render'; component?: string; props?: Record<string, unknown> }
   | { type: 'approval.request'; skillId?: string; detail?: Record<string, unknown> };
 

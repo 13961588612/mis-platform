@@ -648,6 +648,13 @@ class A2uiRunLoop:
                 pass
             await self._publisher.publish(session_id, event)
 
+        # 委派期间 Worker 工具事件经 ContextVar 回灌到父会话 SSE（Copilot 步骤条）
+        from src.coordinator.parent_progress import (
+            reset_parent_progress_emit,
+            set_parent_progress_emit,
+        )
+
+        progress_token = set_parent_progress_emit(emit)
         try:
             llm_messages: list[LLMMessage] = ensure_a2ui_system_hint(
                 ensure_coordinator_system_prompt(combined, resolved_agent_id)
@@ -665,23 +672,22 @@ class A2uiRunLoop:
             # Coordinator：可选 JEV / 规则预路由（INTENT_DETECT_* 独立 Key）
             # 传入对话上文，避免短跟问（如「溧阳呢」）脱离超市门店语境。
             route_decision: Any = None
+            history_for_jev: list[dict[str, str]] = []
+            for msg in combined:
+                role = getattr(msg.role, "value", None) or str(msg.role or "")
+                role_s = str(role).lower()
+                if role_s not in {"user", "assistant"}:
+                    continue
+                content_s = str(msg.content or "").strip()
+                if not content_s:
+                    continue
+                history_for_jev.append({"role": role_s, "content": content_s})
             try:
                 from src.intent_router.service import (
                     format_coordinator_route_hint,
                     format_router_skill_hint,
                     resolve_intent_route,
                 )
-
-                history_for_jev: list[dict[str, str]] = []
-                for msg in combined:
-                    role = getattr(msg.role, "value", None) or str(msg.role or "")
-                    role_s = str(role).lower()
-                    if role_s not in {"user", "assistant"}:
-                        continue
-                    content_s = str(msg.content or "").strip()
-                    if not content_s:
-                        continue
-                    history_for_jev.append({"role": role_s, "content": content_s})
 
                 route_decision = await resolve_intent_route(
                     resolved_agent_id,
@@ -814,12 +820,29 @@ class A2uiRunLoop:
                     hard_dispatch_workers=hard_dispatch_workers,
                 )
             ):
+                from src.intent_router.service import (
+                    format_conversation_context_for_jev,
+                )
                 from src.runtime.step_timing import log_turn_step
 
+                # Worker 需比 JEV 更长的单条截断，保住门店表/已确认条件
+                hard_ctx = format_conversation_context_for_jev(
+                    last_user_for_route,
+                    history_for_jev,
+                    max_context_turns=3,
+                    max_msg_chars=800,
+                )
                 invoke_args = build_hard_dispatch_invoke_args(
                     worker_id=hard_worker,
                     user_text=last_user_for_route,
                     intent=str(getattr(route_decision, "intent", None) or ""),
+                    conversation_context=hard_ctx,
+                    mode="continue",
+                )
+                hard_has_ctx = bool(
+                    (invoke_args.get("task_brief") or {})
+                    .get("inputs", {})
+                    .get("attachments_text")
                 )
                 log_turn_step(
                     session_id=session_id,
@@ -828,7 +851,9 @@ class A2uiRunLoop:
                     agent_id=resolved_agent_id,
                     detail=(
                         f"Worker={hard_worker}；"
-                        f"intent={invoke_args.get('intent') or '-'}"
+                        f"intent={invoke_args.get('intent') or '-'}；"
+                        f"mode={invoke_args.get('mode') or '-'}；"
+                        f"{'含上文' if hard_has_ctx else '无上文'}"
                     ),
                 )
                 logger.info(
@@ -879,12 +904,19 @@ class A2uiRunLoop:
                     str(hard_result.get("output") or "")
                 )
                 if hard_body:
+                    from src.coordinator.parent_progress import parent_text_was_streamed
+
+                    already_streamed = parent_text_was_streamed()
                     log_turn_step(
                         session_id=session_id,
                         step_name="协调者·透传收尾(跳过复述LLM)",
                         duration_ms=0,
                         agent_id=resolved_agent_id,
-                        detail=f"Worker={hard_worker}；正文{len(hard_body)}字；来源=hard_dispatch",
+                        detail=(
+                            f"Worker={hard_worker}；正文{len(hard_body)}字；"
+                            f"来源=hard_dispatch；"
+                            f"{'已流式' if already_streamed else '整段下发'}"
+                        ),
                     )
                     logger.info(
                         "coordinator_passthrough",
@@ -893,26 +925,79 @@ class A2uiRunLoop:
                         worker_id=hard_worker,
                         body_chars=len(hard_body),
                         source="hard_dispatch",
+                        already_streamed=already_streamed,
                     )
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
+                    # 保底整段下发：若委派中流式帧被中间件吞掉，靠此避免前端空气泡。
+                    # 前端对「已流式全文 == 整段」去重，不会叠字。
                     await emit(AgentEvent.text_delta(hard_body))
                     assistant_parts.append(hard_body)
                     completed = True
                 else:
-                    logger.warning(
-                        "coordinator_hard_dispatch fallback_to_llm",
-                        session_id=session_id,
-                        worker_id=hard_worker,
-                        ok=bool(hard_result.get("ok")),
-                        error=hard_result.get("error"),
+                    from src.runtime.gateway_api_client import (
+                        MODEL_GARBAGE_RETRY_MESSAGE,
+                        is_model_garbage_payload,
                     )
+
+                    hard_err = str(
+                        hard_result.get("error") or hard_result.get("output") or ""
+                    )
+                    # 乱码：明确失败提示重试，禁止当成功透传，也不再静默交给协调者复述
+                    if (
+                        hard_result.get("ok") is False
+                        and is_model_garbage_payload(hard_err)
+                    ) or is_model_garbage_payload(
+                        str(hard_result.get("output") or "")
+                    ):
+                        fail_msg = MODEL_GARBAGE_RETRY_MESSAGE
+                        log_turn_step(
+                            session_id=session_id,
+                            step_name="协调者·硬委派失败(模型异常)",
+                            duration_ms=0,
+                            agent_id=resolved_agent_id,
+                            detail=f"Worker={hard_worker}；乱码/哨兵→明确失败",
+                        )
+                        logger.warning(
+                            "coordinator_hard_dispatch model_garbage_fail",
+                            session_id=session_id,
+                            worker_id=hard_worker,
+                            error=hard_err[:200],
+                        )
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        await emit(AgentEvent.text_delta(fail_msg))
+                        assistant_parts.append(fail_msg)
+                        completed = True
+                    else:
+                        logger.warning(
+                            "coordinator_hard_dispatch fallback_to_llm",
+                            session_id=session_id,
+                            worker_id=hard_worker,
+                            ok=bool(hard_result.get("ok")),
+                            error=hard_result.get("error"),
+                        )
 
             for turn in range(1, self._max_turns + 1):
                 if completed:
                     break
                 llm_t0 = perf_counter()
                 try:
+                    from src.llm.thinking import (
+                        llm_request_extra_for_thinking,
+                        resolve_agent_enable_thinking,
+                    )
+
+                    enable_thinking: bool | None = None
+                    try:
+                        from src.config_manager.manager import get_config_manager
+
+                        agent_cfg = get_config_manager().get_config_cached(
+                            resolved_agent_id
+                        )
+                        enable_thinking = resolve_agent_enable_thinking(agent_cfg)
+                    except Exception:  # noqa: BLE001
+                        enable_thinking = None
                     response: LLMResponse = await self._gateway.chat(
                         LLMRequest(
                             messages=llm_messages,
@@ -923,6 +1008,10 @@ class A2uiRunLoop:
                             tool_choice="auto" if openai_tools else "none",
                             session_id=session_id,
                             user_id=user_id,
+                            extra=llm_request_extra_for_thinking(
+                                enable_thinking=enable_thinking,
+                                model=model,
+                            ),
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - LLM 失败统一回 error 事件
@@ -1072,8 +1161,10 @@ class A2uiRunLoop:
                     and invoke_count_in_turn == 1
                     and other_tool_count_in_turn == 0
                 ):
+                    from src.coordinator.parent_progress import parent_text_was_streamed
                     from src.runtime.step_timing import log_turn_step
 
+                    already_streamed = parent_text_was_streamed()
                     log_turn_step(
                         session_id=session_id,
                         step_name="协调者·透传收尾(跳过复述LLM)",
@@ -1081,7 +1172,8 @@ class A2uiRunLoop:
                         agent_id=resolved_agent_id,
                         detail=(
                             f"Worker={passthrough_worker or '-'}；"
-                            f"正文{len(passthrough_text)}字"
+                            f"正文{len(passthrough_text)}字；"
+                            f"{'已流式' if already_streamed else '整段下发'}"
                         ),
                     )
                     logger.info(
@@ -1090,9 +1182,11 @@ class A2uiRunLoop:
                         coordinator_id=resolved_agent_id,
                         worker_id=passthrough_worker,
                         body_chars=len(passthrough_text),
+                        already_streamed=already_streamed,
                     )
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
+                    # 保底整段下发（与 hard_dispatch 同口径；前端去重）
                     await emit(AgentEvent.text_delta(passthrough_text))
                     assistant_parts.append(passthrough_text)
                     completed = True
@@ -1187,6 +1281,7 @@ class A2uiRunLoop:
                     pass
             raise
         finally:
+            reset_parent_progress_emit(progress_token)
             # 与 AgentInstance.process_message 同口径：按轮写入 Redis（TTL 24h）。
             try:
                 recorder.step_start("db_persist")

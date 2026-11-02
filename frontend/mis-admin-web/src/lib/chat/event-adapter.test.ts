@@ -78,10 +78,32 @@ describe('parseStreamLine dispatch.trace 两风格归一（F3）', () => {
     expect(event).toEqual({ type: 'dispatch.trace', trace: { entries } });
   });
 
-  it('custom 事件 eventType 非 dispatch.trace → null（不中断流）', () => {
+  it('custom 事件 eventType 非已知类型 → null（不中断流）', () => {
     expect(
       parseStreamLine({ type: 'custom', eventType: 'some.other', data: { entries } }),
     ).toBeNull();
+  });
+
+  it('custom tool.step → 内部 tool.step 事件', () => {
+    expect(
+      parseStreamLine({
+        type: 'custom',
+        eventType: 'tool.step',
+        data: {
+          phase: 'start',
+          toolName: 'skill',
+          toolCallId: 'tc-1',
+          args: { name: 'sm-report-router' },
+        },
+      }),
+    ).toEqual({
+      type: 'tool.step',
+      phase: 'start',
+      toolName: 'skill',
+      toolCallId: 'tc-1',
+      args: { name: 'sm-report-router' },
+      result: undefined,
+    });
   });
 
   it('data 缺 entries / 非数组 → 空 entries（防御，不抛）', () => {

@@ -10,11 +10,12 @@
  * | AgentEvent        | BaseEvent                              | 方向        |
  * |-------------------|----------------------------------------|-------------|
  * | text.delta        | TEXT_MESSAGE_CHUNK                     | Python→前端 |
- * | tool.call         | TOOL_CALL_START + TOOL_CALL_ARGS + TOOL_CALL_END | Python→中间件 |
- * | tool.result       | TOOL_CALL_RESULT                       | Python→中间件 |
+ * | tool.call         | TOOL_CALL_* + CUSTOM(tool.step)        | Python→中间件/前端 |
+ * | tool.result       | TOOL_CALL_RESULT + CUSTOM(tool.step)   | Python→中间件/前端 |
  * | ui.render         | ACTIVITY_SNAPSHOT（兼容 @deprecated）  | Python→前端 |
  * | approval.request  | ACTIVITY_SNAPSHOT                      | Python→前端 |
  * | dispatch.trace    | CUSTOM（type=dispatch.trace）          | Python→前端 |
+ * | tool.step         | CUSTOM（type=tool.step）               | Python→前端 |
  * | error             | RUN_ERROR                              | Python→前端 |
  * | done              | RUN_FINISHED                           | Python→中间件 |
  *
@@ -71,8 +72,21 @@ const A2UI_OPERATIONS_KEY = 'a2ui_operations';
  * 此处自持常量，避免对 a2ui-middleware 包 exports 的硬依赖（包为 CJS，类型解析路径差异）。 */
 const RENDER_A2UI_TOOL_NAME = 'render_a2ui';
 
+/**
+ * Coordinator 委派工具。执行期间会实时转发 Worker ``text.delta``；
+ * 若走 TOOL_CALL_*，中间件在 TOOL_CALL_RESULT 前可能吞掉 TEXT_MESSAGE_CHUNK，
+ * 导致前端空气泡。故仅下发 CUSTOM(tool.step)。
+ */
+const INVOKE_AGENT_TOOL_NAME = 'agent__invoke';
+
 /** render_a2ui tool.call 转换出的 ACTIVITY_SNAPSHOT surfaceId 前缀（与 run 隔离）。 */
 const A2UI_RENDER_SURFACE_PREFIX = 'a2ui';
+
+/**
+ * 工具步骤透传 CUSTOM 名。
+ * A2UI 前端协议不直接下发 TOOL_CALL_*（中间件内部事件）；另发 CUSTOM 供 Copilot 折叠条消费。
+ */
+const TOOL_STEP_EVENT_NAME = 'tool.step';
 
 // ============================================================================
 // 工具函数
@@ -137,28 +151,74 @@ export class EventConverter {
     switch (event.type) {
       case 'text.delta':
         return [this.toTextMessageChunk(event, runId)];
-      case 'tool.call':
+      case 'tool.call': {
+        // agent__invoke：仅 CUSTOM(tool.step)，避免 TOOL_CALL 栈挡住委派中的 text.delta。
+        if (event.toolName === INVOKE_AGENT_TOOL_NAME) {
+          const toolCallId = newToolCallId();
+          const queue = this.toolCallIdQueues.get(runId) ?? [];
+          queue.push(toolCallId);
+          this.toolCallIdQueues.set(runId, queue);
+          return [
+            this.toToolStepCustom('start', INVOKE_AGENT_TOOL_NAME, toolCallId, event.args),
+          ];
+        }
         // 协议契约补齐：Python 按原始 tool.call(render_a2ui) 下发（非 ACTIVITY_SNAPSHOT）。
         // Gateway 侧拦截该工具调用，复用 ui.render/approval.request 同款 ACTIVITY_SNAPSHOT
         // 封装，使 baseEventToFrontendMessage 命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface。
         // 同时保留 TOOL_CALL_START/ARGS/END 三件套（供中间件流式拦截兼容，不破坏现有行为）。
-        if (event.toolName === RENDER_A2UI_TOOL_NAME) {
-          return this.renderA2uiToolCallToEvents(event, runId);
+        // 另附 CUSTOM(tool.step)：A2UI 前端不下发 TOOL_CALL_*，靠此事件驱动步骤折叠条。
+        const callEvents =
+          event.toolName === RENDER_A2UI_TOOL_NAME
+            ? this.renderA2uiToolCallToEvents(event, runId)
+            : this.toToolCallEvents(event, runId);
+        const start = callEvents.find((e) => e.type === EventType.TOOL_CALL_START) as
+          | ToolCallStartEvent
+          | undefined;
+        const toolCallId = start?.toolCallId ?? newToolCallId();
+        return [
+          ...callEvents,
+          this.toToolStepCustom('start', event.toolName ?? '', toolCallId, event.args),
+        ];
+      }
+      case 'tool.result': {
+        // agent__invoke：与 tool.call 对称，仅 CUSTOM（已在 call 时入队 toolCallId）。
+        if (event.toolName === INVOKE_AGENT_TOOL_NAME) {
+          const queue = this.toolCallIdQueues.get(runId) ?? [];
+          const toolCallId = queue.shift() ?? newToolCallId();
+          if (queue.length === 0) {
+            this.toolCallIdQueues.delete(runId);
+          }
+          return [
+            this.toToolStepCustom(
+              'result',
+              INVOKE_AGENT_TOOL_NAME,
+              toolCallId,
+              asRecord(event.result),
+            ),
+          ];
         }
-        return this.toToolCallEvents(event, runId);
-      case 'tool.result':
         // render_a2ui 的 result 为执行回执（{ok, status, surfaceId, ...}），不含界面描述，
         // 无需生成 surface；但 surfaceId 仍透传给中间件做关联。保持 TOOL_CALL_RESULT 语义。
-        if (event.toolName === RENDER_A2UI_TOOL_NAME) {
-          return [this.toToolCallResult(event, runId)];
-        }
-        return [this.toToolCallResult(event, runId)];
+        const resultEvent = this.toToolCallResult(event, runId);
+        return [
+          resultEvent,
+          this.toToolStepCustom(
+            'result',
+            event.toolName ?? '',
+            resultEvent.toolCallId,
+            asRecord(event.result),
+          ),
+        ];
+      }
       case 'ui.render':
         return [this.uiRenderToActivitySnapshot(event, runId)];
       case 'approval.request':
         return [this.approvalRequestToActivitySnapshot(event, runId)];
       case 'dispatch.trace':
         return [this.toCustomDispatchTrace(event)];
+      case 'tool.step':
+        // 仅 CUSTOM：勿再走 TOOL_CALL_*，否则嵌在父会话 agent__invoke 未闭合栈中会被中间件吞掉。
+        return [this.toCustomToolStep(event)];
       case 'error':
         return [this.toRunError(event)];
       case 'done':
@@ -530,6 +590,51 @@ export class EventConverter {
       type: EventType.CUSTOM,
       name: 'dispatch.trace',
       value: event.trace ?? {},
+    };
+  }
+
+  /** tool.step → CUSTOM（Worker 回灌父会话步骤条；不经 TOOL_CALL_*） */
+  private toCustomToolStep(event: AgentEvent): CustomEvent {
+    const payload = asRecord(event.trace);
+    const toolName =
+      (typeof event.toolName === 'string' && event.toolName) ||
+      (typeof payload['toolName'] === 'string' ? (payload['toolName'] as string) : '') ||
+      '';
+    return {
+      type: EventType.CUSTOM,
+      name: TOOL_STEP_EVENT_NAME,
+      value: {
+        phase: payload['phase'] === 'result' ? 'result' : 'start',
+        toolName,
+        toolCallId:
+          typeof payload['toolCallId'] === 'string' ? payload['toolCallId'] : '',
+        args: asRecord(payload['args']),
+        result: asRecord(payload['result']),
+      },
+    };
+  }
+
+  /**
+   * tool.call / tool.result → CUSTOM(tool.step)，供前端步骤条消费。
+   * args/result 原样放入 value；前端只取摘要展示，避免把大结果塞进气泡。
+   */
+  private toToolStepCustom(
+    phase: 'start' | 'result',
+    toolName: string,
+    toolCallId: string,
+    payload?: Record<string, unknown>,
+  ): CustomEvent {
+    return {
+      type: EventType.CUSTOM,
+      name: TOOL_STEP_EVENT_NAME,
+      value: {
+        phase,
+        toolName,
+        toolCallId,
+        ...(phase === 'start'
+          ? { args: payload ?? {} }
+          : { result: payload ?? {} }),
+      },
     };
   }
 

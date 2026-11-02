@@ -2,3 +2,5 @@ model:
   # 问数生成对准确度敏感，温度走低（0.1 已在 runtime.yaml 声明），
   # 主模型与平台其他 Worker 对齐；故障转移由 LLM Gateway 兜底。
   primary: qwen3.8-flash
+  # qwen3.8-flash 开 thinking + tools 易出空名 tool_calls → Unknown tool
+  enable_thinking: false

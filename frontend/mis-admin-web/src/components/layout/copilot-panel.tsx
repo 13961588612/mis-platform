@@ -1,11 +1,13 @@
 /**
- * 全局 Copilot：可拖动 FAB + 右侧 Sheet（T06' 重写）。
+ * 全局 Copilot：可拖动 FAB + 右侧抽屉 / 全屏面板（T06' 重写）。
  *
  * <p>废弃 iframe 嵌入（CopilotH5Frame），改为**原生 A2UI 渲染**：
  * - chat-core + A2UI 渲染层整体包入 `@/components/chat/CopilotPanel`，经 React.lazy
- *   按需加载（Sheet 打开才拉包，01-architecture.md §7.2 策略 1）
- * - modulepreload 预热（P1）：页面空闲时 prefetch 该 chunk，Sheet 打开秒开
- * - 会话状态由 chat-core（zustand chat-store）持有，关闭 Sheet 不销毁
+ *   按需加载（首次打开才拉包）
+ * - modulepreload 预热（P1）：页面空闲时 prefetch 该 chunk
+ * - **放大 / 还原不得卸载** `CopilotPanel`：否则 `useChat` 卸载会 abort SSE 并
+ *   `finalizeOwnedGeneratingOnUnmount`，表现为「点放大后对话状态自动结束」
+ * - 关闭面板仅隐藏宿主（`invisible`），保持挂载以便后台流继续写入会话
  */
 
 import {
@@ -18,13 +20,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { Sparkles } from 'lucide-react';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -191,7 +186,7 @@ function CopilotFab({ onOpen }: { onOpen: () => void }) {
  */
 const CopilotPanelLazy = lazy(() => import('@/components/chat/CopilotPanel'));
 
-/** Sheet 打开前的加载占位（同步渲染，不触发额外拉包）。 */
+/** 面板首次打开前的加载占位（同步渲染，不触发额外拉包）。 */
 function CopilotPanelFallback() {
   return (
     <div className="flex h-full min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -201,14 +196,14 @@ function CopilotPanelFallback() {
 }
 
 /**
- * 全局 Copilot：可拖动 FAB + 右侧 Sheet。
- * Sheet 打开才加载 CopilotPanel chunk；关闭保留 DOM（会话状态不丢）。
+ * 全局 Copilot：可拖动 FAB + 单一稳定面板宿主。
+ * 首次打开才加载 CopilotPanel chunk；关闭仅隐藏，放大只改 class，不卸载。
  */
 export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
   // 放大模式：仅在「当前会话面板打开」时恢复；刷新后 open 恒为 false，
   // 若仍读 localStorage=1 会出现 expanded&&!open → FAB 与面板双不可见。
   const [expanded, setExpanded] = useState<boolean>(false);
-  /** 首次打开后保持挂载，关闭 Sheet 不断 SSE，后台问数结果仍能写入会话。 */
+  /** 首次打开后保持挂载，关闭面板不断 SSE，后台问数结果仍能写入会话。 */
   const [activated, setActivated] = useState(false);
 
   const toggleExpanded = useCallback(() => {
@@ -231,7 +226,7 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
     [onOpenChange],
   );
 
-  // 打开面板时：若上次以放大态关闭前曾写过 flag，恢复放大；否则普通 Sheet
+  // 打开面板时：若上次以放大态关闭前曾写过 flag，恢复放大；否则窄栏
   useEffect(() => {
     if (open) {
       setActivated(true);
@@ -239,7 +234,7 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
     }
   }, [open]);
 
-  // modulepreload 预热（P1）：页面空闲时提前拉 chunk，Sheet 打开秒开
+  // modulepreload 预热（P1）：页面空闲时提前拉 chunk，打开秒开
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void import('@/components/chat/CopilotPanel');
@@ -249,41 +244,27 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
 
   return (
     <>
-      {/* 普通模式：右侧 Sheet（占满视口高度，内部仅消息区滚动） */}
-      {!expanded ? (
-        <Sheet open={open} onOpenChange={handleOpenChange} modal={false}>
-          <SheetContent
-            side="right"
-            forceMount
-            showCloseButton={false}
-            className="flex h-[100dvh] max-h-[100dvh] w-full max-w-xl flex-col overflow-hidden p-0 sm:max-w-xl"
-          >
-            {/* a11y：标题/描述留给屏幕阅读器；可视标题栏由 CopilotPanel 统一渲染 */}
-            <SheetHeader className="sr-only">
-              <SheetTitle>AI Copilot</SheetTitle>
-              <SheetDescription>原生对话 · A2UI 动态界面 · 直连 Agent 网关</SheetDescription>
-            </SheetHeader>
-            <div className="flex min-h-0 flex-1 flex-col">
-              <Suspense fallback={<CopilotPanelFallback />}>
-                {activated ? (
-                  <CopilotPanelLazy
-                    expanded={false}
-                    onToggleExpanded={toggleExpanded}
-                    onRequestClose={() => handleOpenChange(false)}
-                  />
-                ) : null}
-              </Suspense>
-            </div>
-          </SheetContent>
-        </Sheet>
-      ) : null}
-
-      {/* 放大模式：全屏覆盖层（左侧会话列表 + 右侧聊天，参考豆包布局） */}
-      {expanded && open ? (
-        <div className="fixed inset-0 z-50 flex h-[100dvh] flex-col bg-background">
+      {/*
+        单一宿主：窄栏 / 全屏只改定位 class，组件实例与 useChat/SSE 不断开。
+        关闭时 invisible（非卸载），与旧 Sheet forceMount 保留流的目标一致。
+      */}
+      {activated ? (
+        <div
+          className={cn(
+            'fixed z-50 flex flex-col overflow-hidden bg-background',
+            !open && 'pointer-events-none invisible',
+            expanded
+              ? 'inset-0 h-[100dvh]'
+              : 'inset-y-0 right-0 h-[100dvh] w-full max-w-xl border-l border-border shadow-lg sm:max-w-xl',
+          )}
+          role="dialog"
+          aria-modal={false}
+          aria-label="AI Copilot"
+          aria-hidden={!open}
+        >
           <Suspense fallback={<CopilotPanelFallback />}>
             <CopilotPanelLazy
-              expanded
+              expanded={expanded}
               onToggleExpanded={toggleExpanded}
               onRequestClose={() => handleOpenChange(false)}
             />

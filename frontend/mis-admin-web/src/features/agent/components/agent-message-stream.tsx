@@ -29,6 +29,7 @@ import type {
   SubStageMap,
   SubStages,
   ToolCallSubStage,
+  TurnTimingStep,
 } from '../types';
 
 /** 每种 role 的呈现规格：标签 + 配色 + 图标。 */
@@ -423,9 +424,77 @@ function ToolCallDrill({ tcs }: { tcs: ToolCallSubStage }): ReactElement {
   );
 }
 
+function isSummaryStep(name: string): boolean {
+  return /本轮汇总|route_timing/i.test(name);
+}
+
+/** 逐步时间线（与日志「对话步骤」同源；有数据时默认展开）。 */
+function TurnStepsBlock({
+  steps,
+  totalMs,
+}: {
+  steps: TurnTimingStep[];
+  totalMs: number | null;
+}): ReactElement {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-1.5 border-t border-border/60 pt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-center gap-1.5 text-left text-[0.7rem] text-muted-foreground hover:text-foreground"
+        title="与运行时日志「对话步骤」同源：含 JEV / 各轮 LLM / Skill / MCP 等"
+      >
+        <span className="font-medium text-foreground">逐步耗时（对齐日志）</span>
+        <span className="font-medium text-foreground">{steps.length} 步</span>
+        {totalMs != null ? (
+          <>
+            <span className="text-border">·</span>
+            <span className="font-medium text-foreground">端到端 {fmtMs(totalMs)}</span>
+          </>
+        ) : null}
+        <span className="ml-auto text-[0.6rem] opacity-60">{open ? '▾' : '▸'}</span>
+      </button>
+      <p className="mt-0.5 text-[0.6rem] leading-snug text-muted-foreground/80">
+        与日志逐步同口径；上方「规划/工具/生成」为墙钟粗分（整段委派常算进「工具」），勿与逐步逐项相加对比。
+        「本轮汇总」为整轮汇总行，不是另一次耗时。
+      </p>
+      {open ? (
+        <ol className="mt-1 max-h-80 space-y-0.5 overflow-y-auto pl-0.5">
+          {steps.map((step, idx) => {
+            const summary = isSummaryStep(step.name);
+            return (
+              <li
+                key={`${step.name}-${idx}`}
+                className={cn(
+                  'flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-0.5 text-[0.65rem] hover:bg-muted/60',
+                  summary && 'opacity-70',
+                )}
+                title={step.detail || undefined}
+              >
+                <span className="w-4 shrink-0 tabular-nums text-muted-foreground/70">{idx + 1}</span>
+                <span className="min-w-0 flex-1 break-words text-foreground">{step.name}</span>
+                {step.agent_id ? (
+                  <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[0.6rem] text-muted-foreground">
+                    {step.agent_id}
+                  </span>
+                ) : null}
+                <span className="shrink-0 font-medium tabular-nums text-foreground">
+                  {fmtMs(step.duration_ms)}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 单轮耗时条 + 可折叠子阶段下钻（P1）。顶层 5 阶段保持不变，点击某阶段可展开其
  * 子阶段明细；并提供「展开全部耗时明细」开关（默认折叠）。
+ * v3：附加「逐步耗时」时间线（与日志对话步骤同源）。
  */
 function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
   const [expandAll, setExpandAll] = useState(false);
@@ -434,6 +503,8 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
   const stages = turn.stages;
   const sub = turn.sub_stages;
   const hasSub = sub != null;
+  const steps = Array.isArray(turn.steps) ? turn.steps.filter((s) => s?.name) : [];
+  const hasSteps = steps.length > 0;
 
   const items: {
     key: keyof NonNullable<SubStages>;
@@ -478,7 +549,7 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
             {expandAll ? '折叠明细' : '展开明细'}
           </button>
         ) : null}
-        {!hasSub ? (
+        {!hasSub && !hasSteps ? (
           <span className="ml-auto text-[0.65rem] text-muted-foreground">
             采样 {formatTime(turn.sampled_at)}
           </span>
@@ -507,6 +578,14 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
         <div className="mt-1 text-right text-[0.65rem] text-muted-foreground">
           采样 {formatTime(turn.sampled_at)}
         </div>
+      ) : null}
+
+      {hasSteps ? <TurnStepsBlock steps={steps} totalMs={turn.total_ms} /> : null}
+      {!hasSteps ? (
+        <p className="mt-1 text-[0.6rem] text-muted-foreground/80">
+          本轮无「逐步耗时」采样（需 backend timing schema v3；仅新对话写入）。当前仅有墙钟五阶段，与日志
+          JEV/LLM/MCP 逐步不可直接对比。
+        </p>
       ) : null}
     </div>
   );
@@ -561,7 +640,7 @@ export function AgentMessageStream({
         const turnMissing = msg.role === 'assistant' && !turn;
         const iqdPlan =
           msg.role === 'assistant' && msg.content ? parseIqdPlanSteps(msg.content) : null;
-        // Copilot A2UI 主路径（a2ui_run）不写 Redis 五阶段耗时；用上一轮用户→本条助手的墙钟差兜底。
+        // Redis 采样缺失/过期时：用上一轮用户→本条助手的墙钟差兜底（A2UI 与文本通道现均可写 timing）。
         const wallClockMs =
           turnMissing && !iqdPlan ? wallClockMsBefore(messages, idx) : null;
 
@@ -595,10 +674,10 @@ export function AgentMessageStream({
                 {wallClockMs != null ? (
                   <>
                     本轮耗时约 {fmtMs(wallClockMs)}
-                    <span className="opacity-70">（墙钟：用户提问→本条回复；A2UI 路径无阶段采样）</span>
+                    <span className="opacity-70">（墙钟：用户提问→本条回复；Redis 阶段采样缺失或已过期）</span>
                   </>
                 ) : (
-                  <>本轮平台耗时：—（A2UI/调试态未采样，且无法从消息时间推算）</>
+                  <>本轮平台耗时：—（调试态未采样或已过期，且无法从消息时间推算）</>
                 )}
               </div>
             ) : null}

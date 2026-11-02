@@ -255,15 +255,45 @@ def _platform_messages_to_conversation(messages: list[dict[str, Any]]) -> list[A
     return result
 
 
-_HISTORY_ASSISTANT_STUB = (
-    "（历史查询回复已省略。若需会员/积分/券等业务数据，必须重新调用工具查询，"
-    "禁止臆造或复用历史数值。）"
+# 历史助手占位：必须空内容。旧版曾用 ``[prior_assistant_answer_omitted]`` /
+# 中文「已省略」句，模型会原样复述到用户气泡（多轮跟问常见）。
+_HISTORY_ASSISTANT_STUB = ""
+
+#: 若模型仍输出旧占位标记，出站前剥离/拒绝透传。
+_LEGACY_HISTORY_STUB_MARKERS: tuple[str, ...] = (
+    "[prior_assistant_answer_omitted]",
+    "历史查询回复已省略",
+    "历史助手回复已省略",
+)
+
+_STUB_ECHO_FALLBACK = (
+    "本轮未能完成实时查询。请再试一次，或换个问法（需先调工具取数，不能沿用上一轮结论）。"
 )
 
 _DEFAULT_LIVE_QUERY_REMINDER = (
     "【强制】本轮涉及业务数据时必须先调用工具实时查询后再回答；"
-    "禁止仅根据对话历史中的数据作答。"
+    "禁止仅根据对话历史中的数据作答；"
+    "历史助手正文已清空，禁止输出任何占位标记或「已省略」类说明当作对本轮用户的回答。"
 )
+
+
+def is_force_live_stub_echo(text: str) -> bool:
+    """正文是否仅为 forceLiveQuery 历史占位（含旧机器标记）的复述。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    cleaned = raw
+    for marker in _LEGACY_HISTORY_STUB_MARKERS:
+        cleaned = cleaned.replace(marker, "")
+    return cleaned.strip() == ""
+
+
+def strip_force_live_stub_markers(text: str) -> str:
+    """去掉正文中的历史占位标记（保留其余有效文字）。"""
+    out = text or ""
+    for marker in _LEGACY_HISTORY_STUB_MARKERS:
+        out = out.replace(marker, "")
+    return out
 
 
 def _apply_force_live_query(
@@ -271,10 +301,12 @@ def _apply_force_live_query(
     *,
     turn_reminder: str = "",
 ) -> list[Any]:
-    """问数场景：省略历史助手详答，并在本轮用户消息追加强制实时查询提醒。
+    """问数场景：清空历史助手正文，并在本轮用户消息追加强制实时查询提醒。
 
     保留用户历史以便沿用 vipId 等查询条件；去掉助手历史中的业务数据，
     降低模型「口头复用上一轮结果」的概率。
+
+    注意：assistant 占位必须为空（不要写中文说明或机器标记），否则易被复述到气泡。
     """
     if not messages or not _OPENHARNESS_AVAILABLE:
         return messages
@@ -626,17 +658,37 @@ class OpenHarnessRuntime(AgentRuntime):
             # 首轮 LLM 计时从真正开跑引擎算起（不含上面 MCP/引擎构建）
             llm_segment_t0 = perf_counter()
             llm_ttft_ms = None
+            # forceLiveQuery：拦截把历史占位复述成「正式回复」的 delta
+            live_emitted_text_chars = 0
+            live_suppressed_stub = False
 
             async for event in engine.submit_message(prompt):
                 step += 1
                 if isinstance(event, AssistantTextDelta):
+                    delta_text = event.text or ""
+                    if force_live_query:
+                        stripped = strip_force_live_stub_markers(delta_text)
+                        if is_force_live_stub_echo(delta_text) or (
+                            not stripped.strip() and delta_text.strip()
+                        ):
+                            live_suppressed_stub = True
+                            logger.warning(
+                                "force_live_query suppressed stub echo delta",
+                                session_id=session_id,
+                                agent_id=agent_id,
+                            )
+                            continue
+                        delta_text = stripped
+                        if not delta_text:
+                            continue
                     if ms_to_first_text is None:
                         ms_to_first_text = _elapsed_ms(turn_t0)
                     if llm_segment_t0 is not None and llm_ttft_ms is None:
                         llm_ttft_ms = _elapsed_ms(llm_segment_t0)
-                    yield AgentEvent.text_delta(event.text)
+                    live_emitted_text_chars += len(delta_text)
+                    yield AgentEvent.text_delta(delta_text)
                     _log_agent_trace(
-                        session_id, step=step, phase="text_delta", assistant_text=event.text
+                        session_id, step=step, phase="text_delta", assistant_text=delta_text
                     )
                 elif isinstance(event, ToolExecutionStarted):
                     tool_name = str(event.tool_name or "")
@@ -747,6 +799,22 @@ class OpenHarnessRuntime(AgentRuntime):
                     )
                 elif isinstance(event, ErrorEvent):
                     yield AgentEvent.error("RUNTIME_ERROR", event.message)
+
+            # 整轮只复述了历史占位、又没调工具：换成可读提示，避免气泡只剩机器标记
+            if (
+                force_live_query
+                and live_suppressed_stub
+                and live_emitted_text_chars == 0
+                and tool_call_index == 0
+            ):
+                logger.warning(
+                    "force_live_query stub-only turn; emitting fallback",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
+                if ms_to_first_text is None:
+                    ms_to_first_text = _elapsed_ms(turn_t0)
+                yield AgentEvent.text_delta(_STUB_ECHO_FALLBACK)
 
             # 下发本轮回填工具产生的 A2UI 渲染（entity-select 等）。
             # 工具在 agent 循环内部运行无法直接 yield AgentEvent，故经挂起缓冲，

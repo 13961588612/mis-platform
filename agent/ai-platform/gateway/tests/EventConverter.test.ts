@@ -51,12 +51,13 @@ function main(): void {
     // 修复契约：render_a2ui 的 tool.call 在 START 之后、ARGS 之前插入 ACTIVITY_SNAPSHOT，
     // 供前端命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface；TOOL_CALL 三件套仍保留（中间件兼容）。
     check(
-      'tool.call(render_a2ui) → START+ACTIVITY_SNAPSHOT+ARGS+END',
-      events.length === 4 &&
+      'tool.call(render_a2ui) → START+ACTIVITY_SNAPSHOT+ARGS+END+tool.step',
+      events.length === 5 &&
         events[0]?.type === EventType.TOOL_CALL_START &&
         events[1]?.type === EventType.ACTIVITY_SNAPSHOT &&
         events[2]?.type === EventType.TOOL_CALL_ARGS &&
-        events[3]?.type === EventType.TOOL_CALL_END,
+        events[3]?.type === EventType.TOOL_CALL_END &&
+        events[4]?.type === EventType.CUSTOM,
       JSON.stringify(events.map((e) => e.type)),
     );
     const start = events[0] as { toolCallId?: string; toolCallName?: string };
@@ -87,23 +88,77 @@ function main(): void {
     );
   }
 
-  // ---- tool.call(非 render_a2ui) → START + ARGS + END（保持原行为） ----
+  // ---- tool.call(非 render_a2ui) → START + ARGS + END + CUSTOM(tool.step) ----
   {
     const events = converter.agentEventToBaseEvent(
       { type: 'tool.call', toolName: 'get_weather', args: { city: 'BJ' } },
       runId,
     );
+    const step = events[3] as { type?: EventType; name?: string; value?: { phase?: string; toolName?: string } };
     check(
-      'tool.call(其他工具) → START+ARGS+END',
-      events.length === 3 &&
+      'tool.call(其他工具) → START+ARGS+END+tool.step',
+      events.length === 4 &&
         events[0]?.type === EventType.TOOL_CALL_START &&
         events[1]?.type === EventType.TOOL_CALL_ARGS &&
-        events[2]?.type === EventType.TOOL_CALL_END,
+        events[2]?.type === EventType.TOOL_CALL_END &&
+        events[3]?.type === EventType.CUSTOM &&
+        step?.name === 'tool.step' &&
+        step?.value?.phase === 'start' &&
+        step?.value?.toolName === 'get_weather',
       JSON.stringify(events.map((e) => e.type)),
     );
   }
 
-  // ---- tool.result → TOOL_CALL_RESULT（与 tool.call 关联同一 toolCallId） ----
+  // ---- tool.call(agent__invoke) → 仅 CUSTOM(tool.step)，不占 TOOL_CALL 栈 ----
+  {
+    const invokeRunId = 'run-invoke-only-custom';
+    const callEvents = converter.agentEventToBaseEvent(
+      {
+        type: 'tool.call',
+        toolName: 'agent__invoke',
+        args: { agent_id: 'spm-report', task: '查门店' },
+      },
+      invokeRunId,
+    );
+    const callStep = callEvents[0] as {
+      type?: EventType;
+      name?: string;
+      value?: { phase?: string; toolName?: string; toolCallId?: string };
+    };
+    check(
+      'tool.call(agent__invoke) → 仅 CUSTOM(tool.step)',
+      callEvents.length === 1 &&
+        callEvents[0]?.type === EventType.CUSTOM &&
+        callStep?.name === 'tool.step' &&
+        callStep?.value?.phase === 'start' &&
+        callStep?.value?.toolName === 'agent__invoke',
+      JSON.stringify(callEvents.map((e) => e.type)),
+    );
+    const resultEvents = converter.agentEventToBaseEvent(
+      {
+        type: 'tool.result',
+        toolName: 'agent__invoke',
+        result: { ok: true, output: '正文' },
+      },
+      invokeRunId,
+    );
+    const resultStep = resultEvents[0] as {
+      type?: EventType;
+      name?: string;
+      value?: { phase?: string; toolCallId?: string };
+    };
+    check(
+      'tool.result(agent__invoke) → 仅 CUSTOM(tool.step)',
+      resultEvents.length === 1 &&
+        resultEvents[0]?.type === EventType.CUSTOM &&
+        resultStep?.name === 'tool.step' &&
+        resultStep?.value?.phase === 'result' &&
+        resultStep?.value?.toolCallId === callStep?.value?.toolCallId,
+      JSON.stringify(resultEvents.map((e) => e.type)),
+    );
+  }
+
+  // ---- tool.result → TOOL_CALL_RESULT + CUSTOM(tool.step) ----
   {
     // 独立 runId：FIFO 关联按 run 隔离（同一 run 内 tool.call/tool.result 严格有序）
     const resultRunId = 'run-tool-result';
@@ -117,6 +172,7 @@ function main(): void {
     );
     const callStart = callEvents[0] as { toolCallId?: string };
     const result = resultEvents[0] as { type?: EventType; toolCallId?: string; content?: string };
+    const step = resultEvents[1] as { type?: EventType; name?: string; value?: { phase?: string } };
     check(
       'tool.result → TOOL_CALL_RESULT',
       result.type === EventType.TOOL_CALL_RESULT,
@@ -128,6 +184,48 @@ function main(): void {
       `${result.toolCallId} vs ${callStart.toolCallId}`,
     );
     check('tool.result content 为结果 JSON', JSON.parse(result.content ?? '{}')['status'] === 'rendered');
+    check(
+      'tool.result → CUSTOM(tool.step result)',
+      resultEvents.length === 2 &&
+        step?.type === EventType.CUSTOM &&
+        step?.name === 'tool.step' &&
+        step?.value?.phase === 'result',
+      JSON.stringify(resultEvents.map((e) => e.type)),
+    );
+  }
+
+  // ---- tool.step → 仅 CUSTOM（不经 TOOL_CALL_*） ----
+  {
+    const events = converter.agentEventToBaseEvent(
+      {
+        type: 'tool.step',
+        toolName: 'skill',
+        trace: {
+          phase: 'start',
+          toolName: 'skill',
+          toolCallId: 'w-abc',
+          args: { name: 'sm-report-router' },
+          result: {},
+        },
+      },
+      runId,
+    );
+    const custom = events[0] as { type?: EventType; name?: string; value?: { phase?: string; toolName?: string } };
+    check(
+      'tool.step → 仅 CUSTOM(tool.step)',
+      events.length === 1 &&
+        custom?.type === EventType.CUSTOM &&
+        custom?.name === 'tool.step' &&
+        custom?.value?.phase === 'start' &&
+        custom?.value?.toolName === 'skill',
+      JSON.stringify(events.map((e) => e.type)),
+    );
+    const frontend = converter.baseEventToFrontendMessage(events[0]!);
+    check(
+      'tool.step CUSTOM → 前端 custom 消息',
+      frontend?.type === 'custom' && frontend['eventType'] === 'tool.step',
+      JSON.stringify(frontend),
+    );
   }
 
   // ---- ui.render → ACTIVITY_SNAPSHOT（兼容） ----

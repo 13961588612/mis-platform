@@ -9,6 +9,9 @@ intent_router:
   enabled: true
   engine: model
   on_fail: fallback_primary
+  # JEV 只带最近 N 轮（user+assistant）；过长会话全量上文易把跟问误判成 rag
+  max_context_turns: 3
+  max_context_msg_chars: 240
   model:
     name: tongyi-intent-detect-v3
     timeout_ms: 2000
@@ -17,22 +20,23 @@ intent_router:
       worker_id: mis-rag
       intent: rag
       description: >-
-        制度/规章/政策/知识库问答与条文检索；非超市门店主数据、非区域门店列表、
-        非销售毛利品类报表。
+        制度/规章/政策/知识库问答与条文检索；
+        绝不提供任何销售/毛利/损耗/品类/会员/订单/账户等数据。
     crm:
       worker_id: crm-assistant
       intent: crm
       description: >-
-        客户/CRM 业务助理，会员资料，积分券账户，会员订单。
+        客户/CRM 业务助理，只处理会员相关业务：某个会员的 个人资料、积分、券、订单、交易明细等。
     spm_report:
       worker_id: spm-report
       intent: spm_report
       description: >-
+        分类级别（部门/柜组/大类/中类/小类）；
         超市/大统华经营与主数据：区域或城市有哪些门店、权限可见门店、门店列表、
-        销售/营业额/毛利/损耗/品类/周月报表；含承接上文的短跟问
-        （如「溧阳呢」「那江阴地区呢」「宜兴有哪些店」）。
+        门店级的销售/营业额/毛利/损耗/品类/周月报表；门店各分类级别/分类的销售/营业额/毛利/损耗/品类/周月报表；
     chitchat:
       worker_id: ""
       intent: chitchat
       description: >-
-        闲聊寒暄、与业务系统无关的闲谈；不需要查询门店/知识库/CRM。
+        纯闲聊寒暄、与业务系统无关的闲谈；
+        「需要」「好的」「确认」「要」等应根结合上下文建议等一起判定意图。

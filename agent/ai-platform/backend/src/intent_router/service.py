@@ -122,18 +122,23 @@ def format_conversation_context_for_jev(
     user_text: str,
     history_messages: list[dict[str, Any]] | None = None,
     *,
-    max_prior_messages: int = 6,
+    max_context_turns: int = 3,
+    max_prior_messages: int | None = None,
     max_msg_chars: int = 240,
 ) -> str:
-    """拼 JEV 用 user content：若干轮上文 + 本轮（短跟问依赖上文）。
+    """拼 JEV 用 user content：最近几轮上文 + 本轮（短跟问依赖上文）。
 
     Args:
         user_text: 本轮用户原文。
         history_messages: ``{role, content}`` 列表（可含本轮）；role 为 user/assistant。
-        max_prior_messages: 本轮之前最多保留的消息条数。
+        max_context_turns: 最近几轮（一轮按 user+assistant 计，折合 ``turns*2`` 条）。
+        max_prior_messages: 若显式传入则优先于 turns（兼容旧调用）。
         max_msg_chars: 单条截断长度（助手长文不灌满 JEV）。
     """
     current = (user_text or "").strip()
+    if max_prior_messages is None:
+        turns = max(0, int(max_context_turns))
+        max_prior_messages = turns * 2
     prior: list[dict[str, str]] = []
     for item in history_messages or []:
         if not isinstance(item, dict):
@@ -151,7 +156,9 @@ def format_conversation_context_for_jev(
         current, max_msg_chars
     ):
         prior = prior[:-1]
-    if max_prior_messages > 0 and len(prior) > max_prior_messages:
+    if max_prior_messages <= 0:
+        return current
+    if len(prior) > max_prior_messages:
         prior = prior[-max_prior_messages:]
 
     if not prior:
@@ -266,7 +273,10 @@ async def resolve_intent_route(
         decision = await evaluate_rules(user_text, cfg)
     elif cfg.engine == "model":
         ctx = (conversation_context or "").strip() or format_conversation_context_for_jev(
-            user_text, history_messages
+            user_text,
+            history_messages,
+            max_context_turns=cfg.max_context_turns,
+            max_msg_chars=cfg.max_context_msg_chars,
         )
         decision = await _resolve_model_engine(
             user_text, cfg, conversation_context=ctx or None
@@ -293,6 +303,8 @@ async def resolve_intent_route(
         detail_parts.append(f"intent={decision.intent}")
     if has_context:
         detail_parts.append("含上文")
+        if cfg.engine == "model":
+            detail_parts.append(f"上文轮次≤{cfg.max_context_turns}")
     try:
         from src.runtime.step_timing import log_turn_step
 
@@ -318,5 +330,6 @@ async def resolve_intent_route(
         latency_ms=decision.latency_ms,
         detail=decision.detail,
         has_context=has_context,
+        max_context_turns=cfg.max_context_turns if cfg.engine == "model" else None,
     )
     return decision

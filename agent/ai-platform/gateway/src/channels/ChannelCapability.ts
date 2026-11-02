@@ -25,6 +25,7 @@ export type AgentEventType =
   | 'ui.render'
   | 'approval.request'
   | 'dispatch.trace'
+  | 'tool.step'
   | 'error'
   | 'done';
 

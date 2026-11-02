@@ -154,13 +154,38 @@ def _parse_completion(response: ChatCompletion) -> LLMResponse:
     )
 
 
+def _serialize_stream_tool_call_deltas(tool_calls: Any) -> list[dict[str, Any]]:
+    """将流式 ``delta.tool_calls`` 转为可跨 chunk 拼接的 dict 列表。"""
+    if not tool_calls:
+        return []
+    result: list[dict[str, Any]] = []
+    for tool_call in tool_calls:
+        function: Any = getattr(tool_call, "function", None)
+        result.append(
+            {
+                "index": int(getattr(tool_call, "index", 0) or 0),
+                "id": getattr(tool_call, "id", None) or "",
+                "type": getattr(tool_call, "type", None) or "function",
+                "function": {
+                    "name": (getattr(function, "name", None) or "") if function else "",
+                    "arguments": (
+                        getattr(function, "arguments", None) or ""
+                    )
+                    if function
+                    else "",
+                },
+            }
+        )
+    return result
+
+
 def _parse_stream_chunk(chunk: ChatCompletionChunk) -> LLMChunk | None:
     """将单个流式 ``ChatCompletionChunk`` 解析为 ``LLMChunk``。
 
     - 无 ``choices`` 但带 ``usage``：视为末包用量事件，只填 ``usage``。
     - 无 ``choices`` 且无 ``usage``：返回 ``None``（调用方应跳过）。
-    - 有 ``choices``：从 ``delta`` 取 content / reasoning / role / finish_reason，
-      若同包带 usage 则一并挂上。
+    - 有 ``choices``：从 ``delta`` 取 content / reasoning / role / finish_reason /
+      tool_call_deltas，若同包带 usage 则一并挂上。
 
     Args:
         chunk: SDK 流式迭代中的一块。
@@ -189,6 +214,9 @@ def _parse_stream_chunk(chunk: ChatCompletionChunk) -> LLMChunk | None:
         reasoning_content=_extract_reasoning(delta),
         role=delta.role or "",
         finish_reason=choice.finish_reason or "",
+        tool_call_deltas=_serialize_stream_tool_call_deltas(
+            getattr(delta, "tool_calls", None)
+        ),
     )
     if usage is not None:
         llm_chunk.usage = TokenUsage(

@@ -399,6 +399,9 @@ async def build_native_query_engine(
     max_tokens: int = int(runtime_params.get("maxTokens", 4096))
     max_steps: int = int(runtime_params.get("maxSteps", 20))
     temperature: float = float(runtime_params.get("temperature", 0.7))
+    from src.llm.thinking import resolve_agent_enable_thinking
+
+    enable_thinking: bool | None = resolve_agent_enable_thinking(config)
 
     oh_system_prompt: Any = build_runtime_system_prompt(
         settings,
@@ -436,6 +439,7 @@ async def build_native_query_engine(
         session_id=session_id,
         user_id=user_id,
         dept=dept,
+        enable_thinking=enable_thinking,
     )
 
     mcp_identity: dict[str, str] = build_mcp_identity(

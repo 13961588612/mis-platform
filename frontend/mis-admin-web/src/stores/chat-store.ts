@@ -14,6 +14,7 @@ import type {
   DispatchTraceEntry,
   MessageStatus,
   TokenUsage,
+  ToolStep,
 } from '@/lib/chat/types';
 
 /** 会话创建/恢复状态。 */
@@ -27,6 +28,8 @@ interface ChatState {
   isGenerating: boolean;
   error: string | null;
   dispatchTrace: DispatchTraceEntry[];
+  /** 本轮工具步骤（发送时清空；供 Copilot 折叠条）。 */
+  toolSteps: ToolStep[];
   tokenUsage: TokenUsage;
   sessionState: ChatSessionState;
   /** 历史加载状态（P0-2：idle / loading / loaded / error）。 */
@@ -46,6 +49,8 @@ interface ChatState {
   setGenerating: (generating: boolean) => void;
   setError: (error: string | null) => void;
   setDispatchTrace: (entries: DispatchTraceEntry[]) => void;
+  setToolSteps: (steps: ToolStep[]) => void;
+  upsertToolStep: (step: ToolStep) => void;
   addTokenUsage: (usage: TokenUsage) => void;
   setHistoryState: (state: ChatHistoryState) => void;
   reset: () => void;
@@ -61,6 +66,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isGenerating: false,
   error: null,
   dispatchTrace: [],
+  toolSteps: [],
   tokenUsage: { ...INITIAL_TOKEN_USAGE },
   sessionState: 'none',
   historyState: 'idle',
@@ -92,6 +98,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set({
       messages: [],
       dispatchTrace: [],
+      toolSteps: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       isGenerating: false,
     }),
@@ -102,12 +109,22 @@ export const useChatStore = create<ChatState>((set) => ({
     set({
       messages,
       dispatchTrace: [],
+      toolSteps: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
     }),
 
   setGenerating: (isGenerating) => set({ isGenerating }),
   setError: (error) => set({ error }),
   setDispatchTrace: (dispatchTrace) => set({ dispatchTrace }),
+  setToolSteps: (toolSteps) => set({ toolSteps }),
+  upsertToolStep: (step) =>
+    set((state) => {
+      const idx = state.toolSteps.findIndex((s) => s.id === step.id);
+      if (idx < 0) return { toolSteps: [...state.toolSteps, step] };
+      const next = state.toolSteps.slice();
+      next[idx] = { ...next[idx], ...step };
+      return { toolSteps: next };
+    }),
 
   addTokenUsage: (usage) =>
     set((state) => ({
@@ -129,6 +146,7 @@ export const useChatStore = create<ChatState>((set) => ({
       isGenerating: false,
       error: null,
       dispatchTrace: [],
+      toolSteps: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       sessionState: 'none',
       historyState: 'idle',

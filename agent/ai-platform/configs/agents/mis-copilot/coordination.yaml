@@ -21,7 +21,6 @@ delegation:
   worker_ids:
   - crm-assistant
   - mis-rag
-  - spm-analyst
   - spm-report
   # invoke 成功且本轮仅一次委派时：跳过 Coordinator 收尾 LLM，Worker 正文透传给用户
   passthrough_workers:
