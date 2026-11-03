@@ -33,6 +33,7 @@ import java.time.Duration;
         AgentOpsProperties.class,
         EmbedIdentityProperties.class,
         IqdProperties.class,
+        AiTemplateReportProperties.class,
         BankReceiptProperties.class,
         SmpProperties.class
 })

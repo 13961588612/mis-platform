@@ -25,6 +25,7 @@
         <module>mis-taskflow</module>
         <module>mis-kb</module>
         <module>mis-iqd</module>
+        <module>mis-ai-template-report</module>
     </modules>
 
     <properties>

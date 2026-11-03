@@ -121,6 +121,8 @@ cd backend
 .\mvn.ps1 spring-boot:run -pl mis-system     # :8105
 .\mvn.ps1 spring-boot:run -pl mis-audit      # :8106
 .\mvn.ps1 spring-boot:run -pl mis-kb         # :8108
+.\mvn.ps1 spring-boot:run -pl mis-iqd        # :8109
+.\mvn.ps1 spring-boot:run -pl mis-ai-template-report  # :8110
 .\mvn.ps1 spring-boot:run -pl mis-admin-bff  # :8081
 .\mvn.ps1 spring-boot:run -pl mis-gateway    # :8080
 ```

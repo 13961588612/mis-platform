@@ -28,6 +28,7 @@ $knownServices = @(
     'mis-audit',
     'mis-kb',
     'mis-iqd',
+    'mis-ai-template-report',
     'mis-admin-bff',
     'mis-gateway'
 )

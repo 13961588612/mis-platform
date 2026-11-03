@@ -1,0 +1,20 @@
+# MIS_REMOTE=true (default) connects Nacos; local must set MIS_REMOTE=false
+spring:
+  application:
+    name: mis-ai-template-report
+  cloud:
+    nacos:
+      config:
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+      discovery:
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
