@@ -71,6 +71,21 @@ logger = get_logger("runtime.openharness")
 _TRACE_LOG_LIMIT = 1000
 
 
+def user_facing_text_for_llm_turn(
+    *,
+    buffered_parts: list[str],
+    has_tool_uses: bool,
+) -> str:
+    """决定本轮 LLM 文本是否对用户可见。
+
+    带 ``tool_uses`` 的回合里，模型常输出「I'll load the skill…」类过程旁白；
+    这些不应进入 SSE / 透传正文。仅无工具的收尾回合（最终答复）才下发。
+    """
+    if has_tool_uses:
+        return ""
+    return "".join(buffered_parts)
+
+
 def _mcp_manager_has_tools(manager: McpClientManager | None) -> bool:
     """判断 MCP 管理器是否已连接并暴露至少一个工具。"""
     if manager is None:
@@ -661,6 +676,8 @@ class OpenHarnessRuntime(AgentRuntime):
             # forceLiveQuery：拦截把历史占位复述成「正式回复」的 delta
             live_emitted_text_chars = 0
             live_suppressed_stub = False
+            # 本 LLM 回合文本先缓冲：有 tool_uses 则丢弃（过程旁白），否则整段下发
+            turn_text_parts: list[str] = []
 
             async for event in engine.submit_message(prompt):
                 step += 1
@@ -681,16 +698,24 @@ class OpenHarnessRuntime(AgentRuntime):
                         delta_text = stripped
                         if not delta_text:
                             continue
-                    if ms_to_first_text is None:
-                        ms_to_first_text = _elapsed_ms(turn_t0)
+                    # 等 AssistantTurnComplete 再决定是否对用户可见（避免工具轮旁白泄漏）
+                    turn_text_parts.append(delta_text)
                     if llm_segment_t0 is not None and llm_ttft_ms is None:
                         llm_ttft_ms = _elapsed_ms(llm_segment_t0)
-                    live_emitted_text_chars += len(delta_text)
-                    yield AgentEvent.text_delta(delta_text)
                     _log_agent_trace(
                         session_id, step=step, phase="text_delta", assistant_text=delta_text
                     )
                 elif isinstance(event, ToolExecutionStarted):
+                    if turn_text_parts:
+                        suppressed = "".join(turn_text_parts)
+                        turn_text_parts.clear()
+                        logger.info(
+                            "suppressed tool-turn scratchpad text",
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            chars=len(suppressed),
+                            preview=suppressed[:120],
+                        )
                     tool_name = str(event.tool_name or "")
                     skill_id = _skill_id_from_tool_input(tool_name, event.tool_input)
                     pending_tools.append((tool_name, skill_id, perf_counter()))
@@ -763,9 +788,8 @@ class OpenHarnessRuntime(AgentRuntime):
                         completion=usage.output_tokens,
                         total=turn_tokens,
                     )
-                    finish_reason = (
-                        "tool_calls" if event.message.tool_uses else "stop"
-                    )
+                    has_tool_uses = bool(event.message.tool_uses)
+                    finish_reason = "tool_calls" if has_tool_uses else "stop"
                     llm_turn_index += 1
                     duration_ms = (
                         _elapsed_ms(llm_segment_t0) if llm_segment_t0 is not None else 0
@@ -785,6 +809,28 @@ class OpenHarnessRuntime(AgentRuntime):
                         tokens=turn_tokens,
                         ttft_ms=llm_ttft_ms,
                     )
+                    # 无工具 → 对用户下发本轮缓冲正文；有工具 → 旁白已在 tool start 丢弃或此处再清
+                    facing = user_facing_text_for_llm_turn(
+                        buffered_parts=turn_text_parts,
+                        has_tool_uses=has_tool_uses,
+                    )
+                    turn_text_parts.clear()
+                    if not facing and not has_tool_uses:
+                        # 无增量 delta、仅有完整 message.text 时仍下发终答
+                        facing = str(event.message.text or "")
+                    if facing:
+                        if ms_to_first_text is None:
+                            ms_to_first_text = _elapsed_ms(turn_t0)
+                        live_emitted_text_chars += len(facing)
+                        yield AgentEvent.text_delta(facing)
+                    elif has_tool_uses and (event.message.text or "").strip():
+                        logger.info(
+                            "suppressed tool-turn scratchpad text",
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            chars=len(event.message.text or ""),
+                            preview=(event.message.text or "")[:120],
+                        )
                     # 若本轮无工具，下一轮（若有）从现在重新计；有工具则等工具批结束后重置
                     if finish_reason == "stop":
                         llm_segment_t0 = perf_counter()
@@ -799,6 +845,19 @@ class OpenHarnessRuntime(AgentRuntime):
                     )
                 elif isinstance(event, ErrorEvent):
                     yield AgentEvent.error("RUNTIME_ERROR", event.message)
+
+            # 引擎异常结束时：从未调工具则兜底下发缓冲；有过工具则丢弃残余旁白
+            if turn_text_parts:
+                leftover = user_facing_text_for_llm_turn(
+                    buffered_parts=list(turn_text_parts),
+                    has_tool_uses=tool_call_index > 0,
+                )
+                turn_text_parts.clear()
+                if leftover:
+                    if ms_to_first_text is None:
+                        ms_to_first_text = _elapsed_ms(turn_t0)
+                    live_emitted_text_chars += len(leftover)
+                    yield AgentEvent.text_delta(leftover)
 
             # 整轮只复述了历史占位、又没调工具：换成可读提示，避免气泡只剩机器标记
             if (

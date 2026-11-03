@@ -547,10 +547,10 @@ class Settings(BaseSettings):
     QWEN_API_KEY: str = ""
     QWEN_API_ENDPOINT: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-    # ===== 意图检测 / JEV（与主对话 QWEN_* 分离，独立 Key）=====
+    # ===== 意图检测 / JEV（与主对话 QWEN_* 分离，独立 Key；tongyi-intent-detect）=====
     INTENT_DETECT_MODEL: str = Field(
         default="tongyi-intent-detect-v3",
-        description="意图预路由专用模型（JEV）；勿写入 agent model.primary",
+        description="意图预路由专用模型（JEV / Chat Completions）；勿写入 agent model.primary",
     )
     INTENT_DETECT_API_KEY: str = Field(
         default="",
@@ -558,12 +558,35 @@ class Settings(BaseSettings):
     )
     INTENT_DETECT_ENDPOINT: str = Field(
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        description="意图检测 OpenAI 兼容 endpoint（北京专域可覆盖）",
+        description="意图检测 OpenAI 兼容 endpoint（北京专域可覆盖）；实际 POST {endpoint}/chat/completions",
     )
     INTENT_DETECT_TIMEOUT_MS: int = Field(
         default=2000,
         ge=200,
         description="单次意图检测超时（毫秒）",
+    )
+
+    # ===== 决策模型（百炼 decision-model / System One；与 INTENT_DETECT_* 并列）=====
+    DECISION_MODEL_NAME: str = Field(
+        default="decision-model-preview",
+        description="决策模型名（System One）；Coordinator intent-router.model.name 可覆盖",
+    )
+    DECISION_MODEL_API_KEY: str = Field(
+        default="",
+        description=(
+            "决策模型专用 API Key；空则回退 INTENT_DETECT_API_KEY（便于同 Key 试用）"
+        ),
+    )
+    DECISION_MODEL_ENDPOINT: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        description=(
+            "决策模型 API 前缀（北京专域可覆盖）；实际 POST {endpoint}/systemone"
+        ),
+    )
+    DECISION_MODEL_TIMEOUT_MS: int = Field(
+        default=2000,
+        ge=200,
+        description="单次决策模型调用超时（毫秒）",
     )
 
     # ===== 出站代理 =====

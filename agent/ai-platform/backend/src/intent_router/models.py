@@ -75,6 +75,8 @@ class IntentRouterConfig(BaseModel):
     max_context_turns: int = Field(default=3, ge=0, le=20)
     #: JEV 上文单条截断长度（助手长表不灌满意图模型）
     max_context_msg_chars: int = Field(default=240, ge=40, le=2000)
+    #: decision-model 置信度下限；>0 且低于此值视为未命中（走 on_fail）
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     #: 未命中时是否仍提示主模型自行判断（仅日志/观测语义）
     notes: str = ""
 

@@ -3,6 +3,7 @@
 # =============================================================================
 # 流程：规则命中 → 返回 router_skill → 运行时强制先 skill 加载该 Skill，再走 SKILL.md。
 # 任一步 when.type=jev 时调用 INTENT_DETECT_*（独立 Key），不占用 model.primary。
+# 注意：当前规则均为 keyword/always，未启用 jev 步骤 → 下方 model 块实际不生效。
 # =============================================================================
 intent_router:
   enabled: true

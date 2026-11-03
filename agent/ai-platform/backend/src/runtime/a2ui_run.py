@@ -1052,7 +1052,8 @@ class A2uiRunLoop:
                     ttft_ms=llm_duration if response.content else None,
                 )
 
-                if response.content:
+                # 有 tool_calls 时 content 多为过程旁白，不对用户展示（仍写入 llm_messages）
+                if response.content and not response.tool_calls:
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
                     assistant_parts.append(response.content)

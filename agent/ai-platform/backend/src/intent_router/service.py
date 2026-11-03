@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -18,10 +19,22 @@ logger = get_logger("intent_router.service")
 
 _CONFIG_CACHE: dict[str, tuple[float, IntentRouterConfig | None]] = {}
 _CACHE_TTL_S = 5.0
+_CONFIDENCE_RE = re.compile(r"confidence=([0-9]+(?:\.[0-9]+)?)")
 
 
 def _elapsed_ms(started: float) -> int:
     return max(0, int((perf_counter() - started) * 1000))
+
+
+def parse_confidence_from_detail(detail: str) -> float | None:
+    """从 classify 的 detail（如 ``ok;confidence=0.810``）解析置信度。"""
+    match = _CONFIDENCE_RE.search(detail or "")
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
 
 
 def intent_router_path(agent_id: str) -> Path:
@@ -118,6 +131,29 @@ def _clip_text(text: str, max_chars: int) -> str:
     return raw[: max_chars - 1] + "…"
 
 
+def _clip_message_for_intent_state(role: str, text: str, max_chars: int) -> str:
+    """拼决策 state：用户保留原问；助手剥 markdown 表/长列表，只留短摘要。"""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    if role == "assistant":
+        kept: list[str] = []
+        for line in raw.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            # 表格行与分隔线
+            if s.startswith("|"):
+                continue
+            if set(s) <= set("-|: "):
+                continue
+            kept.append(s)
+            if sum(len(x) + 1 for x in kept) >= max_chars:
+                break
+        raw = " ".join(kept) if kept else raw.splitlines()[0].strip()
+    return _clip_text(raw, max_chars)
+
+
 def format_conversation_context_for_jev(
     user_text: str,
     history_messages: list[dict[str, Any]] | None = None,
@@ -146,7 +182,9 @@ def format_conversation_context_for_jev(
         role = str(item.get("role") or "").strip().lower()
         if role not in {"user", "assistant"}:
             continue
-        content = _clip_text(str(item.get("content") or ""), max_msg_chars)
+        content = _clip_message_for_intent_state(
+            role, str(item.get("content") or ""), max_msg_chars
+        )
         if not content:
             continue
         prior.append({"role": role, "content": content})
@@ -216,6 +254,24 @@ async def _resolve_model_engine(
         timeout_ms=config.model.timeout_ms,
         conversation_context=conversation_context,
     )
+    confidence = parse_confidence_from_detail(detail)
+    min_conf = float(config.min_confidence or 0.0)
+    if (
+        tag
+        and tag in config.labels
+        and min_conf > 0
+        and confidence is not None
+        and confidence < min_conf
+    ):
+        logger.info(
+            "intent decision below min_confidence",
+            tag=tag,
+            confidence=confidence,
+            min_confidence=min_conf,
+        )
+        detail = f"low_confidence:{confidence:.3f}<{min_conf:.3f};was={tag};{detail}"
+        tag = None
+
     if tag and tag in config.labels:
         then = config.labels[tag]
         return IntentRouteDecision(
@@ -228,7 +284,12 @@ async def _resolve_model_engine(
             used_jev=True,
             latency_ms=_elapsed_ms(t0),
             detail=detail,
-            raw={"jev_ms": jev_ms, "tag": tag},
+            raw={
+                "jev_ms": jev_ms,
+                "tag": tag,
+                "confidence": confidence,
+                "min_confidence": min_conf or None,
+            },
         )
 
     if config.on_fail == "fallback_router_skill" and config.fallback_router_skill:
