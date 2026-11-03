@@ -85,6 +85,7 @@ const LazyIqdScopePage = lazy(() => import('@/features/agent/iqd/iqd-scope-page'
 const LazyIqdTestChatPage = lazy(() => import('@/features/agent/iqd/iqd-test-chat-page'));
 const LazyIqdTracePage = lazy(() => import('@/features/agent/iqd/iqd-trace-page'));
 const LazyIqdEnhancePage = lazy(() => import('@/features/agent/iqd/iqd-enhance-page'));
+const LazyIqdReportAdminPage = lazy(() => import('@/features/agent/iqd/iqd-report-admin-page'));
 const LazyIqdInstructionPage = lazy(() => import('@/features/agent/iqd/iqd-instruction-page'));
 // v1.11 建模台主页（MR-S1，T01 仅页面壳；三栏与画布在 T02 补全）
 const LazyIqdModelingPage = lazy(() => import('@/features/agent/iqd/iqd-modeling-page'));
@@ -197,6 +198,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/iqd/test-chat': LazyIqdTestChatPage,
   '/iqd/traces': LazyIqdTracePage,
   '/iqd/enhance': LazyIqdEnhancePage,
+  '/iqd/reports': LazyIqdReportAdminPage,
   '/iqd/instruction': LazyIqdInstructionPage,
   // v1.11 建模台主页（V87 sys_menu 92600 / IQD_NAV 同步登记）
   '/iqd/modeling': LazyIqdModelingPage,

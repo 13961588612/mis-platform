@@ -39,6 +39,8 @@ export const IQD_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/iqd/traces', title: '问数审计', icon: 'History' },
   // W2 增强物料 + 指令（原「脱敏与维度」+「指令下发」合并；V98 菜单改名）
   { kind: 'leaf', path: '/iqd/enhance', title: '知识与规则', icon: 'Sparkles' },
+  // 模板报告管理（V160：sys_menu 93200，path=/iqd/reports）
+  { kind: 'leaf', path: '/iqd/reports', title: '报告管理', icon: 'FileText' },
 ];
 
 /** 展平为叶节点列表（IQD_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

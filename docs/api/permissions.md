@@ -201,6 +201,13 @@ if (hasPermission('system:user:edit')) { ... }
 | iqd:enhance:view | 菜单 92521 | 含 `GET /api/v1/iqd/sql-pair-categories/tree`、`GET /api/v1/iqd/sql-pairs` |
 | iqd:enhance:save | 菜单 92522 | 含样本对分类 POST/PUT/DELETE（sys_api **92981–92983**）与样本保存 |
 
+## 9.2 模板报告（摘录，V160）
+
+| 权限码 | 菜单 | 说明 |
+|--------|------|------|
+| ai-report:view | 菜单 93201 | ping / 分类树 / 参数来源 / 工作流平台列表 / 报告 defs 读 / ACL 列表（sys_api **93211–93212,93216–93217,93220–93221,93225**） |
+| ai-report:save | 菜单 93202 | 分类/报告/工作流平台/ACL 写（sys_api **93213–93215,93218–93219,93222–93224,93226–93227**） |
+
 分类 API：`sys_api` **92980–92983** / `sys_menu_api` **92984–92987**（V148）。
 
 ## 10. 消息管理
