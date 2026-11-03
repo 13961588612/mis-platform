@@ -52,6 +52,8 @@ import { CopilotCurrentUser, useCopilotUserLabel } from '@/components/chat/Copil
 import { MessageFeedbackBar } from '@/components/chat/MessageFeedbackBar';
 import { DispatchTraceHint } from '@/components/chat/DispatchTraceHint';
 import { ToolStepsBar } from '@/components/chat/ToolStepsBar';
+import { ReportCatalogBar } from '@/components/chat/report/report-catalog-bar';
+import { ReportParamCardBubble } from '@/components/chat/report/report-param-card-bubble';
 import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
 import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
@@ -633,11 +635,24 @@ export function CopilotPanel({
                       {chat.messages.map((msg, index) => {
                         // 工具步骤统一进折叠条；气泡列表不再刷 tool 行
                         if (msg.role === 'tool') return null;
+                        if (msg.reportParamCard) {
+                          return (
+                            <ReportParamCardBubble
+                              key={msg.role + '-' + msg.id + '-' + index}
+                              message={msg}
+                              onSubmitText={(text) => {
+                                stickToBottomRef.current = true;
+                                chat.sendMessage(text);
+                              }}
+                            />
+                          );
+                        }
                         const emptyAssistant =
                           msg.role === 'assistant' &&
                           !(msg.content?.trim()) &&
                           !msg.surfaceId &&
-                          !msg.a2ui;
+                          !msg.a2ui &&
+                          !msg.reportParamCard;
                         const laterHasPayload =
                           emptyAssistant &&
                           chat.messages.slice(index + 1).some(
@@ -645,6 +660,7 @@ export function CopilotPanel({
                               m.role === 'assistant' &&
                               (Boolean(m.surfaceId) ||
                                 Boolean(m.a2ui) ||
+                                Boolean(m.reportParamCard) ||
                                 (m.content?.trim().length ?? 0) > 0),
                           );
                         const attachProgress =
@@ -701,6 +717,7 @@ export function CopilotPanel({
                 expanded && 'w-[60%] min-w-[min(100%,32rem)]',
               )}
             >
+              <ReportCatalogBar disabled={chat.isGenerating} />
               {/* 待发送附件区（P0-1.4） */}
               <AttachmentChips
                 attachments={composer.attachments}

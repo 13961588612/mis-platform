@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   DispatchTraceEntry,
   MessageStatus,
+  ReportParamCardMeta,
   TokenUsage,
   ToolStep,
 } from '@/lib/chat/types';
@@ -34,6 +35,8 @@ interface ChatState {
   sessionState: ChatSessionState;
   /** 历史加载状态（P0-2：idle / loading / loaded / error）。 */
   historyState: ChatHistoryState;
+  /** 当前可编辑的模板报告参数卡消息 id；无则 null。 */
+  activeReportCardId: string | null;
 
   setSessionId: (sessionId: string | null) => void;
   setAgentId: (agentId: string | null) => void;
@@ -53,6 +56,14 @@ interface ChatState {
   upsertToolStep: (step: ToolStep) => void;
   addTokenUsage: (usage: TokenUsage) => void;
   setHistoryState: (state: ChatHistoryState) => void;
+  setActiveReportCardId: (id: string | null) => void;
+  /** 将当前 active 参数卡标为 cancelled（灰显）；无卡则 noop。 */
+  cancelActiveReportCard: () => void;
+  /** 更新参数卡 values / state（仅当消息带 reportParamCard）。 */
+  patchReportParamCard: (
+    messageId: string,
+    patch: Partial<Pick<ReportParamCardMeta, 'values' | 'state'>>,
+  ) => void;
   reset: () => void;
 }
 
@@ -70,6 +81,7 @@ export const useChatStore = create<ChatState>((set) => ({
   tokenUsage: { ...INITIAL_TOKEN_USAGE },
   sessionState: 'none',
   historyState: 'idle',
+  activeReportCardId: null,
 
   setSessionId: (sessionId) => set({ sessionId }),
   setAgentId: (agentId) => set({ agentId }),
@@ -92,6 +104,7 @@ export const useChatStore = create<ChatState>((set) => ({
   removeMessage: (id) =>
     set((state) => ({
       messages: state.messages.filter((m) => m.id !== id),
+      activeReportCardId: state.activeReportCardId === id ? null : state.activeReportCardId,
     })),
 
   clearMessages: () =>
@@ -101,6 +114,7 @@ export const useChatStore = create<ChatState>((set) => ({
       toolSteps: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       isGenerating: false,
+      activeReportCardId: null,
     }),
 
   // 不强制清 isGenerating：历史回填若与进行中的发送竞态，清生成态会导致
@@ -111,6 +125,7 @@ export const useChatStore = create<ChatState>((set) => ({
       dispatchTrace: [],
       toolSteps: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
+      activeReportCardId: null,
     }),
 
   setGenerating: (isGenerating) => set({ isGenerating }),
@@ -137,6 +152,40 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setHistoryState: (historyState) => set({ historyState }),
 
+  setActiveReportCardId: (activeReportCardId) => set({ activeReportCardId }),
+
+  cancelActiveReportCard: () =>
+    set((state) => {
+      const id = state.activeReportCardId;
+      if (!id) return state;
+      return {
+        activeReportCardId: null,
+        messages: state.messages.map((m) => {
+          if (m.id !== id || !m.reportParamCard) return m;
+          if (m.reportParamCard.state !== 'active') return m;
+          return {
+            ...m,
+            reportParamCard: { ...m.reportParamCard, state: 'cancelled' },
+          };
+        }),
+      };
+    }),
+
+  patchReportParamCard: (messageId, patch) =>
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId || !m.reportParamCard) return m;
+        return {
+          ...m,
+          reportParamCard: {
+            ...m.reportParamCard,
+            ...patch,
+            values: patch.values ?? m.reportParamCard.values,
+          },
+        };
+      }),
+    })),
+
   reset: () =>
     set({
       sessionId: null,
@@ -150,6 +199,7 @@ export const useChatStore = create<ChatState>((set) => ({
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       sessionState: 'none',
       historyState: 'idle',
+      activeReportCardId: null,
     }),
 }));
 

@@ -1,8 +1,16 @@
 /**
- * 模板报告管理 API（BFF → mis-ai-template-report）。
+ * 模板报告管理 / Copilot 运行时 API（BFF → mis-ai-template-report）。
  */
-import { api } from '@/lib/api/client';
+import api from '@/lib/api/client';
+import { ApiError } from '@/lib/api/errors';
 import type { ApiResult } from '@/types/api';
+
+function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
+  if (res.data.code !== 0 || res.data.data === undefined || res.data.data === null) {
+    throw new ApiError(res.data.code ?? -1, res.data.message || fallback);
+  }
+  return res.data.data;
+}
 
 export interface AiReportCategory {
   id: number;
@@ -105,4 +113,62 @@ export async function updateAiReportDef(id: number, body: Record<string, unknown
 
 export async function deleteAiReportDef(id: number): Promise<void> {
   await api.delete(`/ai-reports/defs/${id}`);
+}
+
+/** Copilot 分组目录（仅 ACL 可见报告）。 */
+export interface AiReportCatalogItem {
+  report_code: string;
+  title: string;
+  description?: string | null;
+  use_ai_workflow?: boolean;
+  workflow_code?: string | null;
+  workflow_platform_code?: string | null;
+}
+
+export interface AiReportCatalogGroup {
+  group_id: number;
+  group_code: string;
+  group_name: string;
+  reports: AiReportCatalogItem[];
+}
+
+export interface AiReportParamOption {
+  value: string;
+  label: string;
+  extra?: Record<string, unknown>;
+}
+
+export interface AiReportPreparedSlot {
+  source_code: string;
+  value_type: string;
+  wire_key: string;
+  label: string;
+  required: boolean;
+  default_value?: string | null;
+  options: AiReportParamOption[];
+}
+
+export interface AiReportPrepareCard {
+  report_code: string;
+  title: string;
+  description?: string | null;
+  use_ai_workflow: boolean;
+  workflow_code?: string | null;
+  workflow_platform_code?: string | null;
+  slots: AiReportPreparedSlot[];
+}
+
+/** 无权限 / 无可选参数（前端不插卡）。 */
+export const AI_REPORT_NO_PARAM_ACCESS = 40321;
+
+export async function fetchAiReportCatalog(): Promise<AiReportCatalogGroup[]> {
+  const res = await api.get<ApiResult<AiReportCatalogGroup[]>>('/ai-reports/catalog');
+  return unwrap(res, '加载报告目录失败');
+}
+
+export async function prepareAiReportCard(reportCode: string): Promise<AiReportPrepareCard> {
+  const res = await api.post<ApiResult<AiReportPrepareCard>>('/ai-reports/prepare-card', {
+    reportCode,
+  });
+  return unwrap(res, '准备参数卡失败');
 }

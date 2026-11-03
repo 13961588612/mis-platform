@@ -81,6 +81,38 @@ export interface ChatMessage {
     rating: 'up' | 'down';
     comment?: string | null;
   };
+  /**
+   * 模板报告参数卡（S4，仅本地会话态；未提交不入历史落库）。
+   * 渲染走 ReportParamPanel，不经 A2UI。
+   */
+  reportParamCard?: ReportParamCardMeta;
+}
+
+/** 模板报告参数卡会话态。 */
+export type ReportParamCardState = 'active' | 'submitted' | 'cancelled';
+
+export interface ReportParamCardSlot {
+  source_code: string;
+  value_type: string;
+  wire_key: string;
+  label: string;
+  required: boolean;
+  options: Array<{ value: string; label: string; extra?: Record<string, unknown> }>;
+}
+
+export interface ReportParamCardMeta {
+  kind: 'report_param_card';
+  cardId: string;
+  state: ReportParamCardState;
+  reportCode: string;
+  title: string;
+  description?: string | null;
+  useAiWorkflow: boolean;
+  workflowCode?: string | null;
+  workflowPlatformCode?: string | null;
+  slots: ReportParamCardSlot[];
+  /** wire_key → 当前选值 */
+  values: Record<string, string>;
 }
 
 // ------------------------------------------------------------------ 流式事件（Gateway → 前端）

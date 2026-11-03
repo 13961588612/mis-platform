@@ -983,6 +983,9 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       if (!sid) return;
       const store = useChatStore.getState();
 
+      // 输入框发其它文本 → 失效未提交的模板报告参数卡
+      store.cancelActiveReportCard();
+
       // 同步防重：生成中 / 锁未释放 / 短时内同文（含刚答完又误触同题）
       if (store.isGenerating || sendLockRef.current) return;
       const now = Date.now();
