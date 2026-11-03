@@ -60,3 +60,5 @@ mis:
       iam: http://mis-iam:8102
   iqd:
     mdl-writeback-enabled: true
+  ai-template-report:
+    base-url: ${MIS_AI_TEMPLATE_REPORT_BASE_URL:http://mis-ai-template-report:8110}

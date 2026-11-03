@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, FileBarChart2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import {
   AI_REPORT_NO_PARAM_ACCESS,
@@ -25,14 +20,14 @@ export interface ReportCatalogBarProps {
 }
 
 /**
- * Copilot 输入框上方：按 is_group 折叠的有权限报告目录。
- * 点击报告 → prepare-card → 本地插入参数卡（失败不插卡）。
+ * Copilot 输入框上方：
+ * 图标 +「模板报告：」+ 分组标签横排；点击标签弹出纵向子报告菜单。
  */
 export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps) {
   const [groups, setGroups] = useState<AiReportCatalogGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [preparingCode, setPreparingCode] = useState<string | null>(null);
-  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+  const [openGroupId, setOpenGroupId] = useState<number | null>(null);
 
   const sessionId = useChatStore((s) => s.sessionId);
 
@@ -43,7 +38,6 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
       setGroups(Array.isArray(data) ? data.filter((g) => (g.reports?.length ?? 0) > 0) : []);
     } catch (e) {
       setGroups([]);
-      // 无权限或服务未起：静默空栏，避免打断对话
       if (import.meta.env.DEV) {
         console.warn('[ReportCatalogBar] catalog failed', e);
       }
@@ -64,6 +58,7 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
       return;
     }
     setPreparingCode(reportCode);
+    setOpenGroupId(null);
     try {
       const prepared = await prepareAiReportCard(reportCode);
       insertParamCard(sid, prepared);
@@ -83,62 +78,66 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
   }
 
   return (
-    <div className={cn('mb-2 space-y-1.5', className)}>
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <FileBarChart2 className="h-3.5 w-3.5" />
-        <span>模板报告</span>
-        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-      </div>
-      <div className="max-h-36 space-y-1 overflow-y-auto pr-0.5">
-        {groups.map((g) => {
-          const key = String(g.group_id);
-          const open = openMap[key] ?? true;
-          return (
-            <Collapsible
-              key={key}
-              open={open}
-              onOpenChange={(v) => setOpenMap((prev) => ({ ...prev, [key]: v }))}
+    <div className={cn('mb-2 flex min-w-0 flex-wrap items-center gap-1.5', className)}>
+      <FileBarChart2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="shrink-0 text-xs text-muted-foreground">模板报告：</span>
+      {loading ? <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" /> : null}
+      {groups.map((g) => {
+        const open = openGroupId === g.group_id;
+        return (
+          <Popover
+            key={g.group_id}
+            open={open}
+            onOpenChange={(next) => setOpenGroupId(next ? g.group_id : null)}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                disabled={disabled || !!preparingCode}
+                className={cn(
+                  'inline-flex h-7 max-w-[10rem] items-center gap-1 rounded-full border border-border/80 bg-background px-3 text-xs text-foreground',
+                  'hover:bg-muted/70 disabled:pointer-events-none disabled:opacity-50',
+                  open && 'border-primary/40 bg-primary/5 text-primary',
+                )}
+              >
+                <span className="truncate">{g.group_name}</span>
+                <ChevronDown
+                  className={cn('h-3 w-3 shrink-0 opacity-60 transition-transform', open && 'rotate-180')}
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              side="top"
+              sideOffset={6}
+              className="w-52 p-1"
             >
-              <CollapsibleTrigger asChild>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-medium text-foreground hover:bg-muted/60"
-                >
-                  <ChevronDown
-                    className={cn('h-3.5 w-3.5 shrink-0 transition-transform', !open && '-rotate-90')}
-                  />
-                  <span className="truncate">{g.group_name}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">
-                    {g.reports.length}
-                  </span>
-                </button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-0.5 pb-1 pl-5">
+              <ul className="max-h-56 overflow-y-auto py-0.5">
                 {g.reports.map((r) => {
                   const busy = preparingCode === r.report_code;
                   return (
-                    <Button
-                      key={r.report_code}
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={disabled || !!preparingCode || !sessionId}
-                      className="h-7 w-full justify-start px-2 text-xs font-normal"
-                      title={r.description ?? r.title}
-                      onClick={() => void openReport(r.report_code)}
-                    >
-                      {busy ? (
-                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                      ) : null}
-                      <span className="truncate">{r.title}</span>
-                    </Button>
+                    <li key={r.report_code}>
+                      <button
+                        type="button"
+                        disabled={disabled || !!preparingCode || !sessionId}
+                        title={r.description ?? r.title}
+                        className={cn(
+                          'flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-left text-xs',
+                          'hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
+                        )}
+                        onClick={() => void openReport(r.report_code)}
+                      >
+                        {busy ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" /> : null}
+                        <span className="truncate">{r.title}</span>
+                      </button>
+                    </li>
                   );
                 })}
-              </CollapsibleContent>
-            </Collapsible>
-          );
-        })}
-      </div>
+              </ul>
+            </PopoverContent>
+          </Popover>
+        );
+      })}
     </div>
   );
 }

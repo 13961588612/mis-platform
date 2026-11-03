@@ -11,16 +11,22 @@ spring:
   cloud:
     nacos:
       config:
+        # 与 bootstrap 对齐；未设 NACOS_NAMESPACE 时默认 dev，正式环境务必 export NACOS_NAMESPACE=prod
+        enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
         username: ${NACOS_USERNAME:nacos}
         password: ${NACOS_PASSWORD:nacos}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
+
   datasource:
-    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
-    username: ${DB_USER:mis}
-    password: ${DB_PASSWORD:mis123}
+    # 与 mis-admin-bff / mis-iqd 一致：优先 SPRING_DATASOURCE_*，否则 DB_*；
+    # 连 Nacos 时由 mis-common 的 spring.datasource.* 覆盖（勿依赖本文件 localhost 默认）
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10}
+    username: ${SPRING_DATASOURCE_USERNAME:${DB_USER:mis}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${DB_PASSWORD:mis123}}
+    driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:5}
       minimum-idle: ${DB_POOL_MIN_IDLE:1}
@@ -38,6 +44,7 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+
 management:
   endpoints:
     web:
@@ -50,5 +57,25 @@ management:
 
 mis:
   ai-report:
+    # 报告 ACL（角色）仍可读 IAM；槽位选项一律走 spm-big-data，不再用 IAM 门店范围
     iam:
       base-url: ${MIS_AI_REPORT_IAM_BASE_URL:http://127.0.0.1:8102}
+    datasources:
+      # 超市大数据源：JDBC 直连 StarRocks/Doris，槽位 SQL 见 SpmSlotSql
+      spm-big-data:
+        enabled: ${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}
+        # 必须是完整 JDBC，勿只写 IP。例：jdbc:mysql://10.254.2.200:9030/库名?useSSL=false
+        jdbc-url: ${MIS_AI_REPORT_SPM_BIGDATA_JDBC_URL:}
+        username: ${MIS_AI_REPORT_SPM_BIGDATA_USERNAME:}
+        password: ${MIS_AI_REPORT_SPM_BIGDATA_PASSWORD:}
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        maximum-pool-size: 3
+        # 槽位逐个对接：改对应 enabled=true
+        authorized-stores:
+          enabled: false
+        biz-dates:
+          enabled: false
+        ord-weeks:
+          enabled: false
+        ord-months:
+          enabled: false

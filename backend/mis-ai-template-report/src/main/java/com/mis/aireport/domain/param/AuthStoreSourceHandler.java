@@ -1,31 +1,23 @@
 package com.mis.aireport.domain.param;
 
-import com.mis.aireport.client.IamUserClient;
+import com.mis.aireport.datasource.spm.bigdata.SpmSlotFetchService;
+import com.mis.aireport.datasource.spm.bigdata.SpmSlotOption;
 import com.mis.aireport.domain.entity.AiParamSource;
-import com.mis.aireport.domain.entity.AiReportStoreDim;
-import com.mis.aireport.domain.repository.AiReportStoreDimRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * 按当前用户 IAM 门店范围 ∩ {@code ai_report_store_dim} 取可选门店。
- *
- * <p>dataScope=1（全部）→ 全量启用门店；CUSTOM(5) → customStoreIds；其余无门店扩展则空。
+ * 超市权限门店：经 {@code spm-big-data} JDBC SQL，不经 IAM。
  */
 @Component("AuthStoreSourceHandler")
 public class AuthStoreSourceHandler implements ParamSourceHandler {
 
-    private final IamUserClient iamUserClient;
-    private final AiReportStoreDimRepository storeDimRepository;
+    private final SpmSlotFetchService slotFetchService;
 
-    public AuthStoreSourceHandler(
-            IamUserClient iamUserClient, AiReportStoreDimRepository storeDimRepository) {
-        this.iamUserClient = iamUserClient;
-        this.storeDimRepository = storeDimRepository;
+    public AuthStoreSourceHandler(SpmSlotFetchService slotFetchService) {
+        this.slotFetchService = slotFetchService;
     }
 
     @Override
@@ -35,15 +27,8 @@ public class AuthStoreSourceHandler implements ParamSourceHandler {
 
     @Override
     public ParamResolveResult resolve(Long userId, AiParamSource source) {
-        List<AiReportStoreDim> stores = visibleStores(userId);
-        List<ParamOption> options = stores.stream()
-                .map(s -> {
-                    Map<String, Object> extra = new HashMap<>();
-                    extra.put("storeId", s.getId());
-                    extra.put("storeCode", s.getStoreCode());
-                    extra.put("storeName", s.getStoreName());
-                    return new ParamOption(s.getStoreCode(), s.getStoreName(), extra);
-                })
+        List<ParamOption> options = slotFetchService.fetchAuthorizedStores(userId).stream()
+                .map(this::toOption)
                 .toList();
         String defaultValue = options.isEmpty() ? null : options.get(0).value();
         return new ParamResolveResult(
@@ -60,18 +45,11 @@ public class AuthStoreSourceHandler implements ParamSourceHandler {
         if (!StringUtils.hasText(value)) {
             return false;
         }
-        return visibleStores(userId).stream().anyMatch(s -> value.equals(s.getStoreCode()));
+        return slotFetchService.fetchAuthorizedStores(userId).stream()
+                .anyMatch(o -> value.equals(o.value()));
     }
 
-    private List<AiReportStoreDim> visibleStores(Long userId) {
-        IamUserClient.DataScopeDto scope = iamUserClient.fetchDataScope(userId);
-        if (scope.dataScope() == 1) {
-            return storeDimRepository.findByEnabledOrderByStoreCodeAsc(1);
-        }
-        List<Long> ids = scope.customStoreIds();
-        if (ids == null || ids.isEmpty()) {
-            return List.of();
-        }
-        return storeDimRepository.findByIdInAndEnabledOrderByStoreCodeAsc(ids, 1);
+    private ParamOption toOption(SpmSlotOption o) {
+        return new ParamOption(o.value(), o.label(), o.extra());
     }
 }

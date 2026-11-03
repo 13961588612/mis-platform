@@ -481,6 +481,28 @@ export async function listSessionMessages(id: string): Promise<SessionMessage[]>
   return unwrap(res, '获取会话消息失败');
 }
 
+/** 追加会话 transcript（只落库，不跑 Agent；模板报告 execute 旁路结果）。 */
+export async function appendSessionTranscript(
+  sessionId: string,
+  messages: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    metadata?: Record<string, unknown>;
+    message_id?: string;
+  }>,
+  opts?: { agentId?: string; channel?: string },
+): Promise<{ session_id: string; appended: number }> {
+  const res = await api.post<ApiResult<{ session_id: string; appended: number }>>(
+    `/agent-ops/sessions/${seg(sessionId)}/transcript`,
+    {
+      messages,
+      agent_id: opts?.agentId || 'mis-copilot',
+      channel: opts?.channel || 'web',
+    },
+  );
+  return unwrap(res, '写入会话记录失败');
+}
+
 /** §4.3 #30 — agent:session:delete */
 export async function deleteSession(id: string): Promise<void> {
   const res = await api.delete<ApiResult<void>>(`/agent-ops/sessions/${seg(id)}`);

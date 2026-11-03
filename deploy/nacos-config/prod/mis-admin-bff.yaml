@@ -94,3 +94,7 @@ mis:
     ask-permission: ai:chat:use
     agent-id: mis-iqd
     mdl-writeback-enabled: true
+
+  # 模板报告（S1 同机 :8110；Gateway 仍走 /api/v1/** → BFF）
+  ai-template-report:
+    base-url: http://127.0.0.1:8110

@@ -21,6 +21,7 @@
 | `mis-audit.yaml` | `mis-audit` |
 | `mis-kb.yaml` | `mis-kb` |
 | `mis-iqd.yaml` | `mis-iqd` |
+| `mis-ai-template-report.yaml` | `mis-ai-template-report` |
 | `mis-admin-bff.yaml` | `mis-admin-bff` |
 
 ## 推送与核对

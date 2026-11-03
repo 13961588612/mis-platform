@@ -263,6 +263,12 @@ public class AgentOpsController {
         return Result.ok(facade.sessionMessages(id, query));
     }
 
+    /** 追加会话 transcript（模板报告等旁路结果；不跑 Agent）。 */
+    @PostMapping("/sessions/{id}/transcript")
+    public Result<JsonNode> appendTranscript(@PathVariable String id, @RequestBody JsonNode body) {
+        return Result.ok(facade.appendTranscript(id, body));
+    }
+
     /** #30 删除会话。 */
     @DeleteMapping("/sessions/{id}")
     public Result<JsonNode> deleteSession(@PathVariable String id) {

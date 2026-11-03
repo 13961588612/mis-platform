@@ -61,3 +61,5 @@ mis:
       iam: http://127.0.0.1:8102
   iqd:
     mdl-writeback-enabled: true
+  ai-template-report:
+    base-url: ${MIS_AI_TEMPLATE_REPORT_BASE_URL:http://127.0.0.1:8110}

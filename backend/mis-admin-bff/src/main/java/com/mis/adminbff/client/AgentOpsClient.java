@@ -385,6 +385,12 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SESSIONS + "/{id}/messages");
     }
 
+    /** 追加 transcript（只落库，不跑 Agent）。 */
+    public JsonNode appendTranscript(String sessionId, Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/{id}/transcript").build(sessionId), body,
+                "POST " + SESSIONS + "/{id}/transcript");
+    }
+
     /**
      * P0-1 附件上传（薄转发 ai-platform {@code POST /api/v1/files/upload}）。
      *

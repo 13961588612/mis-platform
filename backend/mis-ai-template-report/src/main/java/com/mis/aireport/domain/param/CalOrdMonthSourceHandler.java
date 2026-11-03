@@ -1,22 +1,23 @@
 package com.mis.aireport.domain.param;
 
+import com.mis.aireport.datasource.spm.bigdata.SpmSlotFetchService;
+import com.mis.aireport.datasource.spm.bigdata.SpmSlotOption;
 import com.mis.aireport.domain.entity.AiParamSource;
-import com.mis.aireport.domain.entity.AiReportCalendarMonth;
-import com.mis.aireport.domain.repository.AiReportCalendarMonthRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 
+/**
+ * 超市经营月：经 {@code spm-big-data} SQL（ADS 月表）。
+ */
 @Component("CalOrdMonthSourceHandler")
 public class CalOrdMonthSourceHandler implements ParamSourceHandler {
 
-    private final AiReportCalendarMonthRepository monthRepository;
+    private final SpmSlotFetchService slotFetchService;
 
-    public CalOrdMonthSourceHandler(AiReportCalendarMonthRepository monthRepository) {
-        this.monthRepository = monthRepository;
+    public CalOrdMonthSourceHandler(SpmSlotFetchService slotFetchService) {
+        this.slotFetchService = slotFetchService;
     }
 
     @Override
@@ -26,12 +27,8 @@ public class CalOrdMonthSourceHandler implements ParamSourceHandler {
 
     @Override
     public ParamResolveResult resolve(Long userId, AiParamSource source) {
-        int lookback = configInt(source, "lookback_months", 18);
-        LocalDate from = LocalDate.now().minusMonths(lookback).withDayOfMonth(1);
-        List<AiReportCalendarMonth> months =
-                monthRepository.findByEnabledAndMonthStartGreaterThanEqualOrderByMonthStartDesc(1, from);
-        List<ParamOption> options = months.stream()
-                .map(m -> new ParamOption(m.getOrdMonth(), m.getLabel()))
+        List<ParamOption> options = slotFetchService.fetchOrdMonthsDefaultWindow(userId).stream()
+                .map(this::toOption)
                 .toList();
         String defaultValue = options.isEmpty() ? null : options.get(0).value();
         return new ParamResolveResult(
@@ -45,19 +42,14 @@ public class CalOrdMonthSourceHandler implements ParamSourceHandler {
 
     @Override
     public boolean accepts(Long userId, AiParamSource source, String value) {
-        return StringUtils.hasText(value)
-                && monthRepository.findByOrdMonthAndEnabled(value.trim(), 1).isPresent();
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        return slotFetchService.fetchOrdMonthsDefaultWindow(userId).stream()
+                .anyMatch(o -> value.equals(o.value()));
     }
 
-    private static int configInt(AiParamSource source, String key, int defaultValue) {
-        Map<String, Object> cfg = source.getConfigJson();
-        if (cfg == null || cfg.get(key) == null) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(String.valueOf(cfg.get(key)));
-        } catch (NumberFormatException ex) {
-            return defaultValue;
-        }
+    private ParamOption toOption(SpmSlotOption o) {
+        return new ParamOption(o.value(), o.label(), o.extra());
     }
 }

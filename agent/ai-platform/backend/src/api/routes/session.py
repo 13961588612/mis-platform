@@ -5,6 +5,7 @@
 - GET    /api/v1/sessions/{session_id}    — 获取会话详情
 - DELETE /api/v1/sessions/{session_id}    — 关闭 / 删除会话
 - POST   /api/v1/sessions/{session_id}/messages — 发送消息（非流式）
+- POST   /api/v1/sessions/{session_id}/transcript — 只落库追加消息（不跑 Agent）
 - POST   /api/v1/sessions/{session_id}/feedback — 对助手回答点赞 / 吐槽
 - GET    /api/v1/sessions/{session_id}/messages — 获取会话消息
 - POST   /api/v1/sessions/route           — 路由请求（AgentRouter）
@@ -168,6 +169,31 @@ class SendMessageRequest(BaseModel):
     content: str = Field(..., description="消息内容")
     role: str = Field(default="user", description="消息角色：user | system")
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TranscriptMessageItem(BaseModel):
+    """只落库、不跑 Agent 的单条会话消息。"""
+
+    role: str = Field(..., description="user | assistant | system")
+    content: str = Field(..., description="消息正文")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    message_id: str | None = Field(default=None, description="可选消息 UUID")
+
+
+class AppendTranscriptRequest(BaseModel):
+    """追加会话 transcript（模板报告模拟结果等旁路写入）。"""
+
+    messages: list[TranscriptMessageItem] = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        description="按序追加的消息列表",
+    )
+    agent_id: str = Field(
+        default="mis-copilot",
+        description="会话不存在时 ensure 用的 Agent（前端本地 sid 尚未经 WS 建会话）",
+    )
+    channel: str = Field(default="web", description="ensure 时的渠道")
 
 
 class RouteRequest(BaseModel):
@@ -864,6 +890,89 @@ async def close_session(
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to delete session", error=str(exc), session_id=session_id)
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/{session_id}/transcript")
+async def append_transcript(
+    session_id: str,
+    req: AppendTranscriptRequest,
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    current_user: dict[str, Any] | None = Depends(get_optional_current_user),
+    mis_user_id: int | None = Depends(resolve_request_mis_user_id),
+) -> dict[str, Any]:
+    """只落库追加消息，不触发 Agent（供模板报告 execute 旁路结果写入会话管理）。
+
+    Copilot 的 sessionId 多为前端本地生成，若用户尚未经 WS 发过话，Redis/PG
+    尚无该会话；此处对齐 Gateway ``ensure_session``，按给定 sid 惰性建壳后再写消息。
+    """
+    try:
+        allowed = {"user", "assistant", "system"}
+        user_id = ""
+        user_name = ""
+        if isinstance(current_user, dict):
+            user_id = str(
+                current_user.get("user_id")
+                or current_user.get("username")
+                or current_user.get("sub")
+                or ""
+            )
+            user_name = str(
+                current_user.get("display_name")
+                or current_user.get("username")
+                or user_id
+                or ""
+            )
+        if not user_id and mis_user_id is not None:
+            user_id = str(mis_user_id)
+        if not user_id:
+            user_id = "anonymous"
+
+        agent_id = (req.agent_id or "").strip() or "mis-copilot"
+        channel = (req.channel or "").strip() or "web"
+        await session_manager.ensure_session(
+            session_id=session_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            channel=channel,
+            mis_user_id=mis_user_id,
+            user_name=user_name,
+        )
+
+        saved: list[dict[str, Any]] = []
+        for item in req.messages:
+            role = (item.role or "").strip().lower()
+            if role not in allowed:
+                return error_response(
+                    4000,
+                    f"非法 role: {item.role}",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+            content = (item.content or "").strip()
+            if not content:
+                return error_response(4000, "消息 content 不能为空", status.HTTP_400_BAD_REQUEST)
+            msg = await session_manager.add_message(
+                session_id=session_id,
+                role=role,
+                content=content,
+                metadata=item.metadata or {},
+                message_id=item.message_id,
+            )
+            saved.append(
+                {
+                    "id": msg.id,
+                    "role": msg.role,
+                    "content": msg.content,
+                }
+            )
+        return success(
+            data={"session_id": session_id, "appended": len(saved), "messages": saved},
+            message="Transcript appended",
+        )
+    except SessionNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to append transcript", error=str(exc), session_id=session_id)
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

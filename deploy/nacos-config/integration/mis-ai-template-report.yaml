@@ -1,0 +1,30 @@
+# Nacos config: mis-ai-template-report (integration)
+# 主库 PG / Redis 走共享 Data ID mis-common（与 mis-admin-bff 相同），本文件只放服务专有项。
+server:
+  port: 8110
+
+mis:
+  ai-report:
+    iam:
+      base-url: ${MIS_AI_REPORT_IAM_BASE_URL:http://127.0.0.1:8102}
+    datasources:
+      spm-big-data:
+        enabled: ${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}
+        # 必须是完整 JDBC，勿只写 IP。例：jdbc:mysql://10.254.2.200:9030/库名?useSSL=false
+        jdbc-url: ${MIS_AI_REPORT_SPM_BIGDATA_JDBC_URL:}
+        username: ${MIS_AI_REPORT_SPM_BIGDATA_USERNAME:}
+        password: ${MIS_AI_REPORT_SPM_BIGDATA_PASSWORD:}
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        maximum-pool-size: 3
+        authorized-stores:
+          enabled: false
+        biz-dates:
+          enabled: false
+        ord-weeks:
+          enabled: false
+        ord-months:
+          enabled: false
+
+logging:
+  level:
+    com.mis.aireport: DEBUG

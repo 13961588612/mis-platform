@@ -7,6 +7,7 @@ import com.mis.aireport.domain.entity.AiReportCategory;
 import com.mis.aireport.domain.entity.AiReportDef;
 import com.mis.aireport.domain.param.ParamOption;
 import com.mis.aireport.domain.param.ParamResolveResult;
+import com.mis.aireport.domain.param.ParamSourceCodes;
 import com.mis.aireport.domain.param.ParamSourceHandler;
 import com.mis.aireport.domain.param.ParamSourceHandlerRegistry;
 import com.mis.aireport.domain.repository.AiParamSourceRepository;
@@ -133,7 +134,8 @@ public class AiReportRuntimeService {
         List<Map<String, Object>> slots = def.getSlotsJson() == null ? List.of() : def.getSlotsJson();
         List<Map<String, Object>> resolvedSlots = new ArrayList<>();
         for (Map<String, Object> slot : slots) {
-            String sourceCode = String.valueOf(slot.getOrDefault("source_code", "")).trim();
+            String sourceCode = ParamSourceCodes.canonical(
+                    String.valueOf(slot.getOrDefault("source_code", "")));
             boolean required = slot.get("required") == null
                     || Boolean.TRUE.equals(slot.get("required"))
                     || "true".equalsIgnoreCase(String.valueOf(slot.get("required")));
@@ -193,7 +195,8 @@ public class AiReportRuntimeService {
         List<Map<String, Object>> slots = def.getSlotsJson() == null ? List.of() : def.getSlotsJson();
         Map<String, Object> normalized = new LinkedHashMap<>();
         for (Map<String, Object> slot : slots) {
-            String sourceCode = String.valueOf(slot.getOrDefault("source_code", "")).trim();
+            String sourceCode = ParamSourceCodes.canonical(
+                    String.valueOf(slot.getOrDefault("source_code", "")));
             boolean required = slot.get("required") == null
                     || Boolean.TRUE.equals(slot.get("required"))
                     || "true".equalsIgnoreCase(String.valueOf(slot.get("required")));
@@ -225,7 +228,7 @@ public class AiReportRuntimeService {
         }
 
         boolean useWf = def.getUseAiWorkflow() != null && def.getUseAiWorkflow() == 1;
-        // 以 def 为准，忽略客户端篡改
+        // 以 def 为准，忽略客户端篡改；当前返回模拟明细，供 Copilot 联调
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("report_code", def.getReportCode());
         result.put("title", def.getTitle());
@@ -233,10 +236,57 @@ public class AiReportRuntimeService {
         result.put("use_ai_workflow", useWf);
         result.put("workflow_code", useWf ? def.getWorkflowCode() : null);
         result.put("workflow_platform_code", useWf ? def.getWorkflowPlatformCode() : null);
-        result.put("status", "stub");
-        result.put("message", "S3 桩：参数已校验；真实取数引擎在后续阶段接入");
-        result.put("rows", List.of());
+        result.put("status", "ok");
+        result.put("message", "模拟执行成功（尚未接真实取数引擎）");
+        result.put("columns", List.of("维度", "指标", "数值", "单位"));
+        result.put("rows", buildMockRows(def.getReportCode(), normalized));
         return result;
+    }
+
+    /** 按报告编号拼几行可读模拟数据，把入参回显进结果。 */
+    private List<Map<String, Object>> buildMockRows(String reportCode, Map<String, Object> params) {
+        String store = String.valueOf(params.getOrDefault("storeName",
+                params.getOrDefault("storeId",
+                        params.getOrDefault("spmStoreId", "—"))));
+        String period = firstNonBlank(
+                params.get("spmBizDate"),
+                params.get("spmOrdWeek"),
+                params.get("spmOrdMonth"),
+                params.get("bizDate"),
+                params.get("ordWeek"),
+                params.get("ordMonth"),
+                "—");
+        List<Map<String, Object>> rows = new ArrayList<>();
+        rows.add(mockRow(store + " / " + period, "销售额", "1,286,430.50", "元"));
+        rows.add(mockRow(store + " / " + period, "客单数", "18,642", "笔"));
+        rows.add(mockRow(store + " / " + period, "毛利率", "24.6", "%"));
+        rows.add(mockRow(store + " / " + period, "来客数", "12,308", "人"));
+        if ("RPT_WEEKLY".equals(reportCode)) {
+            rows.add(mockRow(store + " / " + period, "周环比销售额", "+3.2", "%"));
+        }
+        return rows;
+    }
+
+    private static Map<String, Object> mockRow(String dim, String metric, String value, String unit) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("维度", dim);
+        row.put("指标", metric);
+        row.put("数值", value);
+        row.put("单位", unit);
+        return row;
+    }
+
+    private static String firstNonBlank(Object... values) {
+        for (Object v : values) {
+            if (v == null) {
+                continue;
+            }
+            String s = String.valueOf(v).trim();
+            if (StringUtils.hasText(s) && !"null".equalsIgnoreCase(s)) {
+                return s;
+            }
+        }
+        return "—";
     }
 
     private Set<String> allowedReportCodes(Long userId) {

@@ -12,23 +12,23 @@ function baseCard(over: Partial<ReportParamCardMeta> = {}): ReportParamCardMeta 
     useAiWorkflow: false,
     slots: [
       {
-        source_code: 'auth_store',
+        source_code: 'spm_auth_store',
         value_type: 'store',
-        wire_key: 'storeId',
-        label: '权限门店',
+        wire_key: 'spmStoreId',
+        label: '超市权限门店',
         required: true,
         options: [{ value: '6001', label: '大统华徐汇店' }],
       },
       {
-        source_code: 'cal_biz_date',
+        source_code: 'spm_cal_biz_date',
         value_type: 'biz_date',
-        wire_key: 'bizDate',
-        label: '经营日',
+        wire_key: 'spmBizDate',
+        label: '超市经营日',
         required: true,
         options: [{ value: '2026-11-02', label: '2026-11-02' }],
       },
     ],
-    values: { storeId: '6001', bizDate: '2026-11-02' },
+    values: { spmStoreId: '6001', spmBizDate: '2026-11-02' },
     ...over,
   };
 }
@@ -36,7 +36,7 @@ function baseCard(over: Partial<ReportParamCardMeta> = {}): ReportParamCardMeta 
 describe('buildReportSubmitText', () => {
   it('组装模板报告前缀与 wireKey=value', () => {
     expect(buildReportSubmitText(baseCard())).toBe(
-      '模板报告：RPT_DAILY 门店经营日报；storeId=6001（大统华徐汇店）；bizDate=2026-11-02',
+      '模板报告：RPT_DAILY 门店经营日报；spmStoreId=6001（大统华徐汇店）；spmBizDate=2026-11-02',
     );
   });
 });

@@ -14,6 +14,7 @@ import com.mis.aireport.domain.entity.AiReportAcl;
 import com.mis.aireport.domain.entity.AiReportCategory;
 import com.mis.aireport.domain.entity.AiReportDef;
 import com.mis.aireport.domain.entity.AiWorkflowPlatform;
+import com.mis.aireport.domain.param.ParamSourceCodes;
 import com.mis.aireport.domain.repository.AiParamSourceRepository;
 import com.mis.aireport.domain.repository.AiReportAclRepository;
 import com.mis.aireport.domain.repository.AiReportCategoryRepository;
@@ -326,7 +327,7 @@ public class AiReportAdminService {
             if (sc == null || !StringUtils.hasText(String.valueOf(sc))) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR, "槽位缺少 source_code");
             }
-            String sourceCode = String.valueOf(sc).trim();
+            String sourceCode = ParamSourceCodes.canonical(String.valueOf(sc));
             if (!seen.add(sourceCode)) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR, "槽位重复: " + sourceCode);
             }

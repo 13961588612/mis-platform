@@ -528,6 +528,11 @@ public class AgentOpsFacadeService {
         return client.sendChatMessage(sessionId, body);
     }
 
+    /** 追加 transcript（透传，只落库）。 */
+    public JsonNode appendTranscript(String sessionId, JsonNode body) {
+        return client.appendTranscript(sessionId, body);
+    }
+
     /**
      * P0-1 附件上传（透传 ai-platform）。
      *

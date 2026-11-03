@@ -115,6 +115,36 @@ export async function deleteAiReportDef(id: number): Promise<void> {
   await api.delete(`/ai-reports/defs/${id}`);
 }
 
+export interface AiReportAcl {
+  id: number;
+  report_code: string;
+  subject_type: string;
+  subject_id: string;
+}
+
+export async function fetchAiReportAcls(reportCode: string): Promise<AiReportAcl[]> {
+  const res = await api.get<ApiResult<AiReportAcl[]>>('/ai-reports/acls', {
+    params: { reportCode },
+  });
+  return unwrap(res, '加载报告权限失败');
+}
+
+export async function createAiReportAcl(body: {
+  report_code: string;
+  subject_type: string;
+  subject_id: string;
+}): Promise<AiReportAcl> {
+  const res = await api.post<ApiResult<AiReportAcl>>('/ai-reports/acls', body);
+  return unwrap(res, '添加报告权限失败');
+}
+
+export async function deleteAiReportAcl(id: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/ai-reports/acls/${id}`);
+  if (res.data.code !== 0) {
+    throw new ApiError(res.data.code ?? -1, res.data.message || '移除报告权限失败');
+  }
+}
+
 /** Copilot 分组目录（仅 ACL 可见报告）。 */
 export interface AiReportCatalogItem {
   report_code: string;
@@ -171,4 +201,26 @@ export async function prepareAiReportCard(reportCode: string): Promise<AiReportP
     reportCode,
   });
   return unwrap(res, '准备参数卡失败');
+}
+
+export interface AiReportExecuteResult {
+  report_code: string;
+  title: string;
+  params: Record<string, unknown>;
+  use_ai_workflow?: boolean;
+  workflow_code?: string | null;
+  workflow_platform_code?: string | null;
+  status: string;
+  message?: string;
+  columns?: string[];
+  rows?: Array<Record<string, unknown>>;
+}
+
+/** 执行报告（当前后端返回模拟明细）。body: reportCode + params(wireKey→value)。 */
+export async function executeAiReport(body: {
+  reportCode: string;
+  params: Record<string, string>;
+}): Promise<AiReportExecuteResult> {
+  const res = await api.post<ApiResult<AiReportExecuteResult>>('/ai-reports/execute', body);
+  return unwrap(res, '执行报告失败');
 }
