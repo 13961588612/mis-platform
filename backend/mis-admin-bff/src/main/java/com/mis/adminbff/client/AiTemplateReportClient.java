@@ -181,4 +181,30 @@ public class AiTemplateReportClient extends AbstractDownstreamClient {
                 .retrieve()
                 .bodyToMono(VOID_RESULT));
     }
+
+    public List<Map<String, Object>> catalog() {
+        return block(client().get()
+                .uri("/api/v1/ai-reports/catalog")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_LIST));
+    }
+
+    public Map<String, Object> prepareCard(Object body) {
+        return block(client().post()
+                .uri("/api/v1/ai-reports/prepare-card")
+                .headers(loginContextHeaders())
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    public Map<String, Object> execute(Object body) {
+        return block(client().post()
+                .uri("/api/v1/ai-reports/execute")
+                .headers(loginContextHeaders())
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
 }

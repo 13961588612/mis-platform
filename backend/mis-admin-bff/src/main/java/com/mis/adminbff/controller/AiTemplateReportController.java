@@ -120,4 +120,19 @@ public class AiTemplateReportController {
         client.deleteAcl(id);
         return Result.ok();
     }
+
+    @GetMapping("/catalog")
+    public Result<List<Map<String, Object>>> catalog() {
+        return Result.ok(client.catalog());
+    }
+
+    @PostMapping("/prepare-card")
+    public Result<Map<String, Object>> prepareCard(@RequestBody Map<String, Object> body) {
+        return Result.ok(client.prepareCard(body));
+    }
+
+    @PostMapping("/execute")
+    public Result<Map<String, Object>> execute(@RequestBody Map<String, Object> body) {
+        return Result.ok(client.execute(body));
+    }
 }

@@ -47,3 +47,8 @@ management:
     health:
       probes:
         enabled: true
+
+mis:
+  ai-report:
+    iam:
+      base-url: ${MIS_AI_REPORT_IAM_BASE_URL:http://127.0.0.1:8102}

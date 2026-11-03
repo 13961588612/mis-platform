@@ -130,7 +130,7 @@ mis-platform/
 | agent-gateway | 8200 | 1 | Mock AI |
 | mis-kb | 8108 | 1 | 知识库 |
 | mis-iqd | 8109 | 1 | 问数 |
-| mis-ai-template-report | 8110 | 1 | 模板报告（S1 骨架） |
+| mis-ai-template-report | 8110 | 1 | 模板报告（S3：catalog/prepare/execute） |
 | mis-admin-web | 5173 | 1 | 开发服务器 |
 
 > **Sprint 2 重构：** mis-user（原8102）和 mis-rbac（原8104）已取消，合并为 mis-iam（8102）。端口 8104 回收。
