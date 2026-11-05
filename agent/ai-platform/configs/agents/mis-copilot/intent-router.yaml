@@ -9,14 +9,47 @@ intent_router:
   model:
     name: decision-model-preview
     timeout_ms: 2000
-  rules: []
+  # 规则按序命中即停；日/周/月报优先于超市问数硬委派
+  rules:
+    - id: template_report_period_keywords
+      when:
+        type: keyword
+        any:
+          - 日报
+          - 周报
+          - 月报
+          - 经营日报
+          - 经营周报
+          - 经营月报
+          - 模板报告
+      then:
+        worker_id: template-report
+        intent: template_report
+    - id: template_report_open_regex
+      when:
+        type: regex
+        patterns:
+          - 打开.+(日|周|月)报
+          - 生成.+(日|周|月)报
+          - 出.+(日|周|月)报
+      then:
+        worker_id: template-report
+        intent: template_report
   labels:
+    template_report:
+      worker_id: template-report
+      intent: template_report
+      description: >-
+        打开/生成/查看固定模板报告参数卡：门店经营日报、周报、月报、模板报告。
+        正例：打开门店经营日报、出周报、生成月报。
+        反例：昨天/前天某店销售额（自然语言问数）、门店列表、制度、会员。
     spm_report:
       worker_id: spm-report
       intent: spm_report
       description: >-
-        超市/大统华：地区有哪些门店、门店列表、销售/毛利/客流/品类、日周月报表、区域跟问（金坛呢/溧阳呢）。
-        反例：制度条文、会员积分、闲聊。
+        超市/大统华自然语言问数：门店列表、区域有哪些店、销售/毛利/客流/品类、
+        昨天/前天某店销售、区域跟问（金坛呢/溧阳呢）。
+        反例：打开/生成经营日报/周报/月报或模板报告（→ template_report）；制度；会员；闲聊。
     rag:
       worker_id: mis-rag
       intent: rag

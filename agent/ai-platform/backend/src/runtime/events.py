@@ -250,6 +250,7 @@ class AgentEvent(BaseModel):
         report_code: str,
         *,
         title: str | None = None,
+        values: dict[str, str] | None = None,
     ) -> AgentEvent:
         """创建一个 ai.report.open_card 事件（前端打开模板报告参数卡）。"""
         code = (report_code or "").strip()
@@ -257,6 +258,14 @@ class AgentEvent(BaseModel):
         title_s = (title or "").strip()
         if title_s:
             payload["title"] = title_s
+        if values:
+            clean = {
+                str(k).strip(): str(v).strip()
+                for k, v in values.items()
+                if str(k).strip() and str(v).strip()
+            }
+            if clean:
+                payload["values"] = clean
         return cls(
             type=AgentEventType.REPORT_OPEN_CARD,
             trace=payload,

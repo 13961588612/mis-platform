@@ -629,12 +629,22 @@ export class EventConverter {
       '';
     const title =
       typeof payload['title'] === 'string' ? payload['title'] : undefined;
+    const rawValues = payload['values'];
+    const values: Record<string, string> = {};
+    if (rawValues != null && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+      for (const [k, v] of Object.entries(rawValues as Record<string, unknown>)) {
+        const key = String(k || '').trim();
+        const val = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+        if (key && val) values[key] = val;
+      }
+    }
     return {
       type: EventType.CUSTOM,
       name: REPORT_OPEN_CARD_EVENT_NAME,
       value: {
         reportCode,
         ...(title ? { title } : {}),
+        ...(Object.keys(values).length > 0 ? { values } : {}),
       },
     };
   }

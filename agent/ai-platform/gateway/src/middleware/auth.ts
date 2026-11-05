@@ -420,8 +420,10 @@ export function registerAuthMiddleware(
           throw agentErr;
         }
       }
-      // 将用户信息注入请求上下文
-      (req as unknown as { user: JwtClaims }).user = claims;
+      // 将用户信息注入请求上下文；保留验签通过的原始 JWT 供入站透传
+      // （Agent Core 调 BFF catalog 等需 Authorization + X-User-Id）
+      (req as unknown as { user: JwtClaims; rawToken?: string }).user = claims;
+      (req as unknown as { rawToken?: string }).rawToken = token;
     } catch (error) {
       const message =
         error instanceof AuthError

@@ -509,7 +509,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         const sid = store.sessionId;
         const code = (event.reportCode || '').trim();
         if (sid && code) {
-          void openReportParamCard(sid, code);
+          void openReportParamCard(sid, code, event.values);
         }
         break;
       }

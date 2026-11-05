@@ -1,22 +1,33 @@
 # 决策门槛与参与范围；报告列表运行时从 mis-ai-template-report catalog 拉取。
 template_report_router:
   enabled: true
-  min_confidence: 0.75
+  min_confidence: 0.45
   max_context_turns: 3
   max_context_msg_chars: 160
   model:
     name: decision-model-preview
     timeout_ms: 2000
+  # 命中后：INTENT_DETECT 抽槽；值须在 prepare-card options 内，否则用 default
+  slot_intent:
+    enabled: true
+    model:
+      # 空 = 平台 INTENT_DETECT_MODEL（tongyi-intent-detect-v3）
+      name: ""
+      timeout_ms: 2000
   # 空 = catalog 全部参与；非空则仅这些 report_code 参与决策
   participate_codes: []
   description_overrides: {}
   # catalog 不可用时的本地兜底
   reports:
-    - code: RPT_DAILY
-      title: 门店经营日报
+    - code: SPM-STORE-DAY-REPORT
+      title: 门店经营日报(超市/大统华)
       description: >-
         用户要打开/生成「门店经营日报」：日报、经营日报、日经营汇总。反例：周报、闲聊、自然语言问数。
-    - code: RPT_WEEKLY
-      title: 门店经营周报
+    - code: SPM-STORE-WEEK-REPORT
+      title: 门店经营周报(超市/大统华)
       description: >-
         用户要打开/生成「门店经营周报」：周报、经营周报。反例：日报、闲聊、自然语言问数。
+    - code: SPM-STORE-MONTH-REPORT
+      title: 门店经营月报(超市/大统华)
+      description: >-
+        用户要打开/生成「门店经营月报」：月报、经营月报。反例：日报、周报、闲聊、自然语言问数。

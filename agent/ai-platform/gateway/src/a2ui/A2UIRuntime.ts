@@ -56,6 +56,8 @@ export interface A2UIRunParams {
   h5Adapter: H5Adapter;
   /** 会话 ID */
   sessionId: string;
+  /** Gateway 验签通过的原始 JWT，写入入站 misUpstreamJwt */
+  upstreamJwt?: string;
 }
 
 /** processUserAction 参数 */
@@ -68,6 +70,8 @@ export interface A2UIProcessUserActionParams {
   action: A2uiClientAction;
   /** H5 适配器 */
   h5Adapter: H5Adapter;
+  /** Gateway 验签通过的原始 JWT */
+  upstreamJwt?: string;
 }
 
 /** runChat 参数（A2UI 启用的对话消息） */
@@ -82,6 +86,8 @@ export interface A2UIChatParams {
   h5Adapter: H5Adapter;
   /** 消息元数据（透传至 RunAgentInput.forwardedProps） */
   metadata?: Record<string, unknown>;
+  /** Gateway 验签通过的原始 JWT */
+  upstreamJwt?: string;
 }
 
 // ============================================================================
@@ -136,6 +142,7 @@ export class A2UIRuntime {
       sessionId: params.sessionId,
       userId: params.user.userId,
       roles: params.user.roles,
+      upstreamJwt: params.upstreamJwt,
       messageRouter: this.messageRouter,
       eventConverter: this.eventConverter,
     });
@@ -273,6 +280,7 @@ export class A2UIRuntime {
       user: params.user,
       h5Adapter: params.h5Adapter,
       sessionId: params.sessionId,
+      upstreamJwt: params.upstreamJwt,
     });
   }
 
@@ -321,6 +329,7 @@ export class A2UIRuntime {
       user: params.user,
       h5Adapter: params.h5Adapter,
       sessionId: params.sessionId,
+      upstreamJwt: params.upstreamJwt,
     });
   }
 }

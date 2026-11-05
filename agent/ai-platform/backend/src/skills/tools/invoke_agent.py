@@ -662,7 +662,7 @@ class InvokeAgentTool(BaseTool):
         started_at: float,
         meta: dict[str, Any],
     ) -> ToolResult:
-        """模板报告专用快路径：拉 catalog → 决策 → 抽槽 → execute / open_card / miss。"""
+        """模板报告专用快路径：拉 catalog → 决策 → 抽槽 → open_card（点卡后才 execute）/ miss。"""
         from src.agent.template_report.pipeline import run_template_report_turn
 
         user_text = ""
@@ -688,16 +688,62 @@ class InvokeAgentTool(BaseTool):
                 or child_meta.get("misUpstreamJwt")
                 or ""
             ).strip()
+        logger.info(
+            "template_report_auth_probe",
+            session_id=parent_session_id or None,
+            has_authorization=bool(authorization),
+            user_id=user_id or None,
+            mis_user_id=mis_user_id,
+            auth_source=(
+                "parent_state"
+                if parent is not None
+                and isinstance(getattr(parent, "state", None), dict)
+                and (
+                    (getattr(parent, "state", None) or {}).get("mis_upstream_jwt")
+                    or (getattr(parent, "state", None) or {}).get("misUpstreamJwt")
+                )
+                else (
+                    "meta"
+                    if (
+                        meta.get("misUpstreamJwt")
+                        or meta.get("mis_upstream_jwt")
+                        or child_meta.get("misUpstreamJwt")
+                    )
+                    else "missing"
+                )
+            ),
+        )
 
         history_messages: list[dict[str, str]] = []
         try:
-            attachments = ""
-            if isinstance(getattr(brief, "inputs", None), dict):
-                attachments = str(brief.inputs.get("attachments_text") or "")
-            # 上文已在 attachments；管线侧仍可用 user_text + 空 history
-            _ = attachments
+            # 1) 父会话近几轮（跟问「前天的」依赖上文门店/日期）
+            if parent_session_id:
+                from src.agent.session import get_session_manager
+
+                page = await get_session_manager().list_session_messages(
+                    parent_session_id, page=1, page_size=24
+                )
+                for item in getattr(page, "items", None) or []:
+                    if isinstance(item, dict):
+                        role = str(item.get("role") or "").strip().lower()
+                        content = str(item.get("content") or "").strip()
+                    else:
+                        role = str(getattr(item, "role", "") or "").strip().lower()
+                        content = str(getattr(item, "content", "") or "").strip()
+                    if role not in {"user", "assistant"} or not content:
+                        continue
+                    history_messages.append({"role": role, "content": content})
+            # 2) 硬委派 attachments 兜底（无父消息时）
+            if not history_messages and isinstance(getattr(brief, "inputs", None), dict):
+                attachments = str(brief.inputs.get("attachments_text") or "").strip()
+                if attachments:
+                    history_messages.append({"role": "user", "content": attachments})
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning(
+                "template_report history load failed",
+                session_id=parent_session_id or None,
+                exc_info=True,
+            )
 
         outcome = await run_template_report_turn(
             user_text=user_text,
@@ -713,7 +759,9 @@ class InvokeAgentTool(BaseTool):
             result_text = ""
             is_error = False
         elif outcome.kind == "error":
-            status = TaskStatus.FAILED
+            # 权限/目录失败要对用户直出；用 completed 信封，A2UI 才能透传正文
+            # （failed 无信封头会被 decide 路径当成空结果打成通用拒答）。
+            status = TaskStatus.COMPLETED
             result_text = outcome.text or "模板报告执行失败"
             is_error = True
         else:

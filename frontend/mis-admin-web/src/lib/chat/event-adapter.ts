@@ -159,9 +159,24 @@ function adaptReportOpenCard(raw: unknown): ChatStreamEvent | null {
   const reportCode = asString(data.reportCode ?? data.report_code);
   if (!reportCode) return null;
   const title = asString(data.title);
-  return title
-    ? { type: 'ai.report.open_card', reportCode, title }
-    : { type: 'ai.report.open_card', reportCode };
+  const values = asStringRecord(data.values);
+  const base = { type: 'ai.report.open_card' as const, reportCode };
+  return {
+    ...base,
+    ...(title ? { title } : {}),
+    ...(values ? { values } : {}),
+  };
+}
+
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const key = String(k || '').trim();
+    const val = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+    if (key && val) out[key] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function adaptTokenUsage(raw: unknown): TokenUsage | undefined {

@@ -9,8 +9,14 @@ from typing import Any
 def extract_slot_params(
     user_text: str,
     slots: list[dict[str, Any]],
+    *,
+    apply_defaults: bool = True,
 ) -> tuple[dict[str, str], list[str]]:
-    """抽取 ``wire_key → value``；返回 (params, missing_required_wire_keys)。"""
+    """抽取 ``wire_key → value``；返回 (params, missing_required_wire_keys)。
+
+    ``apply_defaults=False`` 时不使用槽位默认值：用于判断是否应开参数卡
+    （「打开日报」类话术常带 default，但仍应先出卡让用户确认）。
+    """
     text = (user_text or "").strip()
     params: dict[str, str] = {}
     missing: list[str] = []
@@ -25,11 +31,11 @@ def extract_slot_params(
         options = slot.get("options") if isinstance(slot.get("options"), list) else []
         value = _match_option(text, options)
         if not value:
+            value = _match_by_value_type(text, str(slot.get("value_type") or ""))
+        if not value and apply_defaults:
             default = slot.get("default_value") or slot.get("defaultValue")
             if default is not None and str(default).strip():
                 value = str(default).strip()
-        if not value:
-            value = _match_by_value_type(text, str(slot.get("value_type") or ""))
         if value:
             params[wire] = value
         elif required:

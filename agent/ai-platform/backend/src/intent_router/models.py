@@ -113,6 +113,14 @@ class TemplateReportModelRef(BaseModel):
     timeout_ms: int = 2000
 
 
+class TemplateReportSlotIntentConfig(BaseModel):
+    """命中报告后的槽位意图识别（INTENT_DETECT / tongyi-intent-detect）。"""
+
+    enabled: bool = True
+    #: name 空则用平台 ``INTENT_DETECT_MODEL``
+    model: TemplateReportModelRef = Field(default_factory=TemplateReportModelRef)
+
+
 class TemplateReportRouterConfig(BaseModel):
     """Agent 级模板报告预路由（``template-report-router.yaml``）。
 
@@ -131,6 +139,10 @@ class TemplateReportRouterConfig(BaseModel):
     description_overrides: dict[str, str] = Field(default_factory=dict)
     #: 本地兜底报告列表（catalog 不可用时）
     reports: list[TemplateReportItem] = Field(default_factory=list)
+    #: 决策命中后用意图模型抽槽（校验 options，非法回退 default）
+    slot_intent: TemplateReportSlotIntentConfig = Field(
+        default_factory=TemplateReportSlotIntentConfig
+    )
 
 
 class TemplateReportDecision(BaseModel):

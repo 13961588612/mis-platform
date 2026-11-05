@@ -111,12 +111,17 @@ describe('parseStreamLine dispatch.trace 两风格归一（F3）', () => {
       parseStreamLine({
         type: 'custom',
         eventType: 'ai.report.open_card',
-        data: { reportCode: 'RPT_DAILY', title: '门店经营日报' },
+        data: {
+          reportCode: 'RPT_DAILY',
+          title: '门店经营日报',
+          values: { spmStoreId: '0021' },
+        },
       }),
     ).toEqual({
       type: 'ai.report.open_card',
       reportCode: 'RPT_DAILY',
       title: '门店经营日报',
+      values: { spmStoreId: '0021' },
     });
   });
 

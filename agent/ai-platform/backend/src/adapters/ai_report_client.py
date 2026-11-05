@@ -148,6 +148,19 @@ class AiReportClient:
         for key, value in (ctx.extra_headers or {}).items():
             if key and value:
                 headers[str(key)] = str(value)
+        # 诊断用：不打印 token 正文
+        logger.info(
+            "ai_report_client headers",
+            has_authorization=bool(headers.get("Authorization")),
+            has_x_user_id=bool(headers.get("X-User-Id")),
+            has_platform_token=bool(headers.get("X-Platform-Token")),
+            x_user_id=headers.get("X-User-Id") or None,
+            auth_mode=(
+                "jwt"
+                if headers.get("Authorization")
+                else ("platform_token" if headers.get("X-Platform-Token") else "none")
+            ),
+        )
         return headers
 
     async def _request(

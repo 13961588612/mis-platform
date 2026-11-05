@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Literal
@@ -12,6 +13,13 @@ from src.adapters.ai_report_client import (
     AiReportClientError,
 )
 from src.agent.template_report.slot_extract import extract_slot_params
+from src.agent.template_report.slot_intent import extract_slots_with_intent_model
+from src.agent.template_report.slot_resolve import (
+    classify_slot_kind,
+    is_t1_blocked_date,
+    resolve_slots_deterministic,
+)
+from src.intent_router.service import format_conversation_context_for_jev
 from src.intent_router.template_report import (
     NONE_LABEL,
     load_template_report_router_config,
@@ -23,6 +31,7 @@ logger = get_logger("agent.template_report.pipeline")
 
 AGENT_ID = "template-report"
 OPEN_CARD_MARKER_PREFIX = "[[ai.report.open_card"
+PREFILL_MARKER_PREFIX = "[[ai.report.prefill "
 
 OutcomeKind = Literal["miss", "open_card", "executed", "error"]
 
@@ -40,23 +49,42 @@ class TemplateReportOutcome:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
-def format_open_card_body(*, report_code: str, title: str) -> str:
-    """构造带机器标记的开卡正文（Coordinator 解析后发 CUSTOM）。"""
+def format_open_card_body(
+    *,
+    report_code: str,
+    title: str,
+    prefill: dict[str, str] | None = None,
+) -> str:
+    """构造带机器标记的开卡正文（Coordinator 解析后发 CUSTOM + 前端预填）。
+
+    第三行 ``[[ai.report.prefill {...}]]`` 供解析写入开卡事件 ``values``。
+    """
     title_s = (title or report_code).strip() or report_code
     tip = f"已为您打开「{title_s}」参数卡，请确认参数后生成报告。"
-    return (
-        f"{OPEN_CARD_MARKER_PREFIX} reportCode={report_code} title={title_s}]]\n"
-        f"{tip}"
-    )
+    clean = {
+        str(k).strip(): str(v).strip()
+        for k, v in (prefill or {}).items()
+        if str(k).strip() and str(v).strip()
+    }
+    if clean:
+        tip = f"{tip}（已识别：{', '.join(f'{k}={v}' for k, v in clean.items())}）"
+    lines = [
+        f"{OPEN_CARD_MARKER_PREFIX} reportCode={report_code} title={title_s}]]",
+        tip,
+    ]
+    if clean:
+        lines.append(f"{PREFILL_MARKER_PREFIX}{json.dumps(clean, ensure_ascii=False)}]]")
+    return "\n".join(lines)
 
 
-def parse_open_card_marker(text: str) -> tuple[str, str] | None:
-    """解析开卡标记 → (report_code, title)。"""
+def parse_open_card_marker(
+    text: str,
+) -> tuple[str, str, dict[str, str]] | None:
+    """解析开卡标记 → (report_code, title, values)。"""
     raw = (text or "").strip()
     if not raw.startswith(OPEN_CARD_MARKER_PREFIX):
         return None
-    first, _, _rest = raw.partition("\n")
-    # [[ai.report.open_card reportCode=X title=Y]]
+    first, _, rest = raw.partition("\n")
     inner = first.strip()
     if inner.startswith(OPEN_CARD_MARKER_PREFIX) and inner.endswith("]]"):
         inner = inner[len(OPEN_CARD_MARKER_PREFIX) : -2].strip()
@@ -69,7 +97,24 @@ def parse_open_card_marker(text: str) -> tuple[str, str] | None:
             title = part.split("=", 1)[1].strip()
     if not report_code:
         return None
-    return report_code, title or report_code
+    values: dict[str, str] = {}
+    for line in rest.splitlines():
+        line_s = line.strip()
+        if not (
+            line_s.startswith(PREFILL_MARKER_PREFIX) and line_s.endswith("]]")
+        ):
+            continue
+        payload = line_s[len(PREFILL_MARKER_PREFIX) : -2].strip()
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                ks, vs = str(k).strip(), str(v).strip()
+                if ks and vs:
+                    values[ks] = vs
+    return report_code, title or report_code, values
 
 
 def _flatten_catalog(
@@ -116,32 +161,6 @@ def _build_decision_labels(
     return labels
 
 
-def _format_execute_markdown(data: dict[str, Any]) -> str:
-    title = str(data.get("title") or data.get("report_code") or "模板报告").strip()
-    message = str(data.get("message") or "").strip()
-    columns = data.get("columns") if isinstance(data.get("columns"), list) else []
-    rows = data.get("rows") if isinstance(data.get("rows"), list) else []
-    lines = [f"### {title}"]
-    if message:
-        lines.append(message)
-    if columns and rows:
-        cols = [str(c) for c in columns]
-        lines.append("")
-        lines.append("| " + " | ".join(cols) + " |")
-        lines.append("| " + " | ".join("---" for _ in cols) + " |")
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            lines.append(
-                "| "
-                + " | ".join(str(row.get(c, "")) for c in cols)
-                + " |"
-            )
-    elif not message:
-        lines.append("执行完成。")
-    return "\n".join(lines).strip()
-
-
 async def run_template_report_turn(
     *,
     user_text: str,
@@ -178,9 +197,21 @@ async def run_template_report_turn(
             error=str(exc),
             code=exc.code,
             session_id=session_id or None,
+            has_authorization=bool((authorization or "").strip()),
+            has_user_id=bool((user_id or "").strip() or mis_user_id is not None),
         )
+        # 权限/鉴权失败必须对用户明示，禁止再当成 miss → 通用「信息不足」
+        if exc.code in {40100, 40300, 401, 403} or "无权限" in str(exc):
+            tip = (
+                "无法打开模板报告：当前账号没有报告目录权限"
+                "（需 ai-report:view），或 Agent 调用 BFF 时身份未带上。"
+                "请确认权限后重试；若前端目录正常而对话不行，请检查会话 JWT / X-User-Id。"
+            )
+        else:
+            tip = f"无法拉取模板报告目录（{exc}），请稍后重试。"
         return TemplateReportOutcome(
-            kind="miss",
+            kind="error",
+            text=tip,
             detail=f"catalog_error:{exc}",
             latency_ms=max(0, int((perf_counter() - t0) * 1000)),
         )
@@ -188,7 +219,8 @@ async def run_template_report_turn(
     catalog_items = _flatten_catalog(groups)
     if not catalog_items:
         return TemplateReportOutcome(
-            kind="miss",
+            kind="error",
+            text="当前账号可见的模板报告目录为空，无法打开参数卡。",
             detail="empty_catalog",
             latency_ms=max(0, int((perf_counter() - t0) * 1000)),
         )
@@ -260,45 +292,149 @@ async def run_template_report_turn(
 
     title = str(prepared.get("title") or title).strip() or title
     slots = prepared.get("slots") if isinstance(prepared.get("slots"), list) else []
-    params, missing = extract_slot_params(user_text, slots)
 
-    if missing:
-        return TemplateReportOutcome(
-            kind="open_card",
-            text=format_open_card_body(report_code=report_code, title=title),
-            report_code=report_code,
-            title=title,
-            detail=f"missing_slots:{','.join(missing)}",
-            latency_ms=max(0, int((perf_counter() - t0) * 1000)),
-            raw={"params_partial": params, "missing": missing},
+    # 抽槽上文：优先外部 history；无则用空（硬委派 attachments 由 invoke 侧注入 history）
+    conv_ctx = format_conversation_context_for_jev(
+        user_text,
+        history_messages,
+        max_context_turns=int(getattr(cfg, "max_context_turns", 3) or 3),
+        max_msg_chars=max(160, int(getattr(cfg, "max_context_msg_chars", 160) or 160)),
+    )
+    if conv_ctx.strip() == (user_text or "").strip():
+        conv_ctx = ""
+
+    # 槽位观测：种类 + options 规模（维表是否从 prepare-card 拉到）
+    slot_stats: list[dict[str, Any]] = []
+    for s in slots:
+        if not isinstance(s, dict):
+            continue
+        w = str(s.get("wire_key") or s.get("wireKey") or "").strip()
+        if not w:
+            continue
+        opts = s.get("options") if isinstance(s.get("options"), list) else []
+        slot_stats.append(
+            {
+                "wire": w,
+                "kind": classify_slot_kind(s),
+                "options": len(opts),
+                "required": bool(s.get("required")),
+            }
         )
 
-    try:
-        executed = await client.execute(ctx, report_code, params)
-    except AiReportClientError as exc:
-        logger.warning(
-            "template report execute failed",
-            report_code=report_code,
-            error=str(exc),
-        )
-        return TemplateReportOutcome(
-            kind="open_card",
-            text=format_open_card_body(report_code=report_code, title=title),
-            report_code=report_code,
-            title=title,
-            detail=f"execute_error_fallback_card:{exc}",
-            latency_ms=max(0, int((perf_counter() - t0) * 1000)),
-        )
+    # 1) 确定性解析（日/周/月/门店 → options） 2) INTENT 一次补洞
+    resolved = resolve_slots_deterministic(
+        user_text, slots, conversation_context=conv_ctx
+    )
 
-    body = _format_execute_markdown(executed)
+    slot_cfg = getattr(cfg, "slot_intent", None)
+    use_slot_intent = bool(getattr(slot_cfg, "enabled", True))
+    intent_meta: dict[str, Any] = {
+        "resolved": resolved,
+        "conversation_context": bool(conv_ctx),
+        "slot_stats": slot_stats,
+    }
+    explicit: dict[str, str] = dict(resolved)
+    if use_slot_intent:
+        slot_model = getattr(slot_cfg, "model", None)
+        intent_res = await extract_slots_with_intent_model(
+            user_text,
+            slots,
+            conversation_context=conv_ctx,
+            model_name=str(getattr(slot_model, "name", "") or ""),
+            endpoint=str(getattr(slot_model, "endpoint", "") or ""),
+            timeout_ms=getattr(slot_model, "timeout_ms", None),
+        )
+        intent_meta.update(
+            {
+                "slot_intent_detail": intent_res.detail,
+                "slot_intent_ms": intent_res.latency_ms,
+                "slot_intent_raw": intent_res.raw_model,
+            }
+        )
+        if intent_res.detail == "ok" or intent_res.explicit:
+            for k, v in intent_res.explicit.items():
+                explicit.setdefault(k, v)
+        else:
+            rules_explicit, _ = extract_slot_params(
+                user_text, slots, apply_defaults=False
+            )
+            for k, v in rules_explicit.items():
+                explicit.setdefault(k, v)
+            intent_meta["fallback"] = "rules"
+    else:
+        rules_explicit, _ = extract_slot_params(
+            user_text, slots, apply_defaults=False
+        )
+        for k, v in rules_explicit.items():
+            explicit.setdefault(k, v)
+
+    params = dict(explicit)
+    missing_explicit: list[str] = []
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        wire = str(slot.get("wire_key") or slot.get("wireKey") or "").strip()
+        if not wire:
+            continue
+        required = bool(slot.get("required"))
+        if wire not in params:
+            default = slot.get("default_value") or slot.get("defaultValue")
+            if default is not None and str(default).strip():
+                params[wire] = str(default).strip()
+        if required and wire not in explicit:
+            missing_explicit.append(wire)
+    intent_meta["explicit"] = explicit
+
+    logger.info(
+        "template_report_slot_assemble",
+        session_id=session_id or None,
+        report_code=report_code,
+        resolved_keys=sorted(resolved.keys()),
+        explicit_keys=sorted(explicit.keys()),
+        missing_explicit=missing_explicit,
+        slot_stats=slot_stats,
+        has_context=bool(conv_ctx),
+    )
+
+    # 对话侧一律开参数卡，预填已识别槽；真正出数只在用户点卡确认后走前端 execute
+    tip_suffix = ""
+    detail = (
+        f"missing_slots:{','.join(missing_explicit)}"
+        if missing_explicit
+        else "open_card_await_confirm"
+    )
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        if classify_slot_kind(slot) != "date":
+            continue
+        wire = str(slot.get("wire_key") or slot.get("wireKey") or "").strip()
+        day_v = (explicit.get(wire) or params.get(wire) or "").strip()
+        if day_v and is_t1_blocked_date(day_v):
+            tip_suffix = (
+                "\n经营数据为 T+1，不提供当天及之后的数据；请改选昨天或更早日期。"
+            )
+            detail = f"t1_blocked:{wire}={day_v}"
+            # 非法日期不预填进卡，避免一点确认就带着坏值
+            explicit.pop(wire, None)
+            params.pop(wire, None)
+            break
+
     return TemplateReportOutcome(
-        kind="executed",
-        text=body,
+        kind="open_card",
+        text=format_open_card_body(
+            report_code=report_code, title=title, prefill=explicit or None
+        )
+        + tip_suffix,
         report_code=report_code,
         title=title,
-        detail="executed",
+        detail=detail,
         latency_ms=max(0, int((perf_counter() - t0) * 1000)),
-        raw={"params": params},
+        raw={
+            "params_partial": params,
+            "missing": missing_explicit,
+            **intent_meta,
+        },
     )
 
 
@@ -307,6 +443,7 @@ __all__ = [
     "AGENT_ID",
     "NONE_LABEL",
     "OPEN_CARD_MARKER_PREFIX",
+    "PREFILL_MARKER_PREFIX",
     "TemplateReportOutcome",
     "format_open_card_body",
     "parse_open_card_marker",

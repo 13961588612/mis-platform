@@ -69,6 +69,11 @@ export interface RedisStreamAgentParams {
    * 失败/空角色时兜底，避免 Copilot 问数变成零授权 45204。
    */
   roles?: string[];
+  /**
+   * Gateway 验签通过的原始 JWT（MIS RS256 或 agent HS256）。
+   * 写入入站 ``metadata.misUpstreamJwt``，供 Core 落 ``session.state`` 并调 BFF。
+   */
+  upstreamJwt?: string;
   /** 消息路由器（复用流名/亲和键约定；缺省直接写渠道入站流） */
   messageRouter?: MessageRouter;
   /** 事件转换器（可注入以复用 toolCallId 关联；缺省新建） */
@@ -87,6 +92,7 @@ export class RedisStreamAgent extends AbstractAgent {
   private readonly sessionId: string;
   private readonly userId: string;
   private readonly roles: string[];
+  private readonly upstreamJwt: string;
   private readonly messageRouter: MessageRouter | null;
   private readonly eventConverter: EventConverter;
 
@@ -101,6 +107,7 @@ export class RedisStreamAgent extends AbstractAgent {
     this.roles = Array.isArray(params.roles)
       ? params.roles.map((r) => String(r).trim()).filter((r) => r.length > 0)
       : [];
+    this.upstreamJwt = (params.upstreamJwt ?? '').trim();
     this.messageRouter = params.messageRouter ?? null;
     this.eventConverter = params.eventConverter ?? new EventConverter();
   }
@@ -242,6 +249,11 @@ export class RedisStreamAgent extends AbstractAgent {
         ...(misUserId != null ? { misUserId } : {}),
         // 验签角色兜底（非客户端 X-Mis-*）；Core enrich 在 BFF 空角色时消费。
         ...(this.roles.length > 0 ? { verified_roles: this.roles } : {}),
+        // 上游 JWT：Core `_persist_upstream_identity` → session.state.mis_upstream_jwt
+        // → template-report / 其它 BFF 调用带 Authorization。
+        ...(this.upstreamJwt.length > 0
+          ? { misUpstreamJwt: this.upstreamJwt }
+          : {}),
       },
     });
 

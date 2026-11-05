@@ -17,5 +17,6 @@ delegation:
     - template-report
     - spm-report
   hard_dispatch_workers:
-    # 模板报告不走首步探测；若需硬委派可把 template-report 加入本列表
+    # 日/周/月报规则或 JEV 命中 template-report 后直达开卡快路径（跳过选人 LLM）
+    - template-report
     - spm-report

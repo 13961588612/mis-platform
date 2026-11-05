@@ -46,6 +46,7 @@ from src.config import get_settings
 from src.coordinator.passthrough import (
     build_hard_dispatch_invoke_args,
     extract_passthrough_worker_text,
+    is_skipped_invoke_output,
     load_delegation_worker_sets,
     should_hard_dispatch,
     should_passthrough_invoke,
@@ -692,11 +693,11 @@ def _openai_tools_contain(tools: list[dict[str, Any]], name: str) -> bool:
 
 def _parse_template_open_card_from_invoke_output(
     tool_output: str,
-) -> tuple[str, str, str] | None:
+) -> tuple[str, str, str, dict[str, str]] | None:
     """解析 ``agent__invoke`` 输出中的模板报告开卡标记。
 
     Returns:
-        ``(report_code, title, tip)``；非开卡结果返回 ``None``。
+        ``(report_code, title, tip, values)``；非开卡结果返回 ``None``。
     """
     text = (tool_output or "").strip()
     body = text
@@ -708,20 +709,25 @@ def _parse_template_open_card_from_invoke_output(
     if not body:
         return None
     try:
-        from src.agent.template_report.pipeline import parse_open_card_marker
+        from src.agent.template_report.pipeline import (
+            PREFILL_MARKER_PREFIX,
+            parse_open_card_marker,
+        )
     except Exception:  # noqa: BLE001
         return None
     parsed = parse_open_card_marker(body)
     if not parsed:
         return None
-    report_code, title = parsed
-    tip_lines = body.split("\n", 1)
-    tip = (
-        tip_lines[1].strip()
-        if len(tip_lines) > 1
-        else f"已为您打开「{title}」参数卡，请确认参数后生成报告。"
+    report_code, title, values = parsed
+    tip_lines: list[str] = []
+    for line in body.split("\n")[1:]:
+        if line.strip().startswith(PREFILL_MARKER_PREFIX):
+            continue
+        tip_lines.append(line)
+    tip = "\n".join(tip_lines).strip() or (
+        f"已为您打开「{title}」参数卡，请确认参数后生成报告。"
     )
-    return report_code, title, tip
+    return report_code, title, tip, values
 
 
 def _try_json_loads(raw: str) -> Any:
@@ -1309,12 +1315,14 @@ class A2uiRunLoop:
                 hard_output = str(hard_result.get("output") or "")
                 open_card = _parse_template_open_card_from_invoke_output(hard_output)
                 if open_card:
-                    report_code, title, tip = open_card
+                    report_code, title, tip, card_values = open_card
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
                     await emit(AgentEvent.text_delta(tip))
                     await emit(
-                        AgentEvent.report_open_card(report_code, title=title)
+                        AgentEvent.report_open_card(
+                            report_code, title=title, values=card_values or None
+                        )
                     )
                     assistant_parts.append(tip)
                     completed = True
@@ -1656,12 +1664,14 @@ class A2uiRunLoop:
                         )
                     await emit(AgentEvent.tool_result(tool_name, result))
                     if open_card:
-                        report_code, title, tip = open_card
+                        report_code, title, tip, card_values = open_card
                         if ms_to_first_text is None:
                             ms_to_first_text = elapsed_ms(turn_t0)
                         await emit(AgentEvent.text_delta(tip))
                         await emit(
-                            AgentEvent.report_open_card(report_code, title=title)
+                            AgentEvent.report_open_card(
+                                report_code, title=title, values=card_values or None
+                            )
                         )
                         assistant_parts.append(tip)
                         completed = True
@@ -1727,13 +1737,15 @@ class A2uiRunLoop:
                                 inv_output
                             )
                             if card:
-                                report_code, title, tip = card
+                                report_code, title, tip, card_values = card
                                 if ms_to_first_text is None:
                                     ms_to_first_text = elapsed_ms(turn_t0)
                                 await emit(AgentEvent.text_delta(tip))
                                 await emit(
                                     AgentEvent.report_open_card(
-                                        report_code, title=title
+                                        report_code,
+                                        title=title,
+                                        values=card_values or None,
                                     )
                                 )
                                 assistant_parts.append(tip)
@@ -1741,6 +1753,17 @@ class A2uiRunLoop:
                                 pass_body = extract_passthrough_worker_text(
                                     inv_output
                                 )
+                                if not pass_body:
+                                    # skipped 空结果 → 通用拒答；其它非空正文（含权限说明）直出
+                                    raw_out = (inv_output or "").strip()
+                                    if raw_out and not is_skipped_invoke_output(
+                                        raw_out
+                                    ):
+                                        if raw_out.startswith("[task:"):
+                                            _hdr, _, rest = raw_out.partition("\n")
+                                            pass_body = rest.lstrip("\n").strip() or None
+                                        else:
+                                            pass_body = raw_out
                                 if pass_body:
                                     if ms_to_first_text is None:
                                         ms_to_first_text = elapsed_ms(turn_t0)

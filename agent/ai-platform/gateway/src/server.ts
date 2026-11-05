@@ -328,6 +328,11 @@ function registerRoutes(
       socket.close(4001, 'Authentication required');
       return;
     }
+    // 验签通过的原始 JWT（auth 中间件挂 rawToken），透传入站供 Core 调 BFF
+    const upstreamJwt =
+      typeof (req as unknown as { rawToken?: string }).rawToken === 'string'
+        ? (req as unknown as { rawToken?: string }).rawToken!.trim()
+        : '';
 
     const query = req.query as { sessionId?: string; hostId?: string; clientId?: string };
     const clientSessionId =
@@ -452,6 +457,7 @@ function registerRoutes(
                 sessionId: message.sessionId ?? clientSessionId,
                 action,
                 h5Adapter,
+                ...(upstreamJwt.length > 0 ? { upstreamJwt } : {}),
               })
               .catch((error: unknown) => {
                 logger.error(
@@ -492,6 +498,7 @@ function registerRoutes(
                 sessionId: message.sessionId ?? clientSessionId,
                 h5Adapter,
                 metadata: message.metadata,
+                ...(upstreamJwt.length > 0 ? { upstreamJwt } : {}),
               })
               .catch((error: unknown) => {
                 logger.error(
