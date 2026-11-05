@@ -37,9 +37,14 @@ SUMMARY_MAX_CHARS: int = 120
 
 
 class TaskStatus(str, Enum):
-    """委派任务终态（对齐 spec.md §7.1）。"""
+    """委派任务终态（对齐 spec.md §7.1）。
+
+    ``skipped``：Worker 主动声明「本轮不适用」（如模板报告未命中），
+    带信封头供 Coordinator 识别后继续其它路由；正文可空；不透传用户。
+    """
 
     COMPLETED = "completed"
+    SKIPPED = "skipped"
     FAILED = "failed"
     KILLED = "killed"
     TIMEOUT = "timeout"
@@ -169,8 +174,9 @@ class TaskNotification(BaseModel):
         ``TASK_NOTIFICATION_MODE=json`` 时输出紧凑 JSON。
 
         Note:
-            非 `COMPLETED` 终态**不加信封头**，逐字返回原始错误文案
-            （design-impl.md §7.6：错误路径不加头 → 既有 8 例零修改通过）。
+            - `COMPLETED` / `SKIPPED`：加信封头（skipped 供 Coordinator 识别未命中）。
+            - 其它失败终态**不加信封头**，逐字返回原始错误文案
+              （design-impl.md §7.6：错误路径不加头 → 既有断言零回归）。
 
         Args:
             mode: 显式指定渲染模式；`None` 时读取配置。
@@ -181,6 +187,9 @@ class TaskNotification(BaseModel):
         resolved = mode or resolve_notification_mode()
         if resolved == NOTIFICATION_MODE_JSON:
             return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        if self.status is TaskStatus.SKIPPED:
+            body = (self.result or "").strip()
+            return f"{self.header_line()}\n\n{body}" if body else f"{self.header_line()}\n"
         if self.status is not TaskStatus.COMPLETED:
             return self.result
         return f"{self.header_line()}\n\n{self.result}"

@@ -1,30 +1,21 @@
-# =============================================================================
-# mis-copilot — 委派协调配置
-# v1.9 / B1：worker_ids 追加 mis-iqd（问数 Worker）。
-# =============================================================================
+# 委派闸门（可派名单 / 硬委派 / 透传）
 role: coordinator
 routing_enabled: false
 delegation:
   spawn_tools_enabled: true
   enforce_task_brief: true
   max_depth: 1
-  # 问数 Worker 常拆多子问 + Wren/NL2SQL，短超时易被父会话取消（dispatch status=killed）
-  # 导致 Copilot 无表、仅有残缺 text。
-  # 须与 .env 对齐：INVOKE_AGENT_TIMEOUT_SECONDS ≥ 本值；AGENT_MESSAGE_TIMEOUT ≥ 本值+余量。
   timeout_seconds: 1680
   emit_dispatch_trace: true
   forbid_self_invoke: true
-  # 硬约束（R4/R8）：mis-admin-helper 不进 copilot（后台操作员专属，fail-closed）。
-  # 旧 mis-extract / mis-summary 已灰度下线（enabled:false），由 mis-user-helper 承接。
-  # v1.9 / B1：追加 mis-iqd（问数 Worker，role=worker、max_depth=1）。
-  # 百购经营分析走 bgbh-analyst；超市问数走 spm-analyst；超市报表走 spm-report。
   worker_ids:
-  - crm-assistant
-  - mis-rag
-  - spm-report
-  # invoke 成功且本轮仅一次委派时：跳过 Coordinator 收尾 LLM，Worker 正文透传给用户
+    - template-report
+    - crm-assistant
+    - mis-rag
+    - spm-report
   passthrough_workers:
-  - spm-report
-  # 意图预路由命中后：跳过 Coordinator 首轮 LLM，直接 agent__invoke（失败则回退软提示+主模型）
+    - template-report
+    - spm-report
   hard_dispatch_workers:
-  - spm-report
+    # 模板报告不走首步探测；若需硬委派可把 template-report 加入本列表
+    - spm-report

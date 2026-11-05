@@ -16,4 +16,5 @@ scope:
     - 制度条款检索（→ mis-rag）
 
   notes:
-    - 当前 enabled-skills 为空；无 Skill 时不得臆造报表数据
+    - 经营日数据为 T+1：不提供当天及之后；命中则早停话术，禁止空转工具链
+    - 超市即时/实时问数不在本 Agent（→ spm-analyst）

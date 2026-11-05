@@ -149,6 +149,80 @@ def test_intent_router_config_accepts_context_turns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rules_then_model_keyword_skips_jev() -> None:
+    cfg = IntentRouterConfig(
+        enabled=True,
+        engine="rules_then_model",
+        on_fail="fallback_primary",
+        rules=[
+            IntentRule(
+                id="store_list_phrases",
+                when=IntentWhen(type="keyword", any=["有哪些门店", "有哪些店"]),
+                then=IntentThen(worker_id="spm-report", intent="spm_report"),
+            )
+        ],
+        labels={
+            "spm_report": IntentThen(worker_id="spm-report", intent="spm_report"),
+            "rag": IntentThen(worker_id="mis-rag", intent="rag"),
+        },
+    )
+    with patch(
+        "src.intent_router.service.classify_intent_label",
+        new=AsyncMock(return_value=("rag", 20, "ok;confidence=0.900")),
+    ) as mocked:
+        decision = await resolve_intent_route(
+            "mis-copilot",
+            "宜兴地区有哪些门店",
+            config=cfg,
+        )
+    mocked.assert_not_awaited()
+    assert decision is not None
+    assert decision.worker_id == "spm-report"
+    assert decision.intent == "spm_report"
+    assert decision.matched_rule_id == "store_list_phrases"
+    assert decision.used_jev is False
+    assert decision.detail.startswith("rules:")
+
+
+@pytest.mark.asyncio
+async def test_rules_then_model_falls_back_to_jev() -> None:
+    cfg = IntentRouterConfig(
+        enabled=True,
+        engine="rules_then_model",
+        on_fail="none",
+        min_confidence=0.6,
+        rules=[
+            IntentRule(
+                id="store_list_phrases",
+                when=IntentWhen(type="keyword", any=["有哪些门店"]),
+                then=IntentThen(worker_id="spm-report", intent="spm_report"),
+            )
+        ],
+        labels={
+            "rag": IntentThen(
+                worker_id="mis-rag",
+                intent="rag",
+                description="制度规章",
+            ),
+        },
+    )
+    with patch(
+        "src.intent_router.service.classify_intent_label",
+        new=AsyncMock(return_value=("rag", 18, "ok;confidence=0.820")),
+    ) as mocked:
+        decision = await resolve_intent_route(
+            "mis-copilot",
+            "请假制度怎么规定",
+            config=cfg,
+        )
+    mocked.assert_awaited_once()
+    assert decision is not None
+    assert decision.worker_id == "mis-rag"
+    assert decision.used_jev is True
+    assert "rules_miss:" in (decision.detail or "")
+
+
+@pytest.mark.asyncio
 async def test_model_engine_passes_context_and_description() -> None:
     cfg = IntentRouterConfig(
         enabled=True,

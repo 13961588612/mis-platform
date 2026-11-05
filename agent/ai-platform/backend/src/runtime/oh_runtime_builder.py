@@ -412,6 +412,19 @@ async def build_native_query_engine(
     agent_prompt: Any = config.system_prompt or ""
     if config.runtime and config.runtime.prompts.get("system_prompt"):
         agent_prompt: Any = config.runtime.prompts["system_prompt"]
+    # Coordinator：system.md 占位符替换为 worker_ids + when_to_use 意图表
+    role_value = getattr(getattr(config, "role", None), "value", None) or str(
+        getattr(config, "role", "") or ""
+    )
+    if str(role_value).lower() == "coordinator" and agent_prompt:
+        try:
+            from src.coordinator.prompt_compose import compose_coordinator_system_prompt
+
+            agent_id = str(getattr(config, "agent_id", "") or getattr(config, "name", "") or "")
+            if agent_id:
+                agent_prompt = compose_coordinator_system_prompt(agent_id, str(agent_prompt))
+        except Exception:  # noqa: BLE001 - 注入失败不阻断 OH 装配
+            pass
     formal_ids_prompt: str = build_formal_skill_ids_prompt(
         skill_view.prompt_ids,
         loadable_ids=skill_view.loadable_ids,

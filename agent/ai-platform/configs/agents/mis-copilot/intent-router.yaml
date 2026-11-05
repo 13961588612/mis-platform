@@ -1,52 +1,34 @@
-# =============================================================================
-# mis-copilot — Coordinator 意图预路由（JEV 选 Worker）
-# =============================================================================
-# enabled=true 且配置 DECISION_MODEL_API_KEY（可回退 INTENT_DETECT_API_KEY）后，
-# 在主模型组 TaskBrief 前跑决策预路由（System One）。
-# description 进入 decision-model criteria；短跟问依赖运行时传入的对话上文（state）。
-# Worker 侧请用 engine=rules（见 spm-report/intent-router.yaml）。
-# =============================================================================
+# 选人：规则优先 → 未命中再 JEV（DECISION_MODEL_*）
 intent_router:
   enabled: true
-  engine: model
+  engine: rules_then_model
   on_fail: fallback_primary
-  # 置信度低于此阈值视为未命中 → on_fail（避免 0.45 误判 rag 还硬信）
   min_confidence: 0.6
-  # 决策模型只带最近 N 轮；助手长表会在拼 state 时剥表格，只留短摘要
   max_context_turns: 3
   max_context_msg_chars: 160
   model:
-    # 走 DECISION_MODEL_*（非 INTENT_DETECT_*）；名称也可被 DECISION_MODEL_NAME 文档化
     name: decision-model-preview
     timeout_ms: 2000
+  rules: []
   labels:
-    # 顺序：高频经营问数优先写在前，降低不确定时漂到 rag
     spm_report:
       worker_id: spm-report
       intent: spm_report
       description: >-
-        超市/大统华经营与报表主数据（优先选本标签）。
-        正例：某地区/城市有哪些门店、门店列表、权限可见门店；
-        某门店昨天/今日/本周/本月销售、营业额、毛利、损耗、客流；
-        品类/部门/柜组/大类/中类/小类结构；日周月报表、同比环比；
-        「金坛地区呢」「那溧阳呢」等承接上文的区域/门店/门店经营数据跟问。
-        反例：制度规章条文、会员积分券、纯闲聊。
+        超市/大统华：地区有哪些门店、门店列表、销售/毛利/客流/品类、日周月报表、区域跟问（金坛呢/溧阳呢）。
+        反例：制度条文、会员积分、闲聊。
     rag:
       worker_id: mis-rag
       intent: rag
       description: >-
-        仅制度/规章/政策/流程/知识库条文检索与解释。
-        正例：请假制度怎么规定、报销流程、公司规章条款。
-        反例（禁止选本标签）：任何门店清单、区域有哪些店、门店销售/毛利/损耗/品类/报表数字。
+        仅制度/规章/政策/流程。严禁：门店清单、区域有哪些店、销售/毛利/报表数字。
     crm:
       worker_id: crm-assistant
       intent: crm
       description: >-
-        会员/CRM：某会员资料、积分、优惠券、会员订单与交易明细。
-        反例：门店经营报表、区域门店列表、制度知识库。
+        会员/积分/券/CRM。反例：门店报表、制度知识库。
     chitchat:
       worker_id: ""
       intent: chitchat
       description: >-
-        纯闲聊寒暄、与业务系统无关；
-        「需要」「好的」「确认」「要」等短确认须结合上文判定，若上文是报表建议则不要选本标签。
+        纯闲聊。短确认（需要/好的）须结合上文；上文是报表建议则不要选本标签。

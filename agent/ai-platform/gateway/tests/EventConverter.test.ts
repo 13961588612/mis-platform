@@ -228,6 +228,38 @@ function main(): void {
     );
   }
 
+  // ---- ai.report.open_card → CUSTOM ----
+  {
+    const events = converter.agentEventToBaseEvent(
+      {
+        type: 'ai.report.open_card',
+        trace: { reportCode: 'RPT_DAILY', title: '门店经营日报' },
+      },
+      runId,
+    );
+    const custom = events[0] as {
+      type?: EventType;
+      name?: string;
+      value?: { reportCode?: string; title?: string };
+    };
+    check(
+      'ai.report.open_card → CUSTOM',
+      events.length === 1 &&
+        custom?.type === EventType.CUSTOM &&
+        custom?.name === 'ai.report.open_card' &&
+        custom?.value?.reportCode === 'RPT_DAILY',
+      JSON.stringify(events),
+    );
+    const frontend = converter.baseEventToFrontendMessage(events[0]!);
+    check(
+      'ai.report.open_card CUSTOM → 前端 custom 消息',
+      frontend?.type === 'custom' &&
+        frontend['eventType'] === 'ai.report.open_card' &&
+        (frontend['data'] as { reportCode?: string })?.reportCode === 'RPT_DAILY',
+      JSON.stringify(frontend),
+    );
+  }
+
   // ---- ui.render → ACTIVITY_SNAPSHOT（兼容） ----
   {
     const events = converter.agentEventToBaseEvent(

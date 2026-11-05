@@ -26,6 +26,7 @@ export type AgentEventType =
   | 'approval.request'
   | 'dispatch.trace'
   | 'tool.step'
+  | 'ai.report.open_card'
   | 'error'
   | 'done';
 

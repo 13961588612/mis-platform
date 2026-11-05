@@ -29,6 +29,7 @@ import { ChatWsClient } from './ws-client';
 import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
 import { summarizeToolArgs } from './tool-step-label';
 import { useEmbedStore } from '@/embed/embedStore';
+import { openReportParamCard } from '@/components/chat/report/open-report-param-card';
 
 /** 会话 id 持久化 key（Copilot 面板最近会话）。 */
 const LAST_SESSION_KEY = 'mis.copilot.lastSession';
@@ -218,6 +219,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   const sseRef = useRef<ChatSseController | null>(null);
   const wsRef = useRef<ChatWsClient | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
+  /**
+   * 工具轮旁白：收到 tool.step start 后清空助手气泡，后续 stream 视为正式结果。
+   * 透传保底整段若带上已清掉的旁白前缀（endsWith 当前正文），则忽略以免旁白回流。
+   */
+  const scratchpadClearedRef = useRef(false);
   const generateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 同步发送锁：防止 Enter 连击在 isGenerating 置位前重复提交。 */
   const sendLockRef = useRef(false);
@@ -437,6 +443,16 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         const prev = existing?.content ?? '';
         // 透传收尾整段重推：已流式到齐则跳过；若整段覆盖当前前缀则替换（补齐丢帧）。
         if (prev && delta === prev) break;
+        // 保底 dump 常含「工具前旁白 + 终稿」；旁白已被 tool.step 清掉时勿再拼回。
+        if (
+          scratchpadClearedRef.current &&
+          prev &&
+          delta.length > prev.length &&
+          delta.endsWith(prev) &&
+          !delta.startsWith(prev)
+        ) {
+          break;
+        }
         const nextContent =
           prev && delta.startsWith(prev) && delta.length > prev.length
             ? delta
@@ -470,6 +486,31 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
       case 'tool.step': {
         applyToolStepEvent(store, event);
+        // 仅 Worker 内部工具开始时清旁白；agent__invoke 本身不清（否则委派探测/硬委派
+        // 会把气泡打成「正在思考」且步骤长期停在「委派执行」）。
+        const toolName = (event.toolName ?? '').trim();
+        if (
+          event.phase === 'start' &&
+          toolName &&
+          toolName !== 'agent__invoke' &&
+          shouldAcceptStreamFrame(store)
+        ) {
+          const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
+          const existing = store.messages.find((m) => m.id === targetId);
+          if (existing && (existing.content ?? '').length > 0) {
+            store.updateMessage(targetId, { content: '', status: 'streaming' });
+          }
+          scratchpadClearedRef.current = true;
+        }
+        break;
+      }
+
+      case 'ai.report.open_card': {
+        const sid = store.sessionId;
+        const code = (event.reportCode || '').trim();
+        if (sid && code) {
+          void openReportParamCard(sid, code);
+        }
         break;
       }
 
@@ -477,6 +518,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         // 回合结束收起顶部步骤/调度条，避免一直挂在对话顶
         store.setToolSteps([]);
         store.setDispatchTrace([]);
+        scratchpadClearedRef.current = false;
         const streamingId = streamingMessageIdRef.current;
         const streamingMsg = streamingId
           ? store.messages.find((m) => m.id === streamingId)
@@ -544,6 +586,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           streamingMessageIdRef.current = null;
         }
         store.setError(`错误 [${event.errorCode ?? 'unknown'}]: ${event.message}`);
+        scratchpadClearedRef.current = false;
         store.setGenerating(false);
         sendLockRef.current = false;
         break;
@@ -560,6 +603,15 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         const existing = store.messages.find((m) => m.id === targetId);
         const prev = existing?.content ?? '';
         if (prev && delta === prev) break;
+        if (
+          scratchpadClearedRef.current &&
+          prev &&
+          delta.length > prev.length &&
+          delta.endsWith(prev) &&
+          !delta.startsWith(prev)
+        ) {
+          break;
+        }
         const nextContent =
           prev && delta.startsWith(prev) && delta.length > prev.length
             ? delta
@@ -578,6 +630,19 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           toolName: event.toolName,
           args: event.args,
         });
+        const callName = (event.toolName ?? '').trim();
+        if (
+          callName &&
+          callName !== 'agent__invoke' &&
+          shouldAcceptStreamFrame(store)
+        ) {
+          const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
+          const existing = store.messages.find((m) => m.id === targetId);
+          if (existing && (existing.content ?? '').length > 0) {
+            store.updateMessage(targetId, { content: '', status: 'streaming' });
+          }
+          scratchpadClearedRef.current = true;
+        }
         // 旧协议仍写入 tool 气泡（运营台兼容）；Copilot 折叠条另读 toolSteps。
         store.addMessage({
           id: generateClientId('msg'),
@@ -1022,6 +1087,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         agentId: store.agentId ?? undefined,
       });
       streamingMessageIdRef.current = assistantId;
+      scratchpadClearedRef.current = false;
       store.setGenerating(true);
       armGenerateTimeout();
       store.setDispatchTrace([]);

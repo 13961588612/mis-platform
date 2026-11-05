@@ -106,6 +106,30 @@ describe('parseStreamLine dispatch.trace 两风格归一（F3）', () => {
     });
   });
 
+  it('custom ai.report.open_card → 内部 open_card 事件', () => {
+    expect(
+      parseStreamLine({
+        type: 'custom',
+        eventType: 'ai.report.open_card',
+        data: { reportCode: 'RPT_DAILY', title: '门店经营日报' },
+      }),
+    ).toEqual({
+      type: 'ai.report.open_card',
+      reportCode: 'RPT_DAILY',
+      title: '门店经营日报',
+    });
+  });
+
+  it('ai.report.open_card 缺 reportCode → null', () => {
+    expect(
+      parseStreamLine({
+        type: 'custom',
+        eventType: 'ai.report.open_card',
+        data: { title: '无 code' },
+      }),
+    ).toBeNull();
+  });
+
   it('data 缺 entries / 非数组 → 空 entries（防御，不抛）', () => {
     expect(parseStreamLine({ type: 'custom', eventType: 'dispatch.trace', data: {} })).toEqual({
       type: 'dispatch.trace',

@@ -3,16 +3,9 @@ import { ChevronDown, FileBarChart2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import {
-  AI_REPORT_NO_PARAM_ACCESS,
-  fetchAiReportCatalog,
-  prepareAiReportCard,
-  type AiReportCatalogGroup,
-  type AiReportPrepareCard,
-} from '@/lib/api/ai-report';
-import { ApiError } from '@/lib/api/errors';
-import { generateClientId, type ReportParamCardMeta } from '@/lib/chat/types';
+import { fetchAiReportCatalog, type AiReportCatalogGroup } from '@/lib/api/ai-report';
 import { useChatStore } from '@/stores/chat-store';
+import { openReportParamCard } from './open-report-param-card';
 
 export interface ReportCatalogBarProps {
   disabled?: boolean;
@@ -60,14 +53,7 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
     setPreparingCode(reportCode);
     setOpenGroupId(null);
     try {
-      const prepared = await prepareAiReportCard(reportCode);
-      insertParamCard(sid, prepared);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === AI_REPORT_NO_PARAM_ACCESS) {
-        toast.message('无权限或无可选参数');
-      } else {
-        toast.error(e instanceof Error ? e.message : '打开报告失败');
-      }
+      await openReportParamCard(sid, reportCode);
     } finally {
       setPreparingCode(null);
     }
@@ -140,59 +126,4 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
       })}
     </div>
   );
-}
-
-function insertParamCard(sessionId: string, prepared: AiReportPrepareCard): void {
-  const store = useChatStore.getState();
-  store.cancelActiveReportCard();
-
-  const values: Record<string, string> = {};
-  for (const slot of prepared.slots ?? []) {
-    const def = slot.default_value;
-    if (def != null && String(def).trim()) {
-      values[slot.wire_key] = String(def).trim();
-    } else if (slot.options?.[0]?.value) {
-      values[slot.wire_key] = slot.options[0].value;
-    } else {
-      values[slot.wire_key] = '';
-    }
-  }
-
-  const cardId = generateClientId('rptcard');
-  const messageId = generateClientId('msg');
-  const meta: ReportParamCardMeta = {
-    kind: 'report_param_card',
-    cardId,
-    state: 'active',
-    reportCode: prepared.report_code,
-    title: prepared.title,
-    description: prepared.description,
-    useAiWorkflow: Boolean(prepared.use_ai_workflow),
-    workflowCode: prepared.workflow_code,
-    workflowPlatformCode: prepared.workflow_platform_code,
-    slots: (prepared.slots ?? []).map((s) => ({
-      source_code: s.source_code,
-      value_type: s.value_type,
-      wire_key: s.wire_key,
-      label: s.label,
-      required: Boolean(s.required),
-      options: (s.options ?? []).map((o) => ({
-        value: o.value,
-        label: o.label,
-        extra: o.extra,
-      })),
-    })),
-    values,
-  };
-
-  store.addMessage({
-    id: messageId,
-    sessionId,
-    role: 'assistant',
-    content: '',
-    status: 'delivered',
-    timestamp: new Date().toISOString(),
-    reportParamCard: meta,
-  });
-  store.setActiveReportCardId(messageId);
 }

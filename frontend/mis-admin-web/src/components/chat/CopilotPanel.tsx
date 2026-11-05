@@ -54,6 +54,8 @@ import { DispatchTraceHint } from '@/components/chat/DispatchTraceHint';
 import { ToolStepsBar } from '@/components/chat/ToolStepsBar';
 import { ReportCatalogBar } from '@/components/chat/report/report-catalog-bar';
 import { ReportParamCardBubble } from '@/components/chat/report/report-param-card-bubble';
+import { parseReportSubmitDisplay } from '@/components/chat/report/build-report-submit-text';
+import { ReportSubmitUserBody } from '@/components/chat/report/report-submit-user-body';
 import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
 import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
@@ -366,7 +368,7 @@ export function CopilotPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 新消息 / 流式更新 / 思考态 → 仅在贴底时跟随；用 auto 避免「从顶 smooth 滑到底」
+  // 新消息 / 流式更新 / 思考态 / 步骤条 → 仅在贴底时跟随；用 auto 避免「从顶 smooth 滑到底」
   const lastContentLen =
     chat.messages.length > 0 ? (chat.messages[chat.messages.length - 1]?.content?.length ?? 0) : 0;
   useEffect(() => {
@@ -377,7 +379,14 @@ export function CopilotPanel({
       return;
     }
     messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'auto' });
-  }, [chat.messages.length, lastContentLen, chat.isGenerating, orphanSurface]);
+  }, [
+    chat.messages.length,
+    lastContentLen,
+    chat.isGenerating,
+    orphanSurface,
+    toolSteps.length,
+    dispatchTrace.length,
+  ]);
 
   const canSend =
     !chat.isGenerating &&
@@ -840,6 +849,7 @@ function ChatBubble({
       : [];
   const sources = mergeKbSources(contentSplit.sources, surfaceSources);
   const body = contentSplit.body;
+  const reportSubmitDisplay = isUser ? parseReportSubmitDisplay(rawContent) : null;
 
   // 仅隐藏「空助手」重复气泡；用户 / 系统消息绝不能被藏掉
   if (hideEmptyDuplicate && message.role === 'assistant') {
@@ -921,7 +931,16 @@ function ChatBubble({
       <KbSourceHostProvider mode="host">
         {isUser ? (
           showBody ? (
-            <p className="whitespace-pre-wrap break-words text-primary-foreground">{rawContent}</p>
+            reportSubmitDisplay ? (
+              <ReportSubmitUserBody
+                summary={reportSubmitDisplay.summary}
+                detail={reportSubmitDisplay.detail}
+              />
+            ) : (
+              <p className="whitespace-pre-wrap break-words text-primary-foreground">
+                {rawContent}
+              </p>
+            )
           ) : message.attachments && message.attachments.length > 0 ? null : (
             <p className="text-xs text-primary-foreground/70">（无文本）</p>
           )

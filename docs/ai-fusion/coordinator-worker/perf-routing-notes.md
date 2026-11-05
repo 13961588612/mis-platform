@@ -18,6 +18,8 @@
 | 能力 | 说明 | 速度影响 |
 |------|------|----------|
 | 硬委派 `hard_dispatch_workers` | JEV/规则命中白名单 Worker → 跳过 Coordinator 首轮 LLM，直接 `agent__invoke` | 选人 LLM ≈ 0 |
+| 规则优先 `rules_then_model` | 高精度 keyword 先命中 → 同上硬委派；未命中再 JEV | 少漂 rag、少进选人 LLM |
+| 精简 `system.md` | 唯一选人 prompt（短意图表 + 薄 invoke 入参）；缺 brief 时模板补全 | 选人 LLM 输入更短 |
 | 透传收尾 `passthrough_workers` | 成功 invoke 且本轮仅一次委派 → 跳过 Coordinator 收尾 LLM，Worker 正文直出 | 复述 LLM ≈ 0 |
 | JEV 近轮上文 | `max_context_turns` 限制进入 JEV 的对话轮次 | 跟问更稳进正确 Worker；JEV 输入更短 |
 | 硬委派 TaskBrief 上文 | 近几轮写入 `attachments_text` +「已确认条件一律沿用」约束 | 减少重复选店/选时间 |
@@ -76,12 +78,20 @@ delegation:
 ```yaml
 intent_router:
   enabled: true
-  engine: model
+  engine: rules_then_model      # 规则兜底 → 未命中再 JEV
   max_context_turns: 3          # 一轮 ≈ user+assistant；折合最多 6 条进 JEV
-  max_context_msg_chars: 240    # JEV 单条截断（助手长表不会灌满）
+  max_context_msg_chars: 160
+  min_confidence: 0.6
 ```
 
-前提：`INTENT_DETECT_*`（含 API Key）已配置，否则无 JEV、硬委派不触发。
+前提：`DECISION_MODEL_*` / `INTENT_DETECT_*`（含 API Key）已配置，否则无 JEV、硬委派不触发。
+
+### 4.2.1 正常选人 prompt（未硬委派时）
+
+| 项 | 位置 | 行为 |
+|----|------|------|
+| 唯一 prompt | `runtime/prompts/system.md` | 短意图表 + 薄 `agent__invoke` 入参说明 |
+| 模板 brief | `enrich_invoke_args_with_template` | LLM 未给完整 brief 时按硬委派模板补全 |
 
 ### 4.3 环境变量（`backend/.env`）
 
@@ -126,12 +136,14 @@ intent_router:
 | 类型 | 路径 |
 |------|------|
 | 硬委派 / 透传 | `agent/ai-platform/backend/src/coordinator/passthrough.py` |
+| TaskBrief 模板补全 | `agent/ai-platform/backend/src/coordinator/routing_llm.py` |
 | A2UI 主路径 | `agent/ai-platform/backend/src/runtime/a2ui_run.py` |
 | JEV 服务 | `agent/ai-platform/backend/src/intent_router/` |
 | continue 开关 | `config.INVOKE_AGENT_CONTINUE_ENABLED` ← `invoke_agent._resolve_continue_session` |
 | 协调配置 | `configs/agents/mis-copilot/coordination.yaml` |
-| JEV 配置 | `configs/agents/mis-copilot/intent-router.yaml` |
-| 单测 | `tests/test_coordinator_passthrough.py`、`tests/test_intent_router.py` |
+| JEV / 规则 | `configs/agents/mis-copilot/intent-router.yaml` |
+| 选人 prompt | `configs/agents/mis-copilot/runtime/prompts/system.md` |
+| 单测 | `tests/test_coordinator_passthrough.py`、`tests/test_intent_router.py`、`tests/test_routing_llm.py` |
 
 ## 9. 会话详情「逐步耗时」（timing schema v3）
 

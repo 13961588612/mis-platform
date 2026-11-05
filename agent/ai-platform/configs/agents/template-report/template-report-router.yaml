@@ -1,0 +1,22 @@
+# 决策门槛与参与范围；报告列表运行时从 mis-ai-template-report catalog 拉取。
+template_report_router:
+  enabled: true
+  min_confidence: 0.75
+  max_context_turns: 3
+  max_context_msg_chars: 160
+  model:
+    name: decision-model-preview
+    timeout_ms: 2000
+  # 空 = catalog 全部参与；非空则仅这些 report_code 参与决策
+  participate_codes: []
+  description_overrides: {}
+  # catalog 不可用时的本地兜底
+  reports:
+    - code: RPT_DAILY
+      title: 门店经营日报
+      description: >-
+        用户要打开/生成「门店经营日报」：日报、经营日报、日经营汇总。反例：周报、闲聊、自然语言问数。
+    - code: RPT_WEEKLY
+      title: 门店经营周报
+      description: >-
+        用户要打开/生成「门店经营周报」：周报、经营周报。反例：日报、闲聊、自然语言问数。

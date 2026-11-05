@@ -26,6 +26,10 @@ from src.runtime.mcp_identity import (
 from src.runtime.platform_skill_tool import PlatformSkillTool
 
 from src.skills.acl import SkillAclGuard
+from src.skills.tools.coordinator_decide import (
+    DECIDE_TOOL_NAME,
+    CoordinatorDecideTool,
+)
 from src.skills.tools.formfill_apply import FormFillApplyTool
 from src.skills.tools.formfill_execute import FormFillExecuteTool
 from src.skills.tools.invoke_agent import (
@@ -44,6 +48,12 @@ _MCP_LOG_LIMIT = 4000
 
 #: 委派工具名集合（role 约束的作用对象，design-impl.md §6 T03 要点 3）
 DELEGATE_TOOL_NAMES: tuple[str, ...] = (DELEGATE_TOOL_NAME, DELEGATE_TOOL_ALIAS)
+
+#: Worker 不得暴露的协调者专用工具
+COORDINATOR_ONLY_TOOL_NAMES: tuple[str, ...] = (
+    *DELEGATE_TOOL_NAMES,
+    DECIDE_TOOL_NAME,
+)
 
 
 def _clip_mcp_log(text: str, limit: int = _MCP_LOG_LIMIT) -> str:
@@ -369,6 +379,8 @@ def create_agent_source_registry(
     registry.register(InvokeAgentTool(catalog=catalog))
     if _delegate_alias_enabled():
         registry.register(InvokeAgentTool(tool_name=DELEGATE_TOOL_ALIAS, catalog=catalog))
+    # 结构化决策（只路由）；A2UI 通道在 tool 返回后由代码硬委派并结束本轮
+    registry.register(CoordinatorDecideTool())
 
     # 1.3/1.4 新增工具（仅当对应 agent 的 runtime.allowed_tools 显式放行后才对 LLM 可见）：
     # - list_skills：技能池浏览（mis-admin-helper create_skill 兜底增强），
@@ -682,8 +694,8 @@ def create_platform_tool_registry(
     registry: ToolRegistry = ToolRegistry()
     registered: list[str] = []
     for tool in source.list_tools():
-        if is_worker and tool.name in DELEGATE_TOOL_NAMES:
-            logger.info("Delegation tool denied for worker role", tool=tool.name)
+        if is_worker and tool.name in COORDINATOR_ONLY_TOOL_NAMES:
+            logger.info("Coordinator-only tool denied for worker role", tool=tool.name)
             continue
         if not is_tool_allowed(tool.name, patterns):
             continue

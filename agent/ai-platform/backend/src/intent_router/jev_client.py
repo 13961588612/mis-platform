@@ -53,6 +53,7 @@ async def classify_intent_label(
     endpoint: str | None = None,
     timeout_ms: int | None = None,
     conversation_context: str | None = None,
+    instructions: str | None = None,
 ) -> tuple[str | None, int, str]:
     """从标签表中选一个标签 id。
 
@@ -63,6 +64,7 @@ async def classify_intent_label(
         endpoint: 覆盖 endpoint。
         timeout_ms: 覆盖超时。
         conversation_context: 已拼好的「上文 + 本轮」；非空时优先作为 state / user。
+        instructions: 覆盖 System One ``instructions``；空则用选人默认文案。
 
     Returns:
         ``(label_id|None, latency_ms, detail)``。
@@ -115,6 +117,7 @@ async def classify_intent_label(
             timeout_s=timeout_s,
             state=state,
             labels=labels,
+            instructions=instructions,
         )
 
     api_key = (settings.INTENT_DETECT_API_KEY or "").strip()
@@ -146,8 +149,10 @@ async def _classify_via_systemone(
     timeout_s: float,
     state: str,
     labels: dict[str, str],
+    instructions: str | None = None,
 ) -> tuple[str | None, int, str]:
     """百炼决策模型：``POST {base}/systemone``。"""
+    instr = (instructions or "").strip() or _DECISION_INSTRUCTIONS
     url = f"{base}/systemone"
     payload: dict[str, Any] = {
         "model": model,
@@ -155,7 +160,7 @@ async def _classify_via_systemone(
         "questions": {
             _DECISION_QUESTION_ID: {
                 "type": "choice",
-                "instructions": _DECISION_INSTRUCTIONS,
+                "instructions": instr,
                 "criteria": {str(k): str(v) for k, v in labels.items()},
             }
         },

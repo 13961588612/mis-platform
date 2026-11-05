@@ -46,17 +46,24 @@ export function parseStreamLine(raw: RawStreamLine): ChatStreamEvent | null {
     }
     case 'custom': {
       // F3：Gateway EventConverter CUSTOM 分支 → { type:'custom', eventType, data }。
-      // dispatch.trace → 调度提示；tool.step → Copilot 工具步骤折叠条；其它忽略。
+      // dispatch.trace → 调度提示；tool.step → Copilot 工具步骤折叠条；
+      // ai.report.open_card → 打开模板报告参数卡；其它忽略。
       if (raw.eventType === 'dispatch.trace') {
         return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
       }
       if (raw.eventType === 'tool.step') {
         return adaptToolStep(raw.data);
       }
+      if (raw.eventType === 'ai.report.open_card') {
+        return adaptReportOpenCard(raw.data);
+      }
       return null;
     }
     case 'tool.step': {
       return adaptToolStep(raw);
+    }
+    case 'ai.report.open_card': {
+      return adaptReportOpenCard(raw);
     }
     case 'done': {
       return {
@@ -143,6 +150,18 @@ function adaptToolStep(raw: unknown): ChatStreamEvent | null {
     args: asRecord(data.args),
     result: asRecord(data.result),
   };
+}
+
+/** Gateway CUSTOM ai.report.open_card → 内部事件。 */
+function adaptReportOpenCard(raw: unknown): ChatStreamEvent | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const reportCode = asString(data.reportCode ?? data.report_code);
+  if (!reportCode) return null;
+  const title = asString(data.title);
+  return title
+    ? { type: 'ai.report.open_card', reportCode, title }
+    : { type: 'ai.report.open_card', reportCode };
 }
 
 function adaptTokenUsage(raw: unknown): TokenUsage | undefined {

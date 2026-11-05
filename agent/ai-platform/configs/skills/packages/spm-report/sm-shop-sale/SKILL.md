@@ -41,7 +41,7 @@ mcp_server: mcp-sm-api-suite
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
 | `storeId` | 与 `areaId` 二选一 | 单店 |
 | `areaId` | 与 `storeId` 二选一 | 区域（权限门店 ∩ 区域） |
-| `startOrdDate` + `endOrdDate` | **仅 day** | `YYYY-MM-DD` 闭区间 |
+| `startOrdDate` + `endOrdDate` | **仅 day** | `YYYY-MM-DD` 闭区间；**两端均须早于今天**（T+1；≥今天禁止调用，改由路由早停话术） |
 | `ordWeek` | **仅 week** | ADS 周键 |
 | `ordMonth` | **仅 month** | ADS 月键如 `"2026-10"` |
 | `shopLevel` | 否 | 店型过滤 |

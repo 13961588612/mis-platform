@@ -130,7 +130,7 @@ _STATIC_DESCRIPTION: str = (
     "将任务委托给专用智能体并返回其结果。"
     "当用户需要：表单字段抽取 → mis-extract；审批/文本摘要 → mis-summary；"
     "制度/知识检索 → mis-rag；会员/积分/客户画像/CRM 查询 → crm-assistant。"
-    "通用闲聊、文案撰写请直接回答，不要调用本工具。"
+    "完全确定是闲聊、文案撰写等主题且能直接答的请直接回答，不要调用本工具。"
     "填单/补全表单字段请用 formfill__execute，不要用本工具。"
 )
 
@@ -525,6 +525,21 @@ class InvokeAgentTool(BaseTool):
             worker_id=agent_id,
         )
 
+        # 模板报告 Worker：代码管线（目录→决策→抽槽→执行），不进 OpenHarness
+        if agent_id == "template-report":
+            return await self._run_template_report_fast_path(
+                parent_session_id=parent_session_id,
+                parent=parent,
+                brief=brief,
+                child_meta=child_meta,
+                user_id=user_id,
+                mis_user_id=mis_user_id,
+                task_id=task_id,
+                intent=intent,
+                started_at=started_at,
+                meta=meta,
+            )
+
         # 深度必须在并发闸口之前 set：asyncio 子任务拷贝 Context，兄弟任务互不污染
         token: Token[int] = _invoke_depth.set(depth + 1)
         run_result: _WorkerRunResult | None = None
@@ -632,6 +647,109 @@ class InvokeAgentTool(BaseTool):
         )
 
     # ===== 内部编排 helper =====
+
+    async def _run_template_report_fast_path(
+        self,
+        *,
+        parent_session_id: str,
+        parent: Any,
+        brief: TaskBrief,
+        child_meta: dict[str, Any],
+        user_id: str,
+        mis_user_id: int | None,
+        task_id: str,
+        intent: str,
+        started_at: float,
+        meta: dict[str, Any],
+    ) -> ToolResult:
+        """模板报告专用快路径：拉 catalog → 决策 → 抽槽 → execute / open_card / miss。"""
+        from src.agent.template_report.pipeline import run_template_report_turn
+
+        user_text = ""
+        try:
+            inputs = brief.inputs if isinstance(brief.inputs, dict) else {}
+            user_text = str(inputs.get("user_question") or "").strip()
+        except Exception:  # noqa: BLE001
+            user_text = ""
+        if not user_text:
+            user_text = str(getattr(brief, "goal", "") or "").strip()
+
+        authorization = ""
+        if parent is not None:
+            state = getattr(parent, "state", None) or {}
+            if isinstance(state, dict):
+                authorization = str(
+                    state.get("mis_upstream_jwt") or state.get("misUpstreamJwt") or ""
+                ).strip()
+        if not authorization:
+            authorization = str(
+                meta.get("misUpstreamJwt")
+                or meta.get("mis_upstream_jwt")
+                or child_meta.get("misUpstreamJwt")
+                or ""
+            ).strip()
+
+        history_messages: list[dict[str, str]] = []
+        try:
+            attachments = ""
+            if isinstance(getattr(brief, "inputs", None), dict):
+                attachments = str(brief.inputs.get("attachments_text") or "")
+            # 上文已在 attachments；管线侧仍可用 user_text + 空 history
+            _ = attachments
+        except Exception:  # noqa: BLE001
+            pass
+
+        outcome = await run_template_report_turn(
+            user_text=user_text,
+            authorization=authorization,
+            user_id=user_id,
+            mis_user_id=mis_user_id,
+            session_id=parent_session_id,
+            history_messages=history_messages or None,
+        )
+        latency_ms = _elapsed_ms(started_at)
+        if outcome.kind == "miss":
+            status = TaskStatus.SKIPPED
+            result_text = ""
+            is_error = False
+        elif outcome.kind == "error":
+            status = TaskStatus.FAILED
+            result_text = outcome.text or "模板报告执行失败"
+            is_error = True
+        else:
+            # open_card / executed
+            status = TaskStatus.COMPLETED
+            result_text = outcome.text or ""
+            is_error = False
+
+        logger.info(
+            "template_report_fast_path",
+            kind=outcome.kind,
+            report_code=outcome.report_code,
+            detail=outcome.detail,
+            latency_ms=latency_ms,
+            session_id=parent_session_id or None,
+        )
+        if is_error:
+            await self._record_failure(parent_session_id, "template-report", threshold=3)
+        else:
+            await self._record_success(parent_session_id, "template-report")
+
+        return await self._finish(
+            parent_session_id=parent_session_id,
+            notification=TaskNotification.from_worker_result(
+                task_id=task_id,
+                worker_id="template-report",
+                result=result_text,
+                status=status,
+                error_code="TEMPLATE_REPORT_ERROR" if is_error else "",
+                latency_ms=latency_ms,
+                usage=TaskUsage(duration_ms=latency_ms),
+            ),
+            intent=intent or "template_report",
+            started_at=started_at,
+            is_error=is_error,
+        )
 
     def _get_worker_spec(self, agent_id: str) -> Any | None:
         """从 Catalog 取目标 Worker 契约（未注入 Catalog 时返回 None）。
@@ -1239,6 +1357,30 @@ async def _run_child_agent(
     text = "".join(response_parts).strip()
     child_session_id = str(getattr(child_session, "session_id", "") or "")
 
+    # 委派正文回灌父 SSE 诊断：区分 none / single_dump / multi_chunk
+    try:
+        from src.coordinator.parent_progress import (
+            format_parent_stream_detail,
+            parent_text_stream_stats,
+        )
+
+        stream_stats = parent_text_stream_stats()
+        logger.info(
+            "worker_parent_stream_summary",
+            agent_id=agent_id,
+            child_session_id=child_session_id,
+            worker_text_chars=len(text),
+            worker_text_delta_parts=len(response_parts),
+            stream_mode=stream_stats.get("stream_mode"),
+            stream_delta_count=stream_stats.get("delta_count"),
+            stream_total_chars=stream_stats.get("total_chars"),
+            stream_span_ms=stream_stats.get("span_ms"),
+            stream_max_chunk_chars=stream_stats.get("max_chunk_chars"),
+            detail=format_parent_stream_detail(stream_stats),
+        )
+    except Exception:  # noqa: BLE001 - 诊断日志失败不阻断
+        pass
+
     from src.runtime.gateway_api_client import (
         MODEL_GARBAGE_RETRY_MESSAGE,
         is_model_garbage_payload,
@@ -1272,7 +1414,19 @@ async def _run_child_agent(
         )
 
     if runtime_error:
-        raise RuntimeError(runtime_error)
+        from src.runtime.openharness import is_max_turns_error_message
+
+        # 触顶且已有正文（含 soft-finish 说明）：按软成功返回，避免空失败连环重试
+        if text and is_max_turns_error_message(runtime_error):
+            logger.warning(
+                "worker_max_turns_with_text",
+                agent_id=agent_id,
+                child_session_id=child_session_id,
+                text_chars=len(text),
+                runtime_error=runtime_error[:200],
+            )
+        else:
+            raise RuntimeError(runtime_error)
 
     if garbage_output:
         raise RuntimeError(MODEL_GARBAGE_RETRY_MESSAGE)

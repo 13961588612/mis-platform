@@ -7,6 +7,8 @@ import pytest
 from src.coordinator.parent_progress import (
     emit_parent_text_delta,
     emit_parent_tool_progress,
+    format_parent_stream_detail,
+    parent_text_stream_stats,
     parent_text_was_streamed,
     reset_parent_progress_emit,
     set_parent_progress_emit,
@@ -59,18 +61,45 @@ async def test_emit_parent_text_delta_streams_and_sets_flag() -> None:
     token = set_parent_progress_emit(_emit)
     try:
         assert parent_text_was_streamed() is False
+        assert parent_text_stream_stats()["stream_mode"] == "none"
         await emit_parent_text_delta("溧阳区")
         await emit_parent_text_delta("共 7 家门店")
         assert parent_text_was_streamed() is True
+        stats = parent_text_stream_stats()
+        assert stats["stream_mode"] == "multi_chunk"
+        assert stats["delta_count"] == 2
+        assert stats["total_chars"] == len("溧阳区") + len("共 7 家门店")
+        assert "multi_chunk" in format_parent_stream_detail(stats)
     finally:
         reset_parent_progress_emit(token)
 
     assert parent_text_was_streamed() is False
+    assert parent_text_stream_stats()["stream_mode"] == "none"
     assert [e.content for e in received] == ["溧阳区", "共 7 家门店"]
     assert all(e.type == AgentEventType.TEXT_DELTA for e in received)
+
+
+@pytest.mark.asyncio
+async def test_emit_parent_text_delta_single_dump_mode() -> None:
+    received: list[AgentEvent] = []
+
+    async def _emit(event: AgentEvent) -> None:
+        received.append(event)
+
+    token = set_parent_progress_emit(_emit)
+    try:
+        body = "溧阳区共有 7 家门店，清单如下……"
+        await emit_parent_text_delta(body)
+        stats = parent_text_stream_stats()
+        assert stats["stream_mode"] == "single_dump"
+        assert stats["delta_count"] == 1
+        assert stats["max_chunk_chars"] == len(body)
+    finally:
+        reset_parent_progress_emit(token)
 
 
 @pytest.mark.asyncio
 async def test_emit_parent_text_delta_noop_without_context() -> None:
     await emit_parent_text_delta("无人接收")
     assert parent_text_was_streamed() is False
+    assert parent_text_stream_stats()["stream_mode"] == "none"

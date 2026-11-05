@@ -16,10 +16,19 @@ _AFFIRM_RE = re.compile(
 )
 
 
+def is_skipped_invoke_output(tool_output: str) -> bool:
+    """``agent__invoke`` 输出是否为 ``status=skipped``（Worker 本轮不适用）。"""
+    text = (tool_output or "").strip()
+    if not text.startswith("[task:"):
+        return False
+    first_line, _, _rest = text.partition("\n")
+    return "status=skipped" in first_line
+
+
 def extract_passthrough_worker_text(tool_output: str) -> str | None:
     """从 ``agent__invoke`` 成功信封中取出可直出的 Worker 正文。
 
-    仅接受 ``status=completed`` 的 ``text_with_header`` 形态；失败/超时不加头，返回 None。
+    仅接受 ``status=completed`` 的 ``text_with_header`` 形态；失败/超时/skipped 返回 None。
     拒绝 forceLiveQuery 历史占位复述（如 ``[prior_assistant_answer_omitted]``），
     避免透传到 Copilot 气泡。
     """
@@ -32,6 +41,14 @@ def extract_passthrough_worker_text(tool_output: str) -> str | None:
     body = rest.lstrip("\n").strip()
     if not body:
         return None
+    # 开卡标记由 Coordinator 消费，不作为用户正文透传
+    try:
+        from src.agent.template_report.pipeline import OPEN_CARD_MARKER_PREFIX
+
+        if body.startswith(OPEN_CARD_MARKER_PREFIX):
+            return None
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from src.runtime.openharness import (
             is_force_live_stub_echo,

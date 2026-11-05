@@ -226,6 +226,32 @@ def _label_description(key: str, then: IntentThen) -> str:
     return " / ".join(parts) if parts else key
 
 
+def _rules_hit_for_hybrid(decision: IntentRouteDecision) -> bool:
+    """``rules_then_model``：仅当规则给出 worker/intent 时视为命中（忽略 no_match / 空 then）。"""
+    if not decision.matched_rule_id:
+        return False
+    return bool((decision.worker_id or "").strip() or (decision.intent or "").strip())
+
+
+async def _resolve_model_with_context(
+    user_text: str,
+    config: IntentRouterConfig,
+    *,
+    history_messages: list[dict[str, Any]] | None = None,
+    conversation_context: str | None = None,
+) -> IntentRouteDecision:
+    """拼 JEV 上文后走 model 引擎。"""
+    ctx = (conversation_context or "").strip() or format_conversation_context_for_jev(
+        user_text,
+        history_messages,
+        max_context_turns=config.max_context_turns,
+        max_msg_chars=config.max_context_msg_chars,
+    )
+    return await _resolve_model_engine(
+        user_text, config, conversation_context=ctx or None
+    )
+
+
 async def _resolve_model_engine(
     user_text: str,
     config: IntentRouterConfig,
@@ -333,15 +359,32 @@ async def resolve_intent_route(
     if cfg.engine == "rules":
         decision = await evaluate_rules(user_text, cfg)
     elif cfg.engine == "model":
-        ctx = (conversation_context or "").strip() or format_conversation_context_for_jev(
+        decision = await _resolve_model_with_context(
             user_text,
-            history_messages,
-            max_context_turns=cfg.max_context_turns,
-            max_msg_chars=cfg.max_context_msg_chars,
+            cfg,
+            history_messages=history_messages,
+            conversation_context=conversation_context,
         )
-        decision = await _resolve_model_engine(
-            user_text, cfg, conversation_context=ctx or None
-        )
+    elif cfg.engine == "rules_then_model":
+        # 高精度关键词/正则先拦；未带 worker/intent 则再走 JEV（避免 always 误杀）
+        rule_decision = await evaluate_rules(user_text, cfg)
+        if _rules_hit_for_hybrid(rule_decision):
+            decision = rule_decision.model_copy(
+                update={"engine": "rules_then_model", "detail": f"rules:{rule_decision.detail}"}
+            )
+        else:
+            model_decision = await _resolve_model_with_context(
+                user_text,
+                cfg,
+                history_messages=history_messages,
+                conversation_context=conversation_context,
+            )
+            decision = model_decision.model_copy(
+                update={
+                    "engine": "rules_then_model",
+                    "detail": f"rules_miss:{rule_decision.detail};jev:{model_decision.detail}",
+                }
+            )
     else:
         return None
 
@@ -352,8 +395,18 @@ async def resolve_intent_route(
     engine_zh = {
         "rules": "规则引擎",
         "model": "JEV意图识别",
+        "rules_then_model": "规则优先+JEV",
     }.get(decision.engine, decision.engine)
-    detail_parts = [engine_zh, f"detail={decision.detail or '-'}"]
+    # 步骤名细分：硬拦走规则，否则标 JEV，便于日志对齐「跳过选人 LLM」
+    step_engine_zh = engine_zh
+    if cfg.engine == "rules_then_model":
+        if (decision.detail or "").startswith("rules:") and not (
+            decision.detail or ""
+        ).startswith("rules_miss:"):
+            step_engine_zh = "规则引擎"
+        else:
+            step_engine_zh = "JEV意图识别"
+    detail_parts = [step_engine_zh, f"detail={decision.detail or '-'}"]
     if decision.matched_rule_id:
         detail_parts.append(f"命中={decision.matched_rule_id}")
     if decision.worker_id:
@@ -364,14 +417,14 @@ async def resolve_intent_route(
         detail_parts.append(f"intent={decision.intent}")
     if has_context:
         detail_parts.append("含上文")
-        if cfg.engine == "model":
+        if cfg.engine in ("model", "rules_then_model") and decision.used_jev:
             detail_parts.append(f"上文轮次≤{cfg.max_context_turns}")
     try:
         from src.runtime.step_timing import log_turn_step
 
         log_turn_step(
             session_id=session_id or "-",
-            step_name=f"意图预路由·{engine_zh}",
+            step_name=f"意图预路由·{step_engine_zh}",
             duration_ms=decision.latency_ms,
             agent_id=agent_id,
             detail="；".join(detail_parts),
@@ -391,6 +444,10 @@ async def resolve_intent_route(
         latency_ms=decision.latency_ms,
         detail=decision.detail,
         has_context=has_context,
-        max_context_turns=cfg.max_context_turns if cfg.engine == "model" else None,
+        max_context_turns=(
+            cfg.max_context_turns
+            if cfg.engine in ("model", "rules_then_model") and decision.used_jev
+            else None
+        ),
     )
     return decision

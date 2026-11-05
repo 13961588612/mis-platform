@@ -272,6 +272,127 @@ def test_merge_openai_tools_primary_wins():
     assert merged[0]["function"]["description"] == "a"
 
 
+def test_load_a2ui_llm_runtime_from_agent_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A2UI 应从 Agent runtime.params + model.primary 读取温度/模型（对齐 OH）。"""
+    from types import SimpleNamespace
+
+    from src.runtime.a2ui_run import load_a2ui_llm_runtime
+
+    fake_config = SimpleNamespace(
+        runtime=SimpleNamespace(
+            params={
+                "temperature": 0.3,
+                "maxTokens": 4096,
+                "maxSteps": 30,
+            }
+        ),
+        model=SimpleNamespace(primary="qwen3.8-flash"),
+    )
+
+    class _FakeMgr:
+        def get_config_cached(self, agent_id: str) -> Any:
+            assert agent_id == "mis-copilot"
+            return fake_config
+
+    monkeypatch.setattr(
+        "src.config_manager.manager.get_config_manager",
+        lambda: _FakeMgr(),
+    )
+    loaded = load_a2ui_llm_runtime("mis-copilot")
+    assert loaded.temperature == 0.3
+    assert loaded.max_tokens == 4096
+    assert loaded.max_turns == 30
+    assert loaded.model == "qwen3.8-flash"
+
+
+def test_load_a2ui_llm_runtime_missing_agent() -> None:
+    """无 agent_id 时返回空运行时，由 A2uiRunLoop 回退默认值。"""
+    from src.runtime.a2ui_run import load_a2ui_llm_runtime
+
+    loaded = load_a2ui_llm_runtime("")
+    assert loaded.temperature is None
+    assert loaded.model is None
+
+
+def test_filter_openai_tools_by_exclude():
+    """excludeLlmTools 按名剔除，保留 agent__invoke。"""
+    from src.runtime.a2ui_run import filter_openai_tools_by_exclude
+
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "render_a2ui", "description": "ui", "parameters": {}},
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "agent__invoke",
+                "description": "delegate",
+                "parameters": {},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "formfill__execute",
+                "description": "ff",
+                "parameters": {},
+            },
+        },
+    ]
+    kept = filter_openai_tools_by_exclude(
+        tools, ["render_a2ui", "formfill__execute", "skill"]
+    )
+    assert [t["function"]["name"] for t in kept] == ["agent__invoke"]
+    assert filter_openai_tools_by_exclude(tools, []) == tools
+    assert filter_openai_tools_by_exclude(tools, None) == tools
+
+
+def test_looks_like_truncated_assistant_text():
+    from src.runtime.a2ui_run import _looks_like_truncated_assistant_text
+
+    assert _looks_like_truncated_assistant_text("**宜兴城中店（门店") is True
+    assert _looks_like_truncated_assistant_text("**宜兴") is True
+    assert (
+        _looks_like_truncated_assistant_text(
+            "| 指标 | 数值 |\n|---|---|\n| 营业额 | 3,982"
+        )
+        is True
+    )
+    assert (
+        _looks_like_truncated_assistant_text(
+            "**结论**：完整。\n\n| 指标 | 数值 |\n|---|---|\n| 营业额 | 100 |"
+        )
+        is False
+    )
+
+
+def test_messages_for_self_stop_log_truncates_and_keeps_roles():
+    from src.runtime.a2ui_run import (
+        _SELF_STOP_MSG_CHARS,
+        _messages_for_self_stop_log,
+        _tool_names_for_log,
+    )
+
+    long = "门店" * (_SELF_STOP_MSG_CHARS // 2 + 20)
+    dumped = _messages_for_self_stop_log(
+        [
+            LLMMessage(role=LLMRole.SYSTEM, content="你是协调者"),
+            LLMMessage(role=LLMRole.USER, content=long),
+        ]
+    )
+    assert dumped[0]["role"] == "system"
+    assert dumped[0]["content"] == "你是协调者"
+    assert dumped[1]["role"] == "user"
+    assert "truncated,total=" in dumped[1]["content"]
+    assert _tool_names_for_log(
+        [
+            {"type": "function", "function": {"name": "agent__invoke"}},
+            {"type": "function", "function": {"name": "render_a2ui"}},
+        ]
+    ) == ["agent__invoke", "render_a2ui"]
+
+
 # ============================================================================
 # B1（QA）：嵌套 AG-UI ToolCall 转换（{id, type:'function', function:{name, arguments}}）
 # ============================================================================

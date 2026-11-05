@@ -1,4 +1,4 @@
-"""GatewayApiClient：有 tools 走非流式 chat；无 tools 真流式。"""
+"""GatewayApiClient：有/无 tools 一律 chat_stream 真流式。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from src.llm.models import LLMChunk, LLMResponse, TokenUsage
+from src.llm.models import LLMChunk, TokenUsage
 from src.runtime.gateway_api_client import (
     GatewayApiClient,
     _merge_tool_call_delta,
@@ -113,43 +113,50 @@ def test_tool_calls_to_content_blocks_skips_empty_name() -> None:
 
 
 class _FakeGateway:
-    def __init__(self) -> None:
+    def __init__(self, *, mode: str = "text") -> None:
         self.chat_calls = 0
         self.stream_calls = 0
         self.last_request: Any = None
+        self._mode = mode
 
     async def chat_stream(self, request: Any):  # noqa: ANN401
         self.stream_calls += 1
         self.last_request = request
-        yield LLMChunk(content="你好")
+        if self._mode == "tools":
+            yield LLMChunk(
+                tool_call_deltas=[
+                    {
+                        "index": 0,
+                        "id": "call_x",
+                        "type": "function",
+                        "function": {"name": "skill", "arguments": "{}"},
+                    }
+                ]
+            )
+            yield LLMChunk(
+                finish_reason="tool_calls",
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            )
+            return
+        yield LLMChunk(content="你")
+        yield LLMChunk(content="好")
         yield LLMChunk(
             finish_reason="stop",
             usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         )
 
-    async def chat(self, request: Any) -> LLMResponse:  # noqa: ANN401
+    async def chat(self, request: Any) -> Any:  # noqa: ANN401
         self.chat_calls += 1
         self.last_request = request
-        return LLMResponse(
-            content="溧阳区\n共 7 家",
-            tool_calls=[
-                {
-                    "id": "call_x",
-                    "type": "function",
-                    "function": {"name": "skill", "arguments": "{}"},
-                }
-            ],
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
-            finish_reason="tool_calls",
-        )
+        raise AssertionError("有/无 tools 均不应再走非流式 chat()")
 
 
 @pytest.mark.asyncio
-async def test_with_tools_uses_non_stream_chat() -> None:
+async def test_with_tools_uses_chat_stream() -> None:
     from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest, ApiTextDeltaEvent
     from openharness.engine.messages import ConversationMessage, TextBlock
 
-    gateway = _FakeGateway()
+    gateway = _FakeGateway(mode="tools")
     client = GatewayApiClient(gateway, model="test-model")
     events = []
     async for ev in client.stream_message(
@@ -163,11 +170,12 @@ async def test_with_tools_uses_non_stream_chat() -> None:
     ):
         events.append(ev)
 
-    assert gateway.chat_calls == 1
-    assert gateway.stream_calls == 0
+    assert gateway.stream_calls == 1
+    assert gateway.chat_calls == 0
     assert gateway.last_request is not None
-    assert gateway.last_request.stream is False
-    assert [e.text for e in events if isinstance(e, ApiTextDeltaEvent)] == ["溧阳区\n", "共 7 家"]
+    assert gateway.last_request.stream is True
+    assert gateway.last_request.tool_choice == "auto"
+    assert [e.text for e in events if isinstance(e, ApiTextDeltaEvent)] == []
     complete = events[-1]
     assert isinstance(complete, ApiMessageCompleteEvent)
     assert complete.stop_reason == "tool_calls"
@@ -178,7 +186,7 @@ async def test_without_tools_uses_chat_stream() -> None:
     from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest, ApiTextDeltaEvent
     from openharness.engine.messages import ConversationMessage, TextBlock
 
-    gateway = _FakeGateway()
+    gateway = _FakeGateway(mode="text")
     client = GatewayApiClient(gateway, model="test-model")
     events = []
     async for ev in client.stream_message(
@@ -195,5 +203,6 @@ async def test_without_tools_uses_chat_stream() -> None:
     assert gateway.stream_calls == 1
     assert gateway.chat_calls == 0
     assert gateway.last_request.stream is True
-    assert [e.text for e in events if isinstance(e, ApiTextDeltaEvent)] == ["你好"]
+    assert gateway.last_request.tool_choice == "none"
+    assert [e.text for e in events if isinstance(e, ApiTextDeltaEvent)] == ["你", "好"]
     assert isinstance(events[-1], ApiMessageCompleteEvent)

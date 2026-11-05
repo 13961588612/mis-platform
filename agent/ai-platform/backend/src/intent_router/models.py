@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 
 WhenType = Literal["keyword", "regex", "jev", "always"]
-EngineType = Literal["rules", "model", "off"]
+#: rules=仅规则；model=仅 JEV；rules_then_model=关键词/正则先命中则直出，否则再 JEV
+EngineType = Literal["rules", "model", "rules_then_model", "off"]
 OnFailType = Literal["fallback_router_skill", "fallback_primary", "none"]
 
 
@@ -91,6 +92,55 @@ class IntentRouteDecision(BaseModel):
     worker_id: str | None = None
     intent: str | None = None
     used_jev: bool = False
+    latency_ms: int = 0
+    detail: str = ""
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class TemplateReportItem(BaseModel):
+    """参与模板报告决策的一份报告。"""
+
+    code: str = Field(..., min_length=1)
+    title: str = ""
+    description: str = ""
+
+
+class TemplateReportModelRef(BaseModel):
+    """决策模型引用（可覆盖平台 DECISION_MODEL_*）。"""
+
+    name: str = ""
+    endpoint: str = ""
+    timeout_ms: int = 2000
+
+
+class TemplateReportRouterConfig(BaseModel):
+    """Agent 级模板报告预路由（``template-report-router.yaml``）。
+
+    标签优先来自 mis-ai-template-report catalog；``reports`` 仅作本地兜底；
+    ``participate_codes`` 非空时只让这些 code 参与决策。
+    """
+
+    enabled: bool = False
+    min_confidence: float = Field(default=0.75, ge=0.0, le=1.0)
+    max_context_turns: int = Field(default=3, ge=0, le=20)
+    max_context_msg_chars: int = Field(default=160, ge=40, le=2000)
+    model: TemplateReportModelRef = Field(default_factory=TemplateReportModelRef)
+    #: 参与决策的 report_code；空 = catalog（或 reports）全部参与
+    participate_codes: list[str] = Field(default_factory=list)
+    #: 覆盖 catalog 描述（决策 criteria 文案）
+    description_overrides: dict[str, str] = Field(default_factory=dict)
+    #: 本地兜底报告列表（catalog 不可用时）
+    reports: list[TemplateReportItem] = Field(default_factory=list)
+
+
+class TemplateReportDecision(BaseModel):
+    """模板报告决策结果；``report_code`` 非空表示命中。"""
+
+    enabled: bool
+    report_code: str | None = None
+    title: str | None = None
+    confidence: float | None = None
+    used_model: bool = False
     latency_ms: int = 0
     detail: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)

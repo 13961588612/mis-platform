@@ -1,0 +1,6 @@
+# 已迁至 template-report 智能体。
+# 决策 / 参与报告 / 分数门槛见：
+#   configs/agents/template-report/template-report-router.yaml
+# mis-copilot 经意图/LLM agent__invoke → template-report（无 A2UI 首步静默探测）。
+template_report_router:
+  enabled: false

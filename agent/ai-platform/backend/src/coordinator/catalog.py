@@ -183,7 +183,7 @@ class WorkerCatalog(BaseModel):
         specs = [self.workers[worker_id] for worker_id in self.worker_ids()]
         if not specs:
             return base
-        lines: list[str] = [base.strip(), "", "当前可委派 Worker（按适用场景选择，不确定时不要委派）："]
+        lines: list[str] = [base.strip(), "", "当前可委派 Worker（按适用场景选择，当不存在有任何相关性的Worker时不要委派）："]
         lines.extend(spec.summary_line() for spec in specs)
         return "\n".join(lines)
 

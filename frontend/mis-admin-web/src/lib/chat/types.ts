@@ -179,6 +179,7 @@ export type ChatStreamEvent =
       args?: Record<string, unknown>;
       result?: Record<string, unknown>;
     }
+  | { type: 'ai.report.open_card'; reportCode: string; title?: string }
   | { type: 'ui.render'; component?: string; props?: Record<string, unknown> }
   | { type: 'approval.request'; skillId?: string; detail?: Record<string, unknown> };
 

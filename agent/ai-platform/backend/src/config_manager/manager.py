@@ -198,6 +198,21 @@ class ConfigManager:
                     )
                     return
                 self._configs[agent_id] = config
+                system_prompt = (getattr(config, "system_prompt", None) or "").strip()
+                logger.info(
+                    "Agent config reloaded into cache",
+                    agent_id=agent_id,
+                    change_type=change_type,
+                    system_prompt_chars=len(system_prompt),
+                    system_prompt_preview=system_prompt[:500] if system_prompt else "",
+                    has_priority_rule=("最高优先级" in system_prompt),
+                    model_primary=getattr(getattr(config, "model", None), "primary", None),
+                    temperature=(
+                        (getattr(config.runtime, "params", None) or {}).get("temperature")
+                        if getattr(config, "runtime", None)
+                        else None
+                    ),
+                )
 
                 # DUAL 模式下同步到数据库
                 if self._mode == "dual":

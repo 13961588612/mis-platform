@@ -17,13 +17,13 @@ mis:
         driver-class-name: com.mysql.cj.jdbc.Driver
         maximum-pool-size: 3
         authorized-stores:
-          enabled: false
+          enabled: true
         biz-dates:
-          enabled: false
+          enabled: true
         ord-weeks:
-          enabled: false
+          enabled: true
         ord-months:
-          enabled: false
+          enabled: true
 
 logging:
   level:

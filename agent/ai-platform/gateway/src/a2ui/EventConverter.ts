@@ -16,6 +16,7 @@
  * | approval.request  | ACTIVITY_SNAPSHOT                      | Python→前端 |
  * | dispatch.trace    | CUSTOM（type=dispatch.trace）          | Python→前端 |
  * | tool.step         | CUSTOM（type=tool.step）               | Python→前端 |
+ * | ai.report.open_card | CUSTOM（type=ai.report.open_card）   | Python→前端 |
  * | error             | RUN_ERROR                              | Python→前端 |
  * | done              | RUN_FINISHED                           | Python→中间件 |
  *
@@ -87,6 +88,9 @@ const A2UI_RENDER_SURFACE_PREFIX = 'a2ui';
  * A2UI 前端协议不直接下发 TOOL_CALL_*（中间件内部事件）；另发 CUSTOM 供 Copilot 折叠条消费。
  */
 const TOOL_STEP_EVENT_NAME = 'tool.step';
+
+/** 模板报告参数卡打开事件（CUSTOM 透传）。 */
+const REPORT_OPEN_CARD_EVENT_NAME = 'ai.report.open_card';
 
 // ============================================================================
 // 工具函数
@@ -219,6 +223,8 @@ export class EventConverter {
       case 'tool.step':
         // 仅 CUSTOM：勿再走 TOOL_CALL_*，否则嵌在父会话 agent__invoke 未闭合栈中会被中间件吞掉。
         return [this.toCustomToolStep(event)];
+      case 'ai.report.open_card':
+        return [this.toCustomReportOpenCard(event)];
       case 'error':
         return [this.toRunError(event)];
       case 'done':
@@ -610,6 +616,25 @@ export class EventConverter {
           typeof payload['toolCallId'] === 'string' ? payload['toolCallId'] : '',
         args: asRecord(payload['args']),
         result: asRecord(payload['result']),
+      },
+    };
+  }
+
+  /** ai.report.open_card → CUSTOM（前端打开模板报告参数卡） */
+  private toCustomReportOpenCard(event: AgentEvent): CustomEvent {
+    const payload = asRecord(event.trace);
+    const reportCode =
+      (typeof payload['reportCode'] === 'string' && payload['reportCode']) ||
+      (typeof payload['report_code'] === 'string' && payload['report_code']) ||
+      '';
+    const title =
+      typeof payload['title'] === 'string' ? payload['title'] : undefined;
+    return {
+      type: EventType.CUSTOM,
+      name: REPORT_OPEN_CARD_EVENT_NAME,
+      value: {
+        reportCode,
+        ...(title ? { title } : {}),
       },
     };
   }

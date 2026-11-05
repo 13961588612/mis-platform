@@ -49,6 +49,7 @@ try:
         ImageBlock,
         TextBlock,
     )
+    from openharness.engine.query import MaxTurnsExceeded
     from openharness.engine.query_engine import QueryEngine
     from openharness.engine.stream_events import (
         AssistantTextDelta,
@@ -62,6 +63,7 @@ try:
     _OPENHARNESS_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _OPENHARNESS_AVAILABLE = False
+    MaxTurnsExceeded = type("MaxTurnsExceeded", (Exception,), {})  # type: ignore[misc, assignment]
     McpClientManager = None  # type: ignore[misc, assignment]
     QueryEngine = None  # type: ignore[misc, assignment]
     ImageBlock = None  # type: ignore[misc, assignment]
@@ -69,6 +71,13 @@ except ImportError:  # pragma: no cover
 logger = get_logger("runtime.openharness")
 
 _TRACE_LOG_LIMIT = 1000
+
+#: 触顶时给用户的说明（同时作为 Worker 正文返回，避免空丢弃后协调者连环重试）。
+MAX_TURNS_USER_MESSAGE = (
+    "查询步骤过多，已中止本轮（达到执行轮次上限）。"
+    "请改用更具体的问法（例如明确门店号、月份与指标），"
+    "不要对同一问题再次委派。"
+)
 
 
 def user_facing_text_for_llm_turn(
@@ -84,6 +93,36 @@ def user_facing_text_for_llm_turn(
     if has_tool_uses:
         return ""
     return "".join(buffered_parts)
+
+
+def is_max_turns_error_message(message: str | None) -> bool:
+    """错误文案是否像执行轮次触顶。"""
+    msg = (message or "").lower()
+    return "maximum turn" in msg or "max turns" in msg or "maxturnsexceeded" in msg
+
+
+def is_max_turns_exceeded(exc: BaseException) -> bool:
+    """是否为 OpenHarness 执行轮次触顶。"""
+    if isinstance(exc, MaxTurnsExceeded):
+        return True
+    name = type(exc).__name__
+    return name == "MaxTurnsExceeded" or is_max_turns_error_message(str(exc))
+
+
+def remainder_text_after_live_stream(*, full_text: str, already_streamed: str) -> str:
+    """终稿 turn_complete 时，若已直播过前缀则只补发后缀，避免叠字。"""
+    full = full_text or ""
+    streamed = already_streamed or ""
+    if not full:
+        return ""
+    if not streamed:
+        return full
+    if full.startswith(streamed):
+        return full[len(streamed) :]
+    if streamed == full:
+        return ""
+    # 流式与完整文本不一致时不再整包重推（父 SSE 已有直播内容）
+    return ""
 
 
 def _mcp_manager_has_tools(manager: McpClientManager | None) -> bool:
@@ -519,6 +558,7 @@ class OpenHarnessRuntime(AgentRuntime):
         )
         agent_id_early: str = getattr(agent_config, "agent_id", "") or ""
         # Worker 规则引擎 → router skill；步骤可配 JEV（INTENT_DETECT_* 独立 Key）
+        # 模板报告首步委派仅在 Coordinator a2ui_run；此处不短路。
         try:
             from src.intent_router.service import (
                 format_router_skill_hint,
@@ -581,6 +621,9 @@ class OpenHarnessRuntime(AgentRuntime):
         sum_tool_ms: int = 0
         sum_skill_ms: int = 0
         pending_tools: list[tuple[str, str | None, float]] = []
+        # 供 MaxTurns soft-finish 在 except 中可读
+        turn_text_parts: list[str] = []
+        live_emitted_text_chars: int = 0
 
         def _emit_route_timing(
             *,
@@ -676,8 +719,14 @@ class OpenHarnessRuntime(AgentRuntime):
             # forceLiveQuery：拦截把历史占位复述成「正式回复」的 delta
             live_emitted_text_chars = 0
             live_suppressed_stub = False
-            # 本 LLM 回合文本先缓冲：有 tool_uses 则丢弃（过程旁白），否则整段下发
-            turn_text_parts: list[str] = []
+            # Worker：delta 级真流式（过程旁白也会下发）；Copilot 前端在 tool.step
+            # start 时清空气泡旁白，仅保留工具结束后的收尾正文。
+            # Coordinator：缓冲到 turn_complete，避免委派旁白泄漏。
+            live_stream_enabled = role_value == "worker"
+            turn_text_parts = []
+            turn_live_streamed = False
+            live_upstream_delta_count = 0
+            live_upstream_delta_chars = 0
 
             async for event in engine.submit_message(prompt):
                 step += 1
@@ -698,24 +747,44 @@ class OpenHarnessRuntime(AgentRuntime):
                         delta_text = stripped
                         if not delta_text:
                             continue
-                    # 等 AssistantTurnComplete 再决定是否对用户可见（避免工具轮旁白泄漏）
                     turn_text_parts.append(delta_text)
+                    live_upstream_delta_count += 1
+                    live_upstream_delta_chars += len(delta_text)
                     if llm_segment_t0 is not None and llm_ttft_ms is None:
                         llm_ttft_ms = _elapsed_ms(llm_segment_t0)
                     _log_agent_trace(
                         session_id, step=step, phase="text_delta", assistant_text=delta_text
                     )
+                    if live_stream_enabled:
+                        # 真流式：立即下发；工具轮旁白由前端在 tool.step start 时替换掉
+                        if ms_to_first_text is None:
+                            ms_to_first_text = _elapsed_ms(turn_t0)
+                        live_emitted_text_chars += len(delta_text)
+                        turn_live_streamed = True
+                        yield AgentEvent.text_delta(delta_text)
                 elif isinstance(event, ToolExecutionStarted):
                     if turn_text_parts:
                         suppressed = "".join(turn_text_parts)
                         turn_text_parts.clear()
-                        logger.info(
-                            "suppressed tool-turn scratchpad text",
-                            session_id=session_id,
-                            agent_id=agent_id,
-                            chars=len(suppressed),
-                            preview=suppressed[:120],
-                        )
+                        if turn_live_streamed:
+                            logger.info(
+                                "tool_turn_scratchpad_streamed_frontend_will_replace",
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                chars=len(suppressed),
+                                preview=suppressed[:120],
+                            )
+                        else:
+                            logger.info(
+                                "suppressed tool-turn scratchpad text",
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                chars=len(suppressed),
+                                preview=suppressed[:120],
+                            )
+                    turn_live_streamed = False
+                    live_upstream_delta_count = 0
+                    live_upstream_delta_chars = 0
                     tool_name = str(event.tool_name or "")
                     skill_id = _skill_id_from_tool_input(tool_name, event.tool_input)
                     pending_tools.append((tool_name, skill_id, perf_counter()))
@@ -809,28 +878,78 @@ class OpenHarnessRuntime(AgentRuntime):
                         tokens=turn_tokens,
                         ttft_ms=llm_ttft_ms,
                     )
-                    # 无工具 → 对用户下发本轮缓冲正文；有工具 → 旁白已在 tool start 丢弃或此处再清
+                    # 无工具 → 补齐未直播后缀；有工具 → 旁白已在 tool start 处理
+                    buffered_delta_count = len(turn_text_parts)
+                    already_streamed = "".join(turn_text_parts) if turn_live_streamed else ""
                     facing = user_facing_text_for_llm_turn(
                         buffered_parts=turn_text_parts,
                         has_tool_uses=has_tool_uses,
                     )
                     turn_text_parts.clear()
+                    facing_source = "buffered_deltas"
                     if not facing and not has_tool_uses:
-                        # 无增量 delta、仅有完整 message.text 时仍下发终答
                         facing = str(event.message.text or "")
-                    if facing:
+                        facing_source = "message_text_only"
+                    to_emit = ""
+                    emit_mode = "none"
+                    if has_tool_uses:
+                        if (event.message.text or "").strip() and not turn_live_streamed:
+                            logger.info(
+                                "suppressed tool-turn scratchpad text",
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                chars=len(event.message.text or ""),
+                                preview=(event.message.text or "")[:120],
+                            )
+                    elif turn_live_streamed:
+                        # 增量已直播；仅补 message.text 相对前缀的后缀
+                        full = facing or str(event.message.text or "")
+                        to_emit = remainder_text_after_live_stream(
+                            full_text=full, already_streamed=already_streamed
+                        )
+                        emit_mode = "live_stream"
+                        facing_source = "live_deltas"
+                    elif facing:
+                        to_emit = facing
+                        emit_mode = "turn_complete_dump"
+                    if to_emit:
                         if ms_to_first_text is None:
                             ms_to_first_text = _elapsed_ms(turn_t0)
-                        live_emitted_text_chars += len(facing)
-                        yield AgentEvent.text_delta(facing)
-                    elif has_tool_uses and (event.message.text or "").strip():
+                        live_emitted_text_chars += len(to_emit)
                         logger.info(
-                            "suppressed tool-turn scratchpad text",
+                            "worker_final_text_emit",
                             session_id=session_id,
                             agent_id=agent_id,
-                            chars=len(event.message.text or ""),
-                            preview=(event.message.text or "")[:120],
+                            finish_reason=finish_reason,
+                            emit_mode=emit_mode,
+                            facing_chars=len(to_emit)
+                            + (len(already_streamed) if emit_mode == "live_stream" else 0),
+                            remainder_chars=len(to_emit) if emit_mode == "live_stream" else None,
+                            facing_source=facing_source,
+                            upstream_delta_count=live_upstream_delta_count,
+                            upstream_delta_chars=live_upstream_delta_chars,
+                            buffered_delta_count=buffered_delta_count,
+                            true_token_stream_to_sse=(emit_mode == "live_stream"),
                         )
+                        yield AgentEvent.text_delta(to_emit)
+                    elif emit_mode == "live_stream":
+                        logger.info(
+                            "worker_final_text_emit",
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            finish_reason=finish_reason,
+                            emit_mode="live_stream",
+                            facing_chars=len(already_streamed),
+                            remainder_chars=0,
+                            facing_source=facing_source,
+                            upstream_delta_count=live_upstream_delta_count,
+                            upstream_delta_chars=live_upstream_delta_chars,
+                            buffered_delta_count=buffered_delta_count,
+                            true_token_stream_to_sse=True,
+                        )
+                    turn_live_streamed = False
+                    live_upstream_delta_count = 0
+                    live_upstream_delta_chars = 0
                     # 若本轮无工具，下一轮（若有）从现在重新计；有工具则等工具批结束后重置
                     if finish_reason == "stop":
                         llm_segment_t0 = perf_counter()
@@ -846,8 +965,8 @@ class OpenHarnessRuntime(AgentRuntime):
                 elif isinstance(event, ErrorEvent):
                     yield AgentEvent.error("RUNTIME_ERROR", event.message)
 
-            # 引擎异常结束时：从未调工具则兜底下发缓冲；有过工具则丢弃残余旁白
-            if turn_text_parts:
+            # 引擎正常结束时的残余缓冲（直播路径下通常已空）
+            if turn_text_parts and not turn_live_streamed:
                 leftover = user_facing_text_for_llm_turn(
                     buffered_parts=list(turn_text_parts),
                     has_tool_uses=tool_call_index > 0,
@@ -858,6 +977,9 @@ class OpenHarnessRuntime(AgentRuntime):
                         ms_to_first_text = _elapsed_ms(turn_t0)
                     live_emitted_text_chars += len(leftover)
                     yield AgentEvent.text_delta(leftover)
+            else:
+                turn_text_parts.clear()
+                turn_live_streamed = False
 
             # 整轮只复述了历史占位、又没调工具：换成可读提示，避免气泡只剩机器标记
             if (
@@ -934,19 +1056,86 @@ class OpenHarnessRuntime(AgentRuntime):
                 runtime="native_openharness",
             )
 
-        except Exception as exc:
-            logger.error(
-                "Agent run failed",
+        except MaxTurnsExceeded as exc:
+            # 触顶：salvage 已缓冲正文；无正文则给明确说明，且不发 ERROR，
+            # 避免协调者把空失败当「可重试」再连环委派。
+            salvage = ""
+            try:
+                salvage = "".join(turn_text_parts).strip()
+                turn_text_parts.clear()
+            except Exception:  # noqa: BLE001
+                salvage = ""
+            if salvage:
+                if ms_to_first_text is None:
+                    ms_to_first_text = _elapsed_ms(turn_t0)
+                live_emitted_text_chars += len(salvage)
+                yield AgentEvent.text_delta(salvage)
+            if live_emitted_text_chars <= 0:
+                if ms_to_first_text is None:
+                    ms_to_first_text = _elapsed_ms(turn_t0)
+                live_emitted_text_chars += len(MAX_TURNS_USER_MESSAGE)
+                yield AgentEvent.text_delta(MAX_TURNS_USER_MESSAGE)
+            logger.warning(
+                "max_turns_exceeded_soft_finish",
                 session_id=session_id,
+                agent_id=agent_id,
                 error=str(exc),
-                exc_info=True,
+                salvage_chars=len(salvage),
+                emitted_chars=live_emitted_text_chars,
+                llm_turns=llm_turn_index,
+                tool_calls=tool_call_index,
             )
             try:
                 _emit_route_timing(dispatch_items=[])
-            except Exception:  # noqa: BLE001 - 观测日志失败不得掩盖原异常
+            except Exception:  # noqa: BLE001
                 pass
-            yield AgentEvent.error("RUNTIME_ERROR", str(exc))
-            yield AgentEvent.done()
+            yield AgentEvent.done(total_usage)
+        except Exception as exc:
+            if is_max_turns_exceeded(exc):
+                # 兜底：某些版本/包装下 MaxTurns 可能不是原类型
+                salvage = ""
+                try:
+                    salvage = "".join(turn_text_parts).strip()
+                    turn_text_parts.clear()
+                except Exception:  # noqa: BLE001
+                    salvage = ""
+                if salvage:
+                    if ms_to_first_text is None:
+                        ms_to_first_text = _elapsed_ms(turn_t0)
+                    live_emitted_text_chars += len(salvage)
+                    yield AgentEvent.text_delta(salvage)
+                if live_emitted_text_chars <= 0:
+                    if ms_to_first_text is None:
+                        ms_to_first_text = _elapsed_ms(turn_t0)
+                    live_emitted_text_chars += len(MAX_TURNS_USER_MESSAGE)
+                    yield AgentEvent.text_delta(MAX_TURNS_USER_MESSAGE)
+                logger.warning(
+                    "max_turns_exceeded_soft_finish",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    error=str(exc),
+                    salvage_chars=len(salvage),
+                    emitted_chars=live_emitted_text_chars,
+                    via="message_match",
+                )
+                try:
+                    _emit_route_timing(dispatch_items=[])
+                except Exception:  # noqa: BLE001
+                    pass
+                yield AgentEvent.done(total_usage)
+            else:
+                logger.error(
+                    "Agent run failed",
+                    session_id=session_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                try:
+                    _emit_route_timing(dispatch_items=[])
+                except Exception:  # noqa: BLE001 - 观测日志失败不得掩盖原异常
+                    pass
+                yield AgentEvent.error("RUNTIME_ERROR", str(exc))
+                yield AgentEvent.done()
 
     async def register_tools(self, skills: list[dict[str, Any]]) -> None:
         """空操作 — 原生 OpenHarness 通过 ``extra_skill_dirs`` 发现 skills。"""

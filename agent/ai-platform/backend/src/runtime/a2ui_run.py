@@ -30,6 +30,7 @@ UUID 一致，Gateway ``parseBackendAgentEvent`` → ``EventConverter`` RUN_FINI
 """
 
 from __future__ import annotations
+from dataclasses import dataclass
 from typing import Any
 
 import json
@@ -49,6 +50,7 @@ from src.coordinator.passthrough import (
     should_hard_dispatch,
     should_passthrough_invoke,
 )
+from src.coordinator.routing_llm import enrich_invoke_args_with_template
 from src.coordinator.trace import peek_dispatch_traces
 from src.llm.gateway import LLMGateway
 from src.llm.models import LLMMessage, LLMRequest, LLMRole, LLMResponse
@@ -306,29 +308,303 @@ def merge_openai_tools(
     return merged
 
 
+def filter_openai_tools_by_exclude(
+    tools: list[dict[str, Any]],
+    exclude_names: list[str] | set[str] | tuple[str, ...] | None,
+) -> list[dict[str, Any]]:
+    """按工具名黑名单过滤 OpenAI tools（用于协调者收窄 LLM 可见工具面）。
+
+    Args:
+        tools: ``merge_openai_tools`` 结果。
+        exclude_names: 要剔除的 function.name；空则原样返回。
+
+    Returns:
+        过滤后的列表（保持原顺序）。
+    """
+    if not tools:
+        return []
+    blocked = {
+        str(name).strip()
+        for name in (exclude_names or [])
+        if str(name).strip()
+    }
+    if not blocked:
+        return list(tools)
+    kept: list[dict[str, Any]] = []
+    for item in tools:
+        function: Any = item.get("function") if isinstance(item, dict) else None
+        name: Any = function.get("name") if isinstance(function, dict) else None
+        if isinstance(name, str) and name in blocked:
+            continue
+        kept.append(item)
+    return kept
+
+
+def load_exclude_llm_tools(agent_id: str) -> list[str]:
+    """读取 ``runtime.params.excludeLlmTools``（A2UI 通道交给模型的工具黑名单）。
+
+    Args:
+        agent_id: Agent ID。
+
+    Returns:
+        工具名列表；缺省 / 读失败返回 ``[]``。
+    """
+    if not (agent_id or "").strip():
+        return []
+    try:
+        from src.config_manager.manager import get_config_manager
+
+        config = get_config_manager().get_config_cached(agent_id.strip())
+        if config is None or not getattr(config, "runtime", None):
+            return []
+        params = getattr(config.runtime, "params", None) or {}
+        if not isinstance(params, dict):
+            return []
+        raw = params.get("excludeLlmTools") or params.get("exclude_llm_tools") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(x).strip() for x in raw if str(x).strip()]
+    except Exception as exc:  # noqa: BLE001 - 配置失败不阻断对话
+        logger.warning(
+            "load excludeLlmTools failed",
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return []
+
+
+@dataclass(frozen=True)
+class A2uiLlmRuntime:
+    """从 Agent ``runtime.params`` + ``model`` 解析出的 A2UI LLM 运行参数。
+
+    字段为 ``None`` 表示配置缺失，调用方回退到 ``A2uiRunLoop`` 构造默认值。
+    """
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+    max_turns: int | None = None
+    model: str | None = None
+
+
+def load_a2ui_llm_runtime(agent_id: str) -> A2uiLlmRuntime:
+    """读取 Agent 模型/运行时参数，供 A2UI 通道与 OpenHarness 对齐。
+
+    来源：
+    - ``runtime.params.temperature`` / ``maxTokens`` / ``maxSteps``
+    - ``model.primary``（``system/model.yaml``）
+
+    Args:
+        agent_id: Agent ID（如 ``mis-copilot``）。
+
+    Returns:
+        解析结果；缺省 / 读失败时各字段为 ``None``。
+    """
+    if not (agent_id or "").strip():
+        return A2uiLlmRuntime()
+    try:
+        from src.config_manager.manager import get_config_manager
+
+        config = get_config_manager().get_config_cached(agent_id.strip())
+        if config is None:
+            return A2uiLlmRuntime()
+
+        temperature: float | None = None
+        max_tokens: int | None = None
+        max_turns: int | None = None
+        model: str | None = None
+
+        params = getattr(getattr(config, "runtime", None), "params", None) or {}
+        if isinstance(params, dict):
+            if params.get("temperature") is not None:
+                temperature = float(params["temperature"])
+            raw_max_tokens = params.get("maxTokens", params.get("max_tokens"))
+            if raw_max_tokens is not None:
+                max_tokens = int(raw_max_tokens)
+            raw_max_steps = params.get("maxSteps", params.get("max_steps"))
+            if raw_max_steps is not None:
+                max_turns = int(raw_max_steps)
+
+        model_cfg = getattr(config, "model", None)
+        primary = getattr(model_cfg, "primary", None) if model_cfg is not None else None
+        if isinstance(primary, str) and primary.strip():
+            model = primary.strip()
+
+        return A2uiLlmRuntime(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_turns=max_turns,
+            model=model,
+        )
+    except Exception as exc:  # noqa: BLE001 - 配置失败不阻断对话
+        logger.warning(
+            "load_a2ui_llm_runtime failed",
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return A2uiLlmRuntime()
+
+
+def _looks_like_truncated_assistant_text(text: str) -> bool:
+    """粗检助手正文是否像半截（表未收尾 / 未闭合加粗 / 句末残缺）。"""
+    raw = (text or "").rstrip()
+    if not raw:
+        return False
+    if raw.count("**") % 2 == 1:
+        return True
+    if raw.count("|") >= 2 and not raw.endswith("|") and "\n|" in raw:
+        # 表行开了但最后一行不像完整单元格收尾
+        last = raw.rsplit("\n", 1)[-1].strip()
+        if last.startswith("|") and not last.endswith("|"):
+            return True
+        if last.startswith("|") and last.count("|") < 2:
+            return True
+    # 常见半截：以未配对左括号 / 「门店」等截断词尾结束
+    if raw.endswith(("（", "(", "【", "[", "，", ",", "、")):
+        return True
+    return False
+
+
+#: 自行决策（无 tool_calls / finish=stop）排障：单条 message content 上限
+_SELF_STOP_MSG_CHARS = 4000
+#: 自行决策排障：assistant 正文 / reasoning 上限
+_SELF_STOP_RESPONSE_CHARS = 8000
+
+
+def _text_for_log(value: Any, max_chars: int) -> str:
+    """把 message content（str / 多模态 list）压成可入日志的字符串。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, list):
+        parts: list[str] = []
+        for part in value:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    parts.append(str(part.get("text") or ""))
+                elif part.get("type") == "image_url":
+                    parts.append("[image_url]")
+                else:
+                    parts.append(json.dumps(part, ensure_ascii=False)[:200])
+            else:
+                parts.append(str(part))
+        text = "\n".join(parts)
+    else:
+        text = str(value)
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}…(truncated,total={len(text)})"
+
+
+def _messages_for_self_stop_log(
+    messages: list[LLMMessage],
+    *,
+    max_chars_per_msg: int = _SELF_STOP_MSG_CHARS,
+) -> list[dict[str, Any]]:
+    """序列化发给协调者 LLM 的 messages，供 finish=stop 排障。"""
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.role.value if isinstance(msg.role, LLMRole) else str(msg.role)
+        entry: dict[str, Any] = {
+            "role": role,
+            "content": _text_for_log(msg.content, max_chars_per_msg),
+        }
+        if msg.tool_calls:
+            entry["tool_calls"] = msg.tool_calls
+        if msg.tool_call_id:
+            entry["tool_call_id"] = msg.tool_call_id
+        if msg.name:
+            entry["name"] = msg.name
+        out.append(entry)
+    return out
+
+
+def _tool_names_for_log(tools: list[dict[str, Any]] | None) -> list[str]:
+    """从 OpenAI tools schema 抽出工具名列表。"""
+    names: list[str] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if tool.get("type") == "function" else tool
+        if isinstance(fn, dict) and fn.get("name"):
+            names.append(str(fn["name"]))
+        elif tool.get("name"):
+            names.append(str(tool["name"]))
+    return names
+
+
+def _log_coordinator_self_stop_detail(
+    *,
+    agent_id: str,
+    session_id: str,
+    turn: int,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    tool_choice: str,
+    openai_tools: list[dict[str, Any]],
+    llm_messages: list[LLMMessage],
+    response: LLMResponse,
+    finish_reason: str,
+    content_chars: int,
+    completion_tokens: int | None,
+    looks_truncated: bool,
+) -> None:
+    """协调者自行决策（无 tool_calls）时落详细请求/响应，便于查无故 finish=stop。"""
+    content = response.content or ""
+    reasoning = getattr(response, "reasoning_content", None) or ""
+    logger.warning(
+        "coordinator llm self-stop detail",
+        agent_id=agent_id,
+        session_id=session_id,
+        turn=turn,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tool_choice=tool_choice,
+        tools=_tool_names_for_log(openai_tools),
+        tools_count=len(openai_tools or []),
+        messages_count=len(llm_messages),
+        messages=_messages_for_self_stop_log(llm_messages),
+        finish_reason=finish_reason,
+        upstream_finish=str(getattr(response, "finish_reason", "") or ""),
+        content_chars=content_chars,
+        completion_tokens=completion_tokens,
+        prompt_tokens=(
+            int(response.usage.prompt_tokens)
+            if response.usage and response.usage.prompt_tokens
+            else None
+        ),
+        looks_truncated=looks_truncated,
+        response_content=_text_for_log(content, _SELF_STOP_RESPONSE_CHARS),
+        reasoning_content=_text_for_log(reasoning, _SELF_STOP_RESPONSE_CHARS)
+        if reasoning
+        else "",
+    )
+
+
 #: A2UI 通道专用调度纪律（补丁到 system；与 Coordinator ``system.md`` 叠加）。
 #:
 #: 设计判断：A2UI 是「可交互界面」能力，不是「每种回复的必选外壳」。
 #: 路由/委派一律由 MIS-COPILOT（Coordinator system.md + agent__invoke）决定，
 #: 本 hint **不**写死「某类问题必须调某 Worker」，避免与 Coordinator 意图表抢权。
 #: 曾写「拿到 mis-rag 后必须 render_a2ui」→ 模型为凑 UI 自创「确认清单」+ 空表。
-A2UI_COORDINATOR_HINT = """你在 A2UI 对话通道中。除 render_a2ui 外，你还可以调用平台委派工具。
-硬性规则：
-1. **委派与回答**：按你作为 MIS Copilot（Coordinator）的系统提示执行意图判断与 `agent__invoke`；本通道不另行指定路由目标。Worker 正文（含 mis-rag 的 ```kb-sources 围栏）须原样保留给用户；失败时如实说明，禁止虚构填补。
-2. **展示策略（按需，非必须）**：
-   - 知识问答、步骤说明、概念解释、业务结论：优先自然语言（普通助手文本即可）。
-   - 仅当确实需要可交互界面或已有多行结构化数据时，再调用 `render_a2ui`（如审批卡、表单、实体选择、真实 data-table）。
-   - 组件名只用 catalog：`container`/`text`/`button`/`input`/`data-table`/`form-sheet`/`entity-select`/`approval-card`（可用 `divider`）。不要用未登记的 `view`。
-3. **禁止编造 UI 脚手架**：不得添加知识库原文没有的标题（如「设置完成确认清单」「检查清单」）；不得先画空表再填。
-4. `data-table` 仅当结果里已有多行键值数据时使用，且 `rows` 必须非空；步骤/配置项用自然语言或 Markdown 列表，禁止空表。
+A2UI_COORDINATOR_HINT = """A2UI 通道：只调 coordinator__decide；route 后系统委派并结束。禁止裸答经营数字。勿造空确认清单。
 """
 
+DECIDE_TOOL_NAME = "coordinator__decide"
+REFUSE_NO_TOOL_MESSAGE = (
+    "【信息不足，缺少必要业务数据，无法给出有效结果，不编造数据】"
+)
+
 #: Coordinator system.md 特征串（已注入则不重复）。
-_COORDINATOR_SYSTEM_MARKER = "智能对话助手（Copilot）"
+_COORDINATOR_SYSTEM_MARKER = "MIS Copilot"
 
 
 def load_agent_system_prompt(agent_id: str) -> str:
     """从 ConfigManager 读取 Agent 的 system prompt（``runtime/prompts/system.md``）。
+
+    Coordinator 会再注入 ``worker_ids`` + 各 Worker ``when_to_use`` 意图表。
 
     Args:
         agent_id: 如 ``mis-copilot``。
@@ -346,16 +622,24 @@ def load_agent_system_prompt(agent_id: str) -> str:
         if config is None:
             return ""
         prompt = (config.system_prompt or "").strip()
-        if prompt:
-            return prompt
-        # 兼容：部分加载路径只写在 runtime.prompts
-        if config.runtime and isinstance(config.runtime.prompts, dict):
+        if not prompt and config.runtime and isinstance(config.runtime.prompts, dict):
+            # 兼容：部分加载路径只写在 runtime.prompts
             nested = config.runtime.prompts.get("system_prompt") or config.runtime.prompts.get(
                 "system"
             )
             if isinstance(nested, str) and nested.strip() and not nested.endswith((".md", ".txt")):
-                return nested.strip()
-        return ""
+                prompt = nested.strip()
+        if not prompt:
+            return ""
+        # Coordinator：自动生成可委派意图表，避免与详情页 worker_ids 双写
+        role_value = getattr(getattr(config, "role", None), "value", None) or str(
+            getattr(config, "role", "") or ""
+        )
+        if str(role_value).lower() == "coordinator":
+            from src.coordinator.prompt_compose import compose_coordinator_system_prompt
+
+            return compose_coordinator_system_prompt(agent_id, prompt)
+        return prompt
     except Exception as exc:  # noqa: BLE001 - 配置缺失时降级，仅靠 A2UI hint
         logger.warning(
             "load_agent_system_prompt failed",
@@ -369,7 +653,7 @@ def ensure_coordinator_system_prompt(
     messages: list[LLMMessage],
     agent_id: str,
 ) -> list[LLMMessage]:
-    """确保消息列表含 Coordinator 完整 system.md（意图→Worker 表）。
+    """确保消息列表含 Coordinator system prompt（含自动意图表）。
 
     A2UI 通道原先只注入短 hint，导致 CRM 等委派规则丢失。
     """
@@ -396,6 +680,49 @@ def ensure_a2ui_system_hint(messages: list[LLMMessage]) -> list[LLMMessage]:
         if msg.role == LLMRole.SYSTEM and marker in (msg.content or ""):
             return messages
     return [LLMMessage(role=LLMRole.SYSTEM, content=A2UI_COORDINATOR_HINT), *messages]
+
+def _openai_tools_contain(tools: list[dict[str, Any]], name: str) -> bool:
+    """OpenAI tools 列表是否包含指定 function.name。"""
+    for item in tools or []:
+        function = item.get("function") if isinstance(item, dict) else None
+        if isinstance(function, dict) and str(function.get("name") or "") == name:
+            return True
+    return False
+
+
+def _parse_template_open_card_from_invoke_output(
+    tool_output: str,
+) -> tuple[str, str, str] | None:
+    """解析 ``agent__invoke`` 输出中的模板报告开卡标记。
+
+    Returns:
+        ``(report_code, title, tip)``；非开卡结果返回 ``None``。
+    """
+    text = (tool_output or "").strip()
+    body = text
+    if text.startswith("[task:"):
+        first_line, _, rest = text.partition("\n")
+        if "status=completed" not in first_line:
+            return None
+        body = rest.lstrip("\n").strip()
+    if not body:
+        return None
+    try:
+        from src.agent.template_report.pipeline import parse_open_card_marker
+    except Exception:  # noqa: BLE001
+        return None
+    parsed = parse_open_card_marker(body)
+    if not parsed:
+        return None
+    report_code, title = parsed
+    tip_lines = body.split("\n", 1)
+    tip = (
+        tip_lines[1].strip()
+        if len(tip_lines) > 1
+        else f"已为您打开「{title}」参数卡，请确认参数后生成报告。"
+    )
+    return report_code, title, tip
+
 
 def _try_json_loads(raw: str) -> Any:
     """尝试 ``json.loads``；失败（非法 JSON）原样返回输入字符串。
@@ -605,11 +932,45 @@ class A2uiRunLoop:
         """
         messages: list[dict[str, Any]] = run_agent_input.get("messages") or []
         tools: list[Any] = run_agent_input.get("tools") or []
-        model: str = str(run_agent_input.get("model") or self._model)
         # A2UI 入站常不带 agentId；回落默认 Coordinator，才能装配 agent__invoke。
         resolved_agent_id: str = (
             agent_id or self._settings.AGENT_ROUTER_DEFAULT_AGENT or "mis-copilot"
         )
+        # 与 OpenHarness 对齐：读 Agent runtime.params + model.primary（如 mis-copilot 的 0.3）。
+        agent_llm = load_a2ui_llm_runtime(resolved_agent_id)
+        temperature: float = (
+            agent_llm.temperature
+            if agent_llm.temperature is not None
+            else self._temperature
+        )
+        max_tokens: int = (
+            agent_llm.max_tokens
+            if agent_llm.max_tokens is not None
+            else self._max_tokens
+        )
+        max_turns: int = (
+            agent_llm.max_turns
+            if agent_llm.max_turns is not None
+            else self._max_turns
+        )
+        inbound_model = str(run_agent_input.get("model") or "").strip()
+        # Agent model.primary 优先，避免 Gateway/全局默认覆盖 Coordinator 配置。
+        model: str = agent_llm.model or inbound_model or self._model
+        if (
+            agent_llm.temperature is not None
+            or agent_llm.max_tokens is not None
+            or agent_llm.max_turns is not None
+            or agent_llm.model
+        ):
+            logger.info(
+                "A2UI LLM runtime from agent config",
+                agent_id=resolved_agent_id,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_turns=max_turns,
+                inbound_model=inbound_model or None,
+            )
         # 工具执行身份（P4：只来自 JWT 验签结果 + 上游解析的 misUserId）。
         identity: dict[str, str] = build_mcp_identity(
             user_id=user_id,
@@ -738,6 +1099,50 @@ class A2uiRunLoop:
             openai_tools: list[dict[str, Any]] = merge_openai_tools(
                 agui_openai, platform_openai
             )
+            exclude_llm_tools = load_exclude_llm_tools(resolved_agent_id)
+            if exclude_llm_tools:
+                before_names = [
+                    str((t.get("function") or {}).get("name") or "")
+                    for t in openai_tools
+                    if isinstance(t, dict)
+                ]
+                openai_tools = filter_openai_tools_by_exclude(
+                    openai_tools, exclude_llm_tools
+                )
+                after_names = [
+                    str((t.get("function") or {}).get("name") or "")
+                    for t in openai_tools
+                    if isinstance(t, dict)
+                ]
+                logger.info(
+                    "A2UI LLM tools narrowed by excludeLlmTools",
+                    agent_id=resolved_agent_id,
+                    session_id=session_id,
+                    exclude=exclude_llm_tools,
+                    before=before_names,
+                    after=after_names,
+                )
+            # 委派入参模板补全用的上文（与硬委派同口径；不另开「精简选人轮」）
+            routing_ctx = ""
+            try:
+                from src.intent_router.service import (
+                    format_conversation_context_for_jev as _fmt_route_ctx,
+                )
+
+                routing_ctx = _fmt_route_ctx(
+                    last_user_for_route,
+                    history_for_jev,
+                    max_context_turns=3,
+                    max_msg_chars=800,
+                )
+            except Exception:  # noqa: BLE001
+                routing_ctx = ""
+            force_decide_tools = _openai_tools_contain(openai_tools, DECIDE_TOOL_NAME)
+            llm_tool_choice: str = (
+                "required"
+                if force_decide_tools
+                else ("auto" if openai_tools else "none")
+            )
             total_usage: TokenUsage = TokenUsage()
             assistant_parts: list[str] = []
             # 本轮成功 render_a2ui 快照，写入 assistant metadata.a2ui 供历史还原。
@@ -809,6 +1214,7 @@ class A2uiRunLoop:
                 )
 
             # JEV/规则命中 hard_dispatch_workers → 跳过 Coordinator 首轮 LLM，直接 invoke
+            # （不再首步无条件探测 template-report；模板报告仅经意图/LLM 委派进入）
             hard_worker = ""
             if route_decision is not None:
                 hard_worker = str(getattr(route_decision, "worker_id", None) or "").strip()
@@ -900,12 +1306,31 @@ class A2uiRunLoop:
                     ),
                 )
                 await emit(AgentEvent.tool_result("agent__invoke", hard_result))
-                hard_body = extract_passthrough_worker_text(
-                    str(hard_result.get("output") or "")
+                hard_output = str(hard_result.get("output") or "")
+                open_card = _parse_template_open_card_from_invoke_output(hard_output)
+                if open_card:
+                    report_code, title, tip = open_card
+                    if ms_to_first_text is None:
+                        ms_to_first_text = elapsed_ms(turn_t0)
+                    await emit(AgentEvent.text_delta(tip))
+                    await emit(
+                        AgentEvent.report_open_card(report_code, title=title)
+                    )
+                    assistant_parts.append(tip)
+                    completed = True
+                hard_body = (
+                    None
+                    if open_card
+                    else extract_passthrough_worker_text(hard_output)
                 )
                 if hard_body:
-                    from src.coordinator.parent_progress import parent_text_was_streamed
+                    from src.coordinator.parent_progress import (
+                        format_parent_stream_detail,
+                        parent_text_stream_stats,
+                        parent_text_was_streamed,
+                    )
 
+                    stream_stats = parent_text_stream_stats()
                     already_streamed = parent_text_was_streamed()
                     log_turn_step(
                         session_id=session_id,
@@ -915,7 +1340,8 @@ class A2uiRunLoop:
                         detail=(
                             f"Worker={hard_worker}；正文{len(hard_body)}字；"
                             f"来源=hard_dispatch；"
-                            f"{'已流式' if already_streamed else '整段下发'}"
+                            f"{format_parent_stream_detail(stream_stats)}；"
+                            f"保底整段=下发"
                         ),
                     )
                     logger.info(
@@ -926,6 +1352,12 @@ class A2uiRunLoop:
                         body_chars=len(hard_body),
                         source="hard_dispatch",
                         already_streamed=already_streamed,
+                        stream_mode=stream_stats.get("stream_mode"),
+                        stream_delta_count=stream_stats.get("delta_count"),
+                        stream_total_chars=stream_stats.get("total_chars"),
+                        stream_span_ms=stream_stats.get("span_ms"),
+                        stream_max_chunk_chars=stream_stats.get("max_chunk_chars"),
+                        safety_dump="emit",
                     )
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
@@ -934,7 +1366,7 @@ class A2uiRunLoop:
                     await emit(AgentEvent.text_delta(hard_body))
                     assistant_parts.append(hard_body)
                     completed = True
-                else:
+                elif not open_card:
                     from src.runtime.gateway_api_client import (
                         MODEL_GARBAGE_RETRY_MESSAGE,
                         is_model_garbage_payload,
@@ -978,7 +1410,7 @@ class A2uiRunLoop:
                             error=hard_result.get("error"),
                         )
 
-            for turn in range(1, self._max_turns + 1):
+            for turn in range(1, max_turns + 1):
                 if completed:
                     break
                 llm_t0 = perf_counter()
@@ -1002,10 +1434,10 @@ class A2uiRunLoop:
                         LLMRequest(
                             messages=llm_messages,
                             model=model,
-                            temperature=self._temperature,
-                            max_tokens=self._max_tokens,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
                             tools=openai_tools,
-                            tool_choice="auto" if openai_tools else "none",
+                            tool_choice=llm_tool_choice,
                             session_id=session_id,
                             user_id=user_id,
                             extra=llm_request_extra_for_thinking(
@@ -1036,7 +1468,20 @@ class A2uiRunLoop:
                         completion=response.usage.completion_tokens,
                         total=response.usage.total_tokens,
                     )
-                finish_reason = "tool_calls" if response.tool_calls else "stop"
+                # 保留上游真实 finish_reason（勿再改写成仅有/无 tool_calls）
+                upstream_finish = str(getattr(response, "finish_reason", "") or "").strip()
+                if response.tool_calls:
+                    finish_reason = (
+                        f"tool_calls/upstream={upstream_finish or 'n/a'}"
+                    )
+                else:
+                    finish_reason = upstream_finish or "stop"
+                content_chars = len(response.content or "")
+                completion_tokens = (
+                    int(response.usage.completion_tokens)
+                    if response.usage and response.usage.completion_tokens
+                    else None
+                )
                 log_agent_step_timing(
                     agent_id=resolved_agent_id,
                     role=role_value,
@@ -1050,16 +1495,67 @@ class A2uiRunLoop:
                     finish_reason=finish_reason,
                     tokens=turn_tokens or None,
                     ttft_ms=llm_duration if response.content else None,
+                    content_chars=content_chars or None,
+                    completion_tokens=completion_tokens,
+                    has_tool_calls=bool(response.tool_calls),
                 )
+                if not response.tool_calls:
+                    looks_truncated = bool(
+                        response.content
+                        and _looks_like_truncated_assistant_text(response.content)
+                    )
+                    _log_coordinator_self_stop_detail(
+                        agent_id=resolved_agent_id,
+                        session_id=session_id,
+                        turn=turn,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tool_choice=llm_tool_choice,
+                        openai_tools=openai_tools,
+                        llm_messages=llm_messages,
+                        response=response,
+                        finish_reason=finish_reason,
+                        content_chars=content_chars,
+                        completion_tokens=completion_tokens,
+                        looks_truncated=looks_truncated,
+                    )
+                    if looks_truncated:
+                        logger.warning(
+                            "coordinator assistant text looks truncated",
+                            agent_id=resolved_agent_id,
+                            session_id=session_id,
+                            finish_reason=finish_reason,
+                            content_chars=content_chars,
+                            completion_tokens=completion_tokens,
+                            preview=(response.content or "")[:120],
+                        )
 
                 # 有 tool_calls 时 content 多为过程旁白，不对用户展示（仍写入 llm_messages）
                 if response.content and not response.tool_calls:
-                    if ms_to_first_text is None:
-                        ms_to_first_text = elapsed_ms(turn_t0)
-                    assistant_parts.append(response.content)
-                    await emit(AgentEvent.text_delta(response.content))
+                    if force_decide_tools:
+                        # 决策模式下禁止裸答：丢弃模型正文，固定拒答
+                        logger.warning(
+                            "coordinator self-stop blocked by decide-only mode",
+                            session_id=session_id,
+                            content_chars=content_chars,
+                        )
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        await emit(AgentEvent.text_delta(REFUSE_NO_TOOL_MESSAGE))
+                        assistant_parts.append(REFUSE_NO_TOOL_MESSAGE)
+                    else:
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        assistant_parts.append(response.content)
+                        await emit(AgentEvent.text_delta(response.content))
 
                 if not response.tool_calls:
+                    if force_decide_tools and not assistant_parts:
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        await emit(AgentEvent.text_delta(REFUSE_NO_TOOL_MESSAGE))
+                        assistant_parts.append(REFUSE_NO_TOOL_MESSAGE)
                     completed = True
                     break
 
@@ -1085,6 +1581,13 @@ class A2uiRunLoop:
                     args: dict[str, Any] = _parse_tool_args(
                         function.get("arguments", "{}")
                     )
+                    # 选人轮：LLM 只出 agent_id/content 时，用模板补全 TaskBrief
+                    if tool_name in INVOKE_TOOL_NAMES:
+                        args = enrich_invoke_args_with_template(
+                            args,
+                            user_text=last_user_for_route,
+                            conversation_context=routing_ctx or None,
+                        )
                     processed = True
                     skill_id = skill_id_from_tool_input(tool_name, args)
                     worker_id_for_tool = worker_from_tool_input(args)
@@ -1145,7 +1648,127 @@ class A2uiRunLoop:
                     if body is not None:
                         passthrough_text = body
                         passthrough_worker = worker_id_for_tool
+                    # 模板报告开卡：由通道消费标记并推事件，不交给收尾 LLM
+                    open_card = None
+                    if body is None and tool_name in INVOKE_TOOL_NAMES:
+                        open_card = _parse_template_open_card_from_invoke_output(
+                            str(result.get("output") or "")
+                        )
                     await emit(AgentEvent.tool_result(tool_name, result))
+                    if open_card:
+                        report_code, title, tip = open_card
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        await emit(AgentEvent.text_delta(tip))
+                        await emit(
+                            AgentEvent.report_open_card(report_code, title=title)
+                        )
+                        assistant_parts.append(tip)
+                        completed = True
+                        break
+                    # 决策工具：route → 硬委派并结束；clarify/refuse/chitchat → 短文收口
+                    if tool_name == DECIDE_TOOL_NAME:
+                        from src.skills.tools.coordinator_decide import (
+                            REFUSE_FIXED_MESSAGE,
+                            parse_decide_tool_output,
+                        )
+
+                        decision = parse_decide_tool_output(
+                            str(result.get("output") or "")
+                        ) or {}
+                        action = str(decision.get("action") or "").strip().lower()
+                        if action == "route":
+                            decide_worker = str(
+                                decision.get("worker_id") or ""
+                            ).strip()
+                            decide_intent = str(decision.get("intent") or "").strip()
+                            decide_content = str(
+                                decision.get("content") or ""
+                            ).strip() or last_user_for_route
+                            if not decide_worker:
+                                tip = REFUSE_FIXED_MESSAGE
+                                if ms_to_first_text is None:
+                                    ms_to_first_text = elapsed_ms(turn_t0)
+                                await emit(AgentEvent.text_delta(tip))
+                                assistant_parts.append(tip)
+                                completed = True
+                                break
+                            invoke_args = build_hard_dispatch_invoke_args(
+                                worker_id=decide_worker,
+                                user_text=decide_content,
+                                intent=decide_intent,
+                                conversation_context=routing_ctx or None,
+                                mode="continue",
+                            )
+                            if ms_to_first_invoke is None:
+                                ms_to_first_invoke = elapsed_ms(turn_t0)
+                                invoke_intent = decide_intent or None
+                                invoke_worker = decide_worker
+                            await emit(
+                                AgentEvent.tool_call("agent__invoke", invoke_args)
+                            )
+                            inv_t0 = perf_counter()
+                            inv_result = await self._execute_tool(
+                                "agent__invoke",
+                                invoke_args,
+                                session_id,
+                                identity=identity,
+                                agent_id=resolved_agent_id,
+                                ask_tool_metadata=ask_meta,
+                            )
+                            inv_ms = elapsed_ms(inv_t0)
+                            tool_call_index += 1
+                            sum_tool_ms += inv_ms
+                            await emit(
+                                AgentEvent.tool_result("agent__invoke", inv_result)
+                            )
+                            inv_output = str(inv_result.get("output") or "")
+                            card = _parse_template_open_card_from_invoke_output(
+                                inv_output
+                            )
+                            if card:
+                                report_code, title, tip = card
+                                if ms_to_first_text is None:
+                                    ms_to_first_text = elapsed_ms(turn_t0)
+                                await emit(AgentEvent.text_delta(tip))
+                                await emit(
+                                    AgentEvent.report_open_card(
+                                        report_code, title=title
+                                    )
+                                )
+                                assistant_parts.append(tip)
+                            else:
+                                pass_body = extract_passthrough_worker_text(
+                                    inv_output
+                                )
+                                if pass_body:
+                                    if ms_to_first_text is None:
+                                        ms_to_first_text = elapsed_ms(turn_t0)
+                                    await emit(AgentEvent.text_delta(pass_body))
+                                    assistant_parts.append(pass_body)
+                                else:
+                                    tip = REFUSE_FIXED_MESSAGE
+                                    if ms_to_first_text is None:
+                                        ms_to_first_text = elapsed_ms(turn_t0)
+                                    await emit(AgentEvent.text_delta(tip))
+                                    assistant_parts.append(tip)
+                            logger.info(
+                                "coordinator_decide routed and finished",
+                                session_id=session_id,
+                                worker_id=decide_worker,
+                                intent=decide_intent or None,
+                            )
+                            completed = True
+                            break
+                        tip = str(decision.get("message") or "").strip() or (
+                            REFUSE_FIXED_MESSAGE
+                        )
+                        if ms_to_first_text is None:
+                            ms_to_first_text = elapsed_ms(turn_t0)
+                        await emit(AgentEvent.text_delta(tip))
+                        assistant_parts.append(tip)
+                        completed = True
+                        break
                     llm_messages.append(
                         LLMMessage(
                             role=LLMRole.TOOL,
@@ -1156,15 +1779,22 @@ class A2uiRunLoop:
                 if not processed:
                     error_message = "A2UI run 工具调用格式无法解析"
                     break
+                if completed:
+                    break
                 # 透传：本轮仅一次成功 invoke 且目标在 passthrough_workers → 跳过收尾 LLM
                 if (
                     passthrough_text
                     and invoke_count_in_turn == 1
                     and other_tool_count_in_turn == 0
                 ):
-                    from src.coordinator.parent_progress import parent_text_was_streamed
+                    from src.coordinator.parent_progress import (
+                        format_parent_stream_detail,
+                        parent_text_stream_stats,
+                        parent_text_was_streamed,
+                    )
                     from src.runtime.step_timing import log_turn_step
 
+                    stream_stats = parent_text_stream_stats()
                     already_streamed = parent_text_was_streamed()
                     log_turn_step(
                         session_id=session_id,
@@ -1174,7 +1804,8 @@ class A2uiRunLoop:
                         detail=(
                             f"Worker={passthrough_worker or '-'}；"
                             f"正文{len(passthrough_text)}字；"
-                            f"{'已流式' if already_streamed else '整段下发'}"
+                            f"{format_parent_stream_detail(stream_stats)}；"
+                            f"保底整段=下发"
                         ),
                     )
                     logger.info(
@@ -1184,6 +1815,12 @@ class A2uiRunLoop:
                         worker_id=passthrough_worker,
                         body_chars=len(passthrough_text),
                         already_streamed=already_streamed,
+                        stream_mode=stream_stats.get("stream_mode"),
+                        stream_delta_count=stream_stats.get("delta_count"),
+                        stream_total_chars=stream_stats.get("total_chars"),
+                        stream_span_ms=stream_stats.get("span_ms"),
+                        stream_max_chunk_chars=stream_stats.get("max_chunk_chars"),
+                        safety_dump="emit",
                     )
                     if ms_to_first_text is None:
                         ms_to_first_text = elapsed_ms(turn_t0)
@@ -1195,7 +1832,7 @@ class A2uiRunLoop:
                 # 本轮有工具调用 → 继续下一轮 LLM（直到无工具调用或达到轮数上限）
 
             if not completed and error_message is None:
-                error_message = f"A2UI run 达到最大执行轮数（{self._max_turns}）"
+                error_message = f"A2UI run 达到最大执行轮数（{max_turns}）"
 
             if error_message is not None:
                 logger.warning(
@@ -1377,6 +2014,8 @@ class A2uiRunLoop:
         tool_meta: dict[str, Any] = {
             "session_id": session_id,
             "identity": identity or build_mcp_identity(),
+            "agent_id": agent_id or "",
+            "coordinator_id": agent_id or "",
         }
         # 只合并受信 BFF 头（入站已剥伪造）；供 agent__invoke / iqd__ask 读取。
         for key, value in (ask_tool_metadata or {}).items():

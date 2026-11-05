@@ -224,20 +224,6 @@ def _tool_calls_to_content_blocks(
     return blocks
 
 
-def _yield_text_by_lines(content: str) -> list[str]:
-    """按行切片正文，避免 Markdown 表格行从中间切断。"""
-    pieces: list[str] = []
-    remaining = content
-    while remaining:
-        nl = remaining.find("\n")
-        if nl < 0:
-            pieces.append(remaining)
-            break
-        pieces.append(remaining[: nl + 1])
-        remaining = remaining[nl + 1 :]
-    return pieces
-
-
 class GatewayApiClient:
     """将 OpenHarness QueryEngine 的 LLM 调用路由通过平台的 LLMGateway 发送。"""
 
@@ -280,10 +266,9 @@ class GatewayApiClient:
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """将 OpenHarness ``ApiMessageRequest`` 转为平台 LLM 调用并流式返回 API 事件。
 
-        - **有 tools**：走非流式 ``chat``（当前 Qwen/代理对 stream+tools 不稳定，
-          强行走流式会导致 tool_calls 丢失 → 无工具进度、无正文）。收齐后按行
-          下发文本增量，便于父会话透传时仍能逐行刷到前端。
-        - **无 tools**：走 ``chat_stream`` 真流式。
+        一律 ``chat_stream`` 真流式（含注册了 tools 的 Worker 终稿轮）。
+        旧实现「有 tools → 非流式 chat 再按行假推」会在收齐后 ~30ms 内刷完，
+        前端观感像整包弹出。流式路径已用 ``tool_call_deltas`` 拼装工具调用。
 
         Args:
             request: OpenHarness 消息请求（消息、系统提示、tools 等）。
@@ -312,7 +297,7 @@ class GatewayApiClient:
             model=self._model,
             temperature=self._temperature,
             max_tokens=min(request.max_tokens, self._max_tokens),
-            stream=not has_tools,
+            stream=True,
             tools=openai_tools,
             tool_choice="auto" if has_tools else "none",
             session_id=self._session_id,
@@ -320,37 +305,6 @@ class GatewayApiClient:
             dept=self._dept,
             extra=extra,
         )
-
-        if has_tools:
-            response = await self._gateway.chat(llm_request)
-            text = _normalize_assistant_text(response.content or "")
-            tool_blocks = _tool_calls_to_content_blocks(list(response.tool_calls or []))
-            # 空名 tool_calls 全被跳过且无正文 → 记哨兵，由 invoke 显式失败（勿当成功正文）。
-            if not text and not tool_blocks and list(response.tool_calls or []):
-                text = _GARBAGE_SENTINEL
-                logger.warning(
-                    "all tool_calls empty-name; marking garbage sentinel",
-                    skipped=len(list(response.tool_calls or [])),
-                )
-            # 哨兵不向 OH/父会话流式刷字，只放进 complete 供上层识别失败
-            if text and text != _GARBAGE_SENTINEL:
-                for piece in _yield_text_by_lines(text):
-                    yield ApiTextDeltaEvent(text=piece)
-
-            content_blocks: list[Any] = []
-            if text:
-                content_blocks.append(TextBlock(text=text))
-            content_blocks.extend(tool_blocks)
-
-            yield ApiMessageCompleteEvent(
-                message=ConversationMessage(role="assistant", content=content_blocks),
-                usage=UsageSnapshot(
-                    input_tokens=response.usage.prompt_tokens,
-                    output_tokens=response.usage.completion_tokens,
-                ),
-                stop_reason="tool_calls" if tool_blocks else (response.finish_reason or "stop"),
-            )
-            return
 
         total_usage: TokenUsage = TokenUsage()
         collected: str = ""
@@ -372,7 +326,14 @@ class GatewayApiClient:
         assembled_tools = [tool_acc[i] for i in sorted(tool_acc.keys())]
         tool_blocks = _tool_calls_to_content_blocks(assembled_tools)
         text = _normalize_assistant_text(collected)
-        content_blocks = []
+        # 空名 tool_calls 全被跳过且无正文 → 记哨兵，由 invoke 显式失败（勿当成功正文）。
+        if not text and not tool_blocks and assembled_tools:
+            text = _GARBAGE_SENTINEL
+            logger.warning(
+                "all tool_calls empty-name; marking garbage sentinel",
+                skipped=len(assembled_tools),
+            )
+        content_blocks: list[Any] = []
         if text:
             content_blocks.append(TextBlock(text=text))
         content_blocks.extend(tool_blocks)

@@ -316,6 +316,9 @@ def log_agent_step_timing(
     finish_reason: str | None = None,
     tokens: int | None = None,
     ttft_ms: int | None = None,
+    content_chars: int | None = None,
+    completion_tokens: int | None = None,
+    has_tool_calls: bool | None = None,
 ) -> None:
     """单步耗时：``kind=llm`` 为大模型一轮；``kind=tool`` 为一次工具/skill。"""
     step_zh = _zh_name_agent_step(
@@ -328,6 +331,12 @@ def log_agent_step_timing(
         detail_parts.append(f"finish={finish_reason}")
     if tokens is not None:
         detail_parts.append(f"tokens={tokens}")
+    if completion_tokens is not None:
+        detail_parts.append(f"completion={completion_tokens}")
+    if content_chars is not None:
+        detail_parts.append(f"content_chars={content_chars}")
+    if has_tool_calls is not None:
+        detail_parts.append(f"tool_calls={'Y' if has_tool_calls else 'N'}")
     log_turn_step(
         session_id=session_id,
         step_name=step_zh,
@@ -352,6 +361,9 @@ def log_agent_step_timing(
         finish_reason=finish_reason,
         tokens=tokens,
         ttft_ms=ttft_ms,
+        content_chars=content_chars,
+        completion_tokens=completion_tokens,
+        has_tool_calls=has_tool_calls,
     )
 
 

@@ -1,21 +1,21 @@
 runtime:
   type: openharness
   version: "1.0.0"
+  # 协调者：LLM 只见决策工具；agent__invoke 留给系统硬委派 / 决策后执行。
   allowed_tools:
-    - skill
-    - mcp__mcp-api-suite__*
-    # AI Skill 表单填充引擎（FormFill）反向信任调用工具（P0: user-fill）。
-    # 工具内部已按 FORMFILL_ALLOWED_SKILLS 白名单与意图→skillId 映射校验。
-    - formfill__*
-    # 调度：委托专用智能体（白名单见 Settings.INVOKE_AGENT_WHITELIST）
-    # 本 Agent 的 role=coordinator，即便此行漏配，平台也会在
-    # resolve_allowed_tool_patterns() 中自动补齐 agent__invoke（纵深防御 D6）。
-    # 双名过渡工具 `agent` 由 Settings.DELEGATE_TOOL_ALIAS_ENABLED 控制（默认关）。
+    - coordinator__decide
     - agent__invoke
   params:
-    maxSteps: 20
+    maxSteps: 30
     temperature: 0.3
     maxTokens: 4096
+    # A2UI 通道还会合并 Gateway 注入的 render_a2ui；用黑名单从「交给 LLM 的 tools」剔除。
+    excludeLlmTools:
+      - render_a2ui
+      - formfill__execute
+      - formfill__apply
+      - skill
+      - agent__invoke
   prompts:
     system: runtime/prompts/system.md
   middleware: {}

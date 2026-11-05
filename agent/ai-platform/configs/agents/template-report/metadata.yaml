@@ -1,0 +1,23 @@
+metadata:
+  name: template-report
+  display_name: 模板报告智能体
+  description: >
+    固定模板报告：经营日/周报等参数卡报告。由 Coordinator 首步委派；
+    决策未命中则 skipped，命中则抽槽执行或开参数卡。
+  version: "0.1.0"
+  enabled: true
+  tags:
+    - mis
+    - template-report
+    - report
+  capabilities:
+    - template_report
+    - report_card
+  when_to_use: >
+    用户要打开/生成固定模板报告（经营日报、经营周报等参数卡报告）。
+    非模板的自然语言问数、门店列表、制度知识库、会员 CRM 不要用本 Worker。
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: text
+  safety_level: read_only

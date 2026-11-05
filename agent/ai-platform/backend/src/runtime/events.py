@@ -31,6 +31,8 @@ class AgentEventType(str, Enum):
     DISPATCH_TRACE = "dispatch.trace"
     # Worker→父会话步骤条：只走 CUSTOM，避免嵌套 tool.call 被 A2UI 中间件吞掉。
     TOOL_STEP = "tool.step"
+    # 模板报告预路由命中：前端打开参数卡（CUSTOM 透传）。
+    REPORT_OPEN_CARD = "ai.report.open_card"
 
 
 # ============================================================================
@@ -92,6 +94,7 @@ class AgentEvent(BaseModel):
     - done:             token_usage、message_id、session_id
     - dispatch.trace:   trace（Coordinator 委派轨迹，默认不产出）
     - tool.step:        trace（父会话步骤条载荷，仅 CUSTOM，无 TOOL_CALL_*）
+    - ai.report.open_card: trace（reportCode / title，仅 CUSTOM）
 
     ``done`` 的 ``message_id`` / ``session_id`` 为评价锚点（feedback-enhance §2.2
     方案 C）：分别透传本轮 assistant 消息 UUID 与平台会话 UUID，与
@@ -239,6 +242,24 @@ class AgentEvent(BaseModel):
                 "args": args or {},
                 "result": result or {},
             },
+        )
+
+    @classmethod
+    def report_open_card(
+        cls,
+        report_code: str,
+        *,
+        title: str | None = None,
+    ) -> AgentEvent:
+        """创建一个 ai.report.open_card 事件（前端打开模板报告参数卡）。"""
+        code = (report_code or "").strip()
+        payload: dict[str, Any] = {"reportCode": code}
+        title_s = (title or "").strip()
+        if title_s:
+            payload["title"] = title_s
+        return cls(
+            type=AgentEventType.REPORT_OPEN_CARD,
+            trace=payload,
         )
 
 

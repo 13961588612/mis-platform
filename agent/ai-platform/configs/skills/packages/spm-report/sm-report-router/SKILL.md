@@ -1,8 +1,8 @@
 ---
 name: sm-report-router
 skill_id: sm-report-router
-description: 超市报表总控路由。任何超市区域/门店/分类/日历/销售/毛利/损耗/促销/折扣/出清/品类结构问数都必须先加载本技能：识别意图与必填槽位，用 MCP 拉权限门店与 ADS 日/周/月清单供操作员选择或确认，槽位齐后再 skill() 到下游并指定 apiName。触发词含：区域、门店、大统华、销售、营业额、毛利、损耗、促销、折扣、出清、品类、部门、柜组、大类、中类、小类、周、月等。
-version: "2.0.0"
+description: 超市报表总控路由。区域/门店/分类/日历/销售/毛利/损耗/促销/品类结构问数须先加载：意图与槽位 → MCP 拉权限门店与 ADS 日周月供选择 → 槽位齐后再 skill() 下游并指定 apiName。
+version: "2.1.1"
 category: supermarket
 tags:
   - 超市
@@ -17,367 +17,159 @@ required_permissions:
   - spm:report:read
 ---
 
-# 超市报表总控路由（sm-report-router）v2
+# 超市报表总控路由（sm-report-router）
 
-本 Skill **只做编排**：意图识别 → 槽位收集（取数给操作员选）→ 路由到下游 Skill。  
-**禁止**在槽位未齐时调用 `callShopSaleApi` / `callShopCategorySaleApi`。  
-**禁止**公历臆造 `ordWeek` / `ordMonth`；**禁止**用 `listStores` 代替权限校验。
+**只做编排**：意图 → 槽位（给操作员选）→ 下游 Skill。  
+槽位未齐禁止 `callShopSaleApi` / `callShopCategorySaleApi`。  
+禁止公历臆造 `ordWeek`/`ordMonth`；禁止用 `listStores` 代替权限校验。  
+工具一律只传 `apiName` + `params`。
 
-下游 Skill（均 `prompt_expose: false`，由本路由 `skill(name=…)` 加载）：
+### 【早停】当日及之后（T+1，高于槽位流水线）
 
-| skill_id | MCP 工具 | 职责摘要 |
-|----------|----------|----------|
-| `sm-common-info-master-data` | `callCommonInfoApi` | 区域 / 门店 / 权限门店 / 分类维表 |
-| `sm-common-info-calendar` | `callCommonInfoApi` | 年内日/周/月 ADS 清单 |
-| `sm-shop-sale` | `callShopSaleApi` | 门店级经营总览与结构指标 |
-| `sm-shop-category-sale` | `callShopCategorySaleApi` | 门店内品类级结构指标 |
+底层**不提供当天及之后**的经营日数据。命中则**立刻对用户说明并结束本轮**，禁止继续工具链：
 
-工具调用一律：**只传 `apiName` + `params`**；不要传 `serviceName` / `identity` / `datasourceId`。
+- **禁止**：`listYearDates` / `listYearWeeks` / `listYearMonths`、权限门店循环、下游 sale / category-sale、同参重试。
+- **命中**：用户说「今天/今日/当天」；或已落到的 `startOrdDate`/`endOrdDate` **任一 ≥ 今天（本地自然日）**；或周/月键覆盖区间的起点已晚于昨天（整段尚无出数）。
+- **固定话术**（可原样用）：`经营数据为 T+1，不提供当天及之后的数据；请改查昨天或更早的日期/已出数的周月。`
+- 「昨天/前天/具体历史日」及日历清单里已有的周月键 → 正常走 §5。
 
----
-
-## 1. 意图分流（先判，再决定走哪条流水线）
-
-### 1.1 意图类型
-
-| 代号 | 用户说法特征 | 流水线 | 目标 Skill |
-|------|--------------|--------|------------|
-| **M1** | 有哪些区域、区域列表 | 主数据短路径 | `sm-common-info-master-data` → `listAreas` |
-| **M2** | 我能看哪些店 / 权限门店 | 主数据短路径 | `sm-common-info-master-data` → `listAuthorizedStores` |
-| **M3** | 全部在营店 / 超市有哪些门店（默认全量口径） / 某某区域有哪些门店 / 某某门店在哪个区域、在哪个城市 | 主数据短路径 | `sm-common-info-master-data` → `listStores` |
-| **M4** | 分类级别 / 部门柜组大中小类维表 / 下级分类 / 某分类编号 | 主数据短路径 | `sm-common-info-master-data` → `listCategoryLevels` / `listCategories` / `listChildCategories` / `getCategoryById` / `listTopCategories` |
-| **C1** | 某年有哪些天/周/月（不查销售数） | 日历短路径 | `sm-common-info-calendar` → `listYearDates` / `listYearWeeks` / `listYearMonths` |
-| **S1** | 门店总盘：营业额/客单/会员/线上/毛利/损耗/促销（概览） | **经营流水线** | `sm-shop-sale` → `getShopSaleOverview` |
-| **S2** | 折扣三列 / 总折扣/促销打折/处理打折 | 经营流水线 | `sm-shop-sale` → `getDiscountStructure` |
-| **S3** | 出清效率 / 出清回收 | 经营流水线 | `sm-shop-sale` → `getClearanceEfficiency` |
-| **S4** | 供应商促销分担 | 经营流水线 | `sm-shop-sale` → `getSupplierPromoShare` |
-| **S5** | 新品/重点/TOP/出清品结构 | 经营流水线 | `sm-shop-sale` → `getProductLifecycleMix` |
-| **S6** | 经销/联营/租赁 | 经营流水线 | `sm-shop-sale` → `getVentureStructure` |
-| **P1** | 门店内类别的 销售/毛利/损耗/促销概览；部门/柜组/大中小类占比 | 经营流水线 | `sm-shop-category-sale` → `getShopCategoryOverview` |
-| **P2～P6** | 门店内类别的 折扣/出清/供应商/生命周期/经销联营 | 经营流水线 | `sm-shop-category-sale` → `getShopCategoryDiscountStructure` / `getShopCategoryClearanceEfficiency` / `getShopCategorySupplierPromoShare` / `getShopCategoryProductLifecycleMix` / `getShopCategoryVentureStructure` |
-| **X** | 库存/采购/进销存/财务对账等 | **拒答** | 无 Skill |
-
-**仲裁要点：**
-
-- 出现「部门/柜组/大类/中类/小类/品类占比/结构」→ **P\***，不要走 S\*。
-- 只说「销售/毛利/损耗/促销」且无品类词 → **S1**。
-- 「我能看哪些店」→ **M2**；「超市有哪些门店 / 全部在营店 / 某某区域有哪些门店 / 某某门店在哪个区域或城市」→ **M3**（`listStores`：按 `storeId`/`storeName` 定位店，区域用 `areaId`/`areaname`；返回无城市字段时如实说明勿臆造）。
-- 一句多问（全店总盘 + 某大类）→ **拆两次**：先 S1 再 P1，槽位复用。
-
-### 1.2 槽位需求矩阵
-
-| 意图 | store | year+period+时间键 | 品类范围 |
-|------|-------|---------------------|----------|
-| M1～M4 / C1 | 否 | C1 仅需 year+period | M4 按接口 |
-| S1～S6 | **是**（`storeId` 或明确 `areaId`） | **是** | 否 |
-| P1～P6 | **是** | **是** | 部门/柜组→`categoryLevel`；大类/中类/小类→**必须**`parentCategoryId` |
-| X | — | — | — |
+| skill_id | MCP | 职责 |
+|----------|-----|------|
+| `sm-common-info-master-data` | `callCommonInfoApi` | 区域/门店/权限门店/分类 |
+| `sm-common-info-calendar` | `callCommonInfoApi` | 日/周/月 ADS 清单 |
+| `sm-shop-sale` | `callShopSaleApi` | 门店经营总览与结构 |
+| `sm-shop-category-sale` | `callShopCategorySaleApi` | 门店内品类结构 |
 
 ---
 
-## 2. 主数据 / 日历短路径（无经营槽位）
+## 1. 意图
 
-1. `skill(name="sm-common-info-master-data")` 或 `skill(name="sm-common-info-calendar")`
-2. 按第 1.1 节调用对应 `apiName`
-3. 若返回含 `notice` 或 `items=[]`：**原样转述**，不编造清单
-4. 回答用表格；结束时可问「是否继续查某店某周销售？」
+| 代号 | 特征 | 目标 |
+|------|------|------|
+| M1 | 有哪些区域 | master → `listAreas` |
+| M2 | 我能看哪些店 | master → `listAuthorizedStores` |
+| M3 | 全部在营店 / 某区域有哪些店 / 某店在哪个区域 | master → `listStores` |
+| M4 | 分类维表/下级/某编号 | master → `listCategoryLevels` 等 |
+| C1 | 某年有哪些天/周/月（不查销售） | calendar → `listYearDates/Weeks/Months` |
+| S1 | 门店总盘：营业额/客单/会员/毛利/损耗/促销 | sale → `getShopSaleOverview` |
+| S2～S6 | 折扣/出清/供应商/生命周期/经销联营 | sale → 对应 apiName（见 §7） |
+| P1～P6 | 门店内品类销售/结构 | category-sale → 对应 apiName |
+| X | 库存/采购/进销存/财务 | **拒答** |
 
-`listAuthorizedStores` 软失败（人员找不到等）：`items=[]` + `notice` → 停，提示联系管理员。
+仲裁：有「部门/柜组/大中小类/品类占比」→ P\*；只说销售毛利无品类词 → S1；「我能看哪些店」→ M2；「有哪些门店」→ M3。多问拆两次，槽位复用。
 
----
+### 槽位矩阵
 
-## 3. 经营流水线（S\* / P\*）— 逐步槽位，每步可停给操作员选
-
-```
-① 意图与目标 apiName（第 1、7 节）
- → ② 门店槽位 STORE（第 4 节）— 未确认则停，展示选项
- → ③ 时间槽位 TIME（第 5 节）— 年 → 粒度 → 系统桶列表 → 选定；未确认则停
- → ④ 品类槽位 CAT（仅 P*，第 6 节）— 未确认则停
- → ⑤ skill(下游) + MCP 取数
- → ⑥ 组织回答（第 8 节）
-```
-
-**铁律：一步一确认。** 缺槽位时只展示选项/追问，**本轮不要**调用销售 MCP。  
-多轮：已确认槽位写入「当前会话槽位」（见 3.1），用户未改则沿用，勿每轮重拉全量列表。
-
-### 3.1 会话槽位板（内部维护，回答时可简述）
-
-```
-intent: S1|P1|…
-storeId / storeName | areaId（若区域汇总）
-year
-period: day|week|month
-ordWeek | ordMonth | startOrdDate+endOrdDate
-categoryLevel | parentCategoryId + parentName（P*）
-target_skill / target_apiName
-```
+| 意图 | store | 时间 | 品类 |
+|------|-------|------|------|
+| M*/C1 | 否 | C1 要 year+period | M4 按接口 |
+| S* | **是**（单店 `storeId` 或明确 `areaId`） | **是** | 否 |
+| P* | **是** | **是** | 部门/柜组→`categoryLevel`；大中小类→**必须**`parentCategoryId` |
 
 ---
 
-## 4. 门店槽位 STORE
+## 2. 短路径（M*/C1）
 
-### 4.0 默认口径（硬约束）
-
-- **经营取数默认只查一家店**（单个 `storeId`）。
-- **未**经用户明确确认「多店一起查 / 对比多家 / 全部权限店汇总」时：
-  - **禁止**一次对多家店循环取数或默认「所有权限店」；
-  - **禁止**擅自挑第一家 / 最大店 / 最近聊过的店顶上。
-- 权限门店 **≥ 2** 且本轮尚未选定唯一 `storeId` → **必须先列表请用户选店**，本轮不调销售 MCP。
-- 仅当用户明确要多店对比/汇总，且下游接口与槽位支持时，才按用户指定范围取数（仍须先确认店清单）。
-
-### 4.1 取权限门店（必做）
-
-```
-skill(name="sm-common-info-master-data")
-→ callCommonInfoApi: { "apiName": "listAuthorizedStores", "params": {} }
-```
-
-| 结果 | 对操作员 |
-|------|----------|
-| `items=[]` 且有 `notice` | 转述 `notice`，**停止** |
-| `items=[]` 无 notice | 「当前账号无超市门店数据权限」，停止 |
-| 恰好 1 家 | 复述「将查询：**{storeId} {storeName}（{areaname}）**，请确认是否使用该店？回复「确认」或另选。」 |
-| **2 家及以上** | **必须列表请选一家**（见 4.2），禁止擅自指定、禁止默认查全部 |
-
-### 4.2 多店选择展示（操作员）
-
-```
-当前按【单店】查询。您有权限的门店如下，请回复【门店号】或【门店名称】选一家：
-
-| 序号 | 门店号 | 门店名称 | 区域 |
-|------|--------|----------|------|
-| 1 | … | … | … |
-```
-
-- 用户回复后在 `items` 内匹配；唯一命中 → 写入 **一个** `storeId`/`storeName`。
-- 匹配 0 → 「未在权限列表中找到，请从下表重选」并再贴表。
-- 匹配多个 → 「匹配到多家，请用门店号精确指定」。
-- 用户说「都查 / 全部 / 一起查」但未点名店：先确认是否多店对比/汇总及范围，**不要**默认全权限店开查。
-- **禁止**改调 `listStores` 绕过权限。
-
-### 4.3 用户已口述店名/店号
-
-仍先拉 `listAuthorizedStores`，再匹配；不在列表 → 无权限说明 + 再列可选店。  
-唯一命中后按单店写入；未命中不得用口述名绕过选店。
-
-### 4.4 区域汇总
-
-仅当用户明确「按区域汇总 / 查某区域」且接口支持 `areaId`：确认区域（可先 `listAreas`）后写 `areaId`，**不要**同时瞎填 `storeId`。  
-未明确区域汇总时 **默认单店** `storeId`（权限多店时仍走 4.2 请选）。
+`skill(master|calendar)` → 调对应 `apiName` → `notice`/`items=[]` 原样转述 → 表格回答。  
+`listAuthorizedStores` 软失败：转述 notice，停。
 
 ---
 
-## 5. 时间槽位 TIME（顺序固定）
-
-### 5.1 年份 `year`
-
-| 用户说法 | 动作 |
-|----------|------|
-| 已给四位年 | 复述确认 |
-| 今年/去年 | 按对话日换算后**复述**「按 {year} 年查询，对吗？」 |
-| 未提年 | 追问：「请确认查询哪一年？（如 2026）」→ **停** |
-
-### 5.2 粒度 `period`
-
-| 用户说法 | `period` |
-|----------|----------|
-| 某日 / 哪天 / 日销售 / 起止日期 | `day` |
-| 某周 / 第 N 周 / 上周 | `week` |
-| 某月 / 上月 / 月度 | `month` |
-| 未说清 | 追问三选一：「请选择数据粒度：①日 ②周 ③月」→ **停**；**不要默认** |
-
-### 5.3 拉系统已有桶（日历 Skill）
+## 3. 经营流水线（S*/P*）
 
 ```
-skill(name="sm-common-info-calendar")
+意图+apiName → STORE → TIME → (P* 则 CAT) → skill(下游)+MCP → 回答
 ```
 
-| `period` | apiName | params |
-|----------|---------|--------|
-| `day` | `listYearDates` | `{ "year": <year> }` |
-| `week` | `listYearWeeks` | `{ "year": <year> }` |
-| `month` | `listYearMonths` | `{ "year": <year> }` |
+**一步一确认**；缺槽位只展示选项，本轮不调销售 MCP。已确认槽位写入会话板，用户未改则沿用。
 
-清单为空 → 「{year} 年 ADS 暂无{日/周/月}数据，请换年或换粒度」→ **停**。
-
-### 5.4 给操作员的选择方案
-
-**周（示例话术）：**
-
-```
-{year} 年系统中有销售数据的周如下，请回复【周键】（如 2026-W40）或序号：
-
-| 序号 | 周键 | 起止日 |
-|------|------|--------|
-| 1 | 2026-W40 | 2026-09-29 ~ 2026-10-05 |
-| … | … | … |
-```
-
-（周很多时可先按月分组，或只展示最近 N 周并提供「看更多」。）
-
-**月：**
-
-```
-{year} 年系统中有数据的月份如下，请回复【月键】（如 2026-10）或序号：
-
-| 序号 | 月键 | 起止日 |
-|------|------|--------|
-| … | 2026-10 | … |
-```
-
-**日：**
-
-- 用户已给 `YYYY-MM-DD`：在 `listYearDates` 中校验；不在清单 → 「该日无落库数据，请另选」并可贴最近有数日期。
-- 未给具体日：列出可选日期或请用户提供 `YYYY-MM-DD`（可提示最近有数区间）。
-
-选定后写入：
-
-| period | 写入字段 |
-|--------|----------|
-| week | `ordWeek`（清单原样） |
-| month | `ordMonth` |
-| day | `startOrdDate` + `endOrdDate`（单日则两端相同） |
-
-**禁止**用公历自己算周序/月末。
+会话板：`intent` / `storeId` / `year` / `period` / `ordWeek|ordMonth|start+end` / `categoryLevel|parentCategoryId` / `target_skill` / `target_apiName`
 
 ---
 
-## 6. 品类槽位 CAT（仅 P\*）
+## 4. STORE（默认单店）
 
-门店 + 时间已齐后：
-
-| 用户意图 | 槽位 | 操作员交互 |
-|----------|------|------------|
-| 「各部门 / 各柜组…占比」 | **仅** `categoryLevel` ∈ {部门, 柜组} | 未说级别时只在这两种里请选 |
-| 「各大类 / 中类 / 小类…」 | **必须** `parentCategoryId`（指定分类或父分类） | 未给父类：先列候选父类请选；**禁止**裸传 `categoryLevel=大类/中类/小类` |
-| 「某某分类下面有哪些 / 下钻」 | `parentCategoryId` | 名称不清：`listCategories` / `listChildCategories` / `getCategoryById` |
-
-都缺则追问：
+- 默认只查一家；未明确多店对比/汇总时禁止循环多店、禁止擅自挑第一家。
+- 权限 ≥2 且未选定唯一店 → **必须列表请选**，本轮不调销售 MCP。
 
 ```
-请选择品类查看方式：
-① 按级别（仅）：部门 / 柜组
-② 按父分类下钻（大类/中类/小类必选此项）：请给出分类名称或编号
+skill(sm-common-info-master-data)
+→ callCommonInfoApi { "apiName":"listAuthorizedStores", "params":{} }
 ```
-
----
-
-## 7. 路由落地（槽位齐之后）
-
-### 7.1 加载与调用
-
-1. `skill(name="<target_skill>")` — 正文中的 `apiName` **原样复制**，禁止猜测  
-2. 组装 `params`：只含已确认槽位  
-3. 调用对应 MCP 工具  
-
-### 7.2 目标 Skill × apiName
-
-**门店 `sm-shop-sale` + `callShopSaleApi`：**
-
-| 意图 | apiName |
-|------|---------|
-| S1 总览 | `getShopSaleOverview` |
-| S2 折扣 | `getDiscountStructure` |
-| S3 出清 | `getClearanceEfficiency` |
-| S4 供应商分担 | `getSupplierPromoShare` |
-| S5 生命周期 | `getProductLifecycleMix` |
-| S6 经销联营 | `getVentureStructure` |
-
-**品类 `sm-shop-category-sale` + `callShopCategorySaleApi`：**
-
-| 意图 | apiName |
-|------|---------|
-| P1 总览 | `getShopCategoryOverview` |
-| P2 折扣 | `getShopCategoryDiscountStructure` |
-| P3 出清 | `getShopCategoryClearanceEfficiency` |
-| P4 供应商 | `getShopCategorySupplierPromoShare` |
-| P5 生命周期 | `getShopCategoryProductLifecycleMix` |
-| P6 经销联营 | `getShopCategoryVentureStructure` |
-
-### 7.3 params 模板
-
-门店总览示例：
-
-```json
-{
-  "apiName": "getShopSaleOverview",
-  "params": {
-    "period": "week",
-    "storeId": "6001",
-    "ordWeek": "2026-W40"
-  }
-}
-```
-
-品类总览示例（部门级可裸级别；大类须父分类）：
-
-```json
-{
-  "apiName": "getShopCategoryOverview",
-  "params": {
-    "period": "week",
-    "storeId": "6001",
-    "ordWeek": "2026-W40",
-    "categoryLevel": "部门"
-  }
-}
-```
-
-```json
-{
-  "apiName": "getShopCategoryOverview",
-  "params": {
-    "period": "week",
-    "storeId": "6001",
-    "ordWeek": "2026-W40",
-    "parentCategoryId": "1024"
-  }
-}
-```
-
-### 7.4 取数结果处理
 
 | 结果 | 动作 |
 |------|------|
-| `items` 有数据 | 第 8 节回答 |
-| `items=[]` 且 `meta.notice` | **转述 notice**，不编造经营数 |
-| 工具硬错误 | 如实说明错误摘要，建议稍后重试或联系管理员 |
-| 用户改店/改时间 | 回到对应槽位步骤，已确认部分可保留 |
-| 出现 `Tool output truncated` | 用预览中的 **`summary` + 可见 `items`** 直接作答；**禁止**同一 `apiName`+`params` 反复重调 |
+| `items=[]`+notice | 转述，停 |
+| 恰好 1 家 | 复述将查该店，请确认或另选 |
+| ≥2 家 | 表列门店号/名/区域，请回复门店号或名称 |
 
-> 截断后仍缺行：可请用户缩小范围（指定父分类 / 部门柜组），不要同参重试碰运气。
-
----
-
-## 8. 统一回答口径
-
-**槽位阶段（未取经营数）：** 只给选项表 + 明确请操作员回复什么；不输出假数字。
-
-**取数成功：**
-
-1. **结论**（一句话：店 + 时间 + 指标要点）  
-2. **数据表**（Markdown，每行单独成行）  
-3. **口径**：`storeId`/店名、`period`、时间键、`apiName`；品类则加级别/父类  
-4. **一句下钻建议**（换周 / 下钻中类 / 看折扣结构等）  
-5. 损耗勿说成「吃掉了多少毛利」  
-6. 禁止「与之前一致」而不重新取数  
+用户已口述店名仍先拉权限列表再匹配；不在列表 → 无权限+再列可选。  
+区域汇总仅用户明确时写 `areaId`，勿瞎填 `storeId`。禁止改调 `listStores` 绕过权限。
 
 ---
 
-## 9. 拒答与边界
+## 5. TIME（顺序固定）
 
-- 库存/采购/进销存/财务对账/员工绩效等 → 「当前未开放该报表能力，可查销售/毛利/品类结构。」  
-- NL2SQL 自由问数 → 引导「超市分析智能体」；百购 → 「百购分析智能体」。  
-- 不要为补全背景编造制度或数字。
+0. **先判当日及之后**（见文首【早停】）：命中则固定话术结束，**不要**进入下面 1～4。  
+1. **year**：已给四位年→确认；今年/去年→换算后复述；未提→追问后停。  
+2. **period**：日→`day`；周→`week`；月→`month`；未清→追问三选一，**不要默认**。  
+3. **拉桶**：`skill(sm-common-info-calendar)` → `listYearDates|Weeks|Months` + `{year}`；空清单→换年/粒度，停。展示日清单时**不要**把今天及之后的公历日当成可选经营日推荐。  
+4. **请选**：展示周键/月键/日期表；选定后 week→`ordWeek`，month→`ordMonth`，day→`startOrdDate`+`endOrdDate`（单日两端相同）。**禁止**公历自算周序。选定日若 ≥ 今天 → 回【早停】，禁止调销售 MCP。
 
 ---
 
-## 10. 自检清单（每次经营取数前）
+## 6. CAT（仅 P*）
 
-- [ ] 意图已归到 M/C/S/P/X  
-- [ ] S/P：已确认**单店** `storeId`（或用户明确的合法 `areaId`）；权限≥2 店时已请用户选店，未默认多店/全店  
-- [ ] S/P：year + period + 时间键均来自日历清单或已校验日  
-- [ ] P：部门/柜组 → categoryLevel；大类/中类/小类 → parentCategoryId 已确认  
-- [ ] 已 `skill()` 正确下游且 `apiName` 来自 Skill 正文  
-- [ ] 未传 identity / serviceName  
-- [ ] 若结果 truncated：已用 summary/可见 items 作答，未同参重调  
+| 意图 | 槽位 |
+|------|------|
+| 各部门/柜组占比 | 仅 `categoryLevel`∈{部门,柜组} |
+| 大/中/小类 | **必须** `parentCategoryId`；禁止裸传大中小类级别 |
+| 某分类下钻 | `parentCategoryId`；不清则 `listCategories` 等 |
+
+都缺则请选：①部门/柜组 ②父分类下钻（给名称或编号）。
+
+---
+
+## 7. 槽位齐后落地
+
+1. `skill(target)`，`apiName` **从 Skill 正文原样复制**  
+2. `params` 只含已确认槽位  
+3. 调对应 MCP  
+
+**sale / `callShopSaleApi`：** S1 `getShopSaleOverview`；S2 `getDiscountStructure`；S3 `getClearanceEfficiency`；S4 `getSupplierPromoShare`；S5 `getProductLifecycleMix`；S6 `getVentureStructure`  
+
+**category-sale：** P1 `getShopCategoryOverview`；P2 `getShopCategoryDiscountStructure`；P3 `getShopCategoryClearanceEfficiency`；P4 `getShopCategorySupplierPromoShare`；P5 `getShopCategoryProductLifecycleMix`；P6 `getShopCategoryVentureStructure`  
+
+示例：`{"apiName":"getShopSaleOverview","params":{"period":"month","storeId":"0021","ordMonth":"2026年-9月"}}`（月键以日历清单原样为准）
+
+| 结果 | 动作 |
+|------|------|
+| 有数据 | §8 回答 |
+| `items=[]`+notice | 转述 notice |
+| 硬错误 | 业务语言说明，建议重试 |
+| `Tool output truncated` | 用 summary/可见 items 作答，**禁止同参重调** |
+
+---
+
+## 8. 回答口径（对用户）
+
+- 槽位阶段：选项表 + 请回复什么；无假数字。  
+- 取数成功：一句结论 → Markdown 表 → 至多一句业务口径。  
+- **禁止**写入 apiName/工具名/Skill/字段名；损耗勿说成「吃掉毛利」；禁止空口「与之前一致」。
+
+---
+
+## 9. 拒答
+
+库存/采购/进销存/财务 → 未开放。NL2SQL → 超市分析智能体；百购 → 百购分析智能体。  
+当天及之后的经营日 / 尚未出数的周月 → 【早停】固定话术，禁止空转工具链。
+
+---
+
+## 10. 取数前自检
+
+- [ ] 未命中「当日及之后」早停（否则已结束、无 MCP）  
+- [ ] 意图已归类；S/P 已确认单店（或多店已经用户明确）  
+- [ ] year+period+时间键来自日历或已校验，且日键早于今天 
+- [ ] P* 品类槽位正确；已 skill 下游且 apiName 来自正文  
+- [ ] 未传 identity/serviceName；截断未同参重试  
