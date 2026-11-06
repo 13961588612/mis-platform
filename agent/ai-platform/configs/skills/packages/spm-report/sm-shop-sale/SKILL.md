@@ -32,6 +32,17 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 > 权限软失败（人员找不到 / 无门店权限 / 指定店不在权限内）：**不抛错**，`items=[]`，`meta.notice` 为提示文案，请把 `notice` 转述给用户。
 
+### 对用户展示单位（强制；接口原值仍为元）
+
+| 类型 | 展示 |
+|------|------|
+| **金额**（营业额/去券/主营/毛利额/损耗额/促销额/折扣额/库存额/订货验收退货额等，**不含客单价**） | 元 ÷ 10000 → **万元**，**保留 2 位小数**，后缀 `万元` |
+| **客单价** `ticketPrice` / `onlineTicketPrice` | 仍为 **元**，保留 2 位小数，后缀 `元` |
+| 客单数 / 人数 / SKU 数 | 整数 |
+| 比率 / 占比 | 百分数（展示时按需 ×100）或接口已是比率则按 Skill 字段说明 |
+
+未经 `sm-shop-ops-*-report`、直接口头/表格式回答时也须遵守上表。成文报告以对应 ops-report Skill 为准（规则一致）。
+
 ---
 
 ## 选用（router 代号 → apiName；权威在本表）
@@ -40,7 +51,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 | router | 意图 | apiName |
 |--------|------|---------|
-| **S1** | 经营总览（销售+毛利+损耗+促销） | `getShopSaleOverview` |
+| **S1** | 经营总览（销售+毛利+损耗+促销；**仅查数**） | `getShopSaleOverview`（成文 → `sm-shop-ops-overview-report` / 综合 → `sm-shop-ops-comprehensive-report`） |
 | **S1a** | 线上分平台/类目销售毛利 | `listOnlineSales`（`startSaleDate`+`endSaleDate`） |
 | **S1b** | 复购会员人数 | `getRepurchaseSummary`（**仅 week/month**） |
 | **S2** | 折扣三列 | `getDiscountStructure` |
@@ -121,9 +132,10 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ---
 
-## `getShopSaleOverview` — 门店总览
+## `getShopSaleOverview` — 门店总览（查数）
 
-销售 + 毛利损耗 + 促销 **同条件一次返回**。
+销售 + 毛利损耗 + 促销 **同条件一次返回**。  
+**解读 / 同比上期 / 异常成文** 不在本 Skill，见 **`sm-shop-ops-overview-report`**（总览）或 **`sm-shop-ops-comprehensive-report`**（综合）。
 
 ```json
 { "apiName": "getShopSaleOverview", "params": {

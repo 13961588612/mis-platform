@@ -13,3 +13,11 @@ skill_permissions:
     required: [spm:report:read]
   sm-shop-category-sale:
     required: [spm:report:read]
+  sm-shop-ops-comprehensive-report:
+    required: [spm:report:read]
+  sm-shop-ops-overview-report:
+    required: [spm:report:read]
+  sm-shop-ops-promo-report:
+    required: [spm:report:read]
+  sm-shop-ops-inventory-report:
+    required: [spm:report:read]

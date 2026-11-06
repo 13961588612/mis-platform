@@ -9,7 +9,7 @@ runtime:
     - skill
     - mcp__mcp-sm-api-suite__*
   params:
-    maxSteps: 20
+    maxSteps: 50
     temperature: 0.3
     maxTokens: 4096
     forceLiveQuery: true

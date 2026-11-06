@@ -1,7 +1,7 @@
 ---
 name: sm-common-info-calendar
 skill_id: sm-common-info-calendar
-description: 指定年份的日历清单（日清单、周清单、月度清单）。当用户或后续销售查询需要知道某年有哪些日期/周/月、某周起止日、某月起止日，或要把自然语言时间落到 startDate/endDate 时触发。
+description: 指定年份的日历清单。系统提供三个接口：listYearDates（日）、listYearWeeks（周次）、listYearMonths（月度）。当用户问有哪些周/月、周次清单、月度清单，或销售查询需要 ADS 周键/月键/日起止时必须触发；禁止声称没有周月数据、禁止公历臆造周月键。
 version: "1.0.0"
 category: supermarket
 tags:
