@@ -34,20 +34,22 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ---
 
-## 选用
+## 选用（router 代号 → apiName；权威在本表）
 
-| 意图 | apiName |
-|------|---------|
-| 门店经营/毛利/损耗/促销（任一或同时） | `getShopSaleOverview` |
-| 门店库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopInventoryOverview`（**仅 week/month**） |
-| 线上分平台/类目销售毛利 | `listOnlineSales`（日区间 `startSaleDate`+`endSaleDate`） |
-| 复购会员人数 | `getRepurchaseSummary`（**仅 week/month**） |
-| 折扣三列（总折扣/促销打折/处理打折） | `getDiscountStructure` |
-| 出清效率（出清销售 + 毛利回收） | `getClearanceEfficiency` |
-| 供应商促销分担 | `getSupplierPromoShare` |
-| 新品/重点/TOP/出清结构 | `getProductLifecycleMix` |
-| 经销/联营/租赁 | `getVentureStructure` |
-| 品类结构 | Skill **`sm-shop-category-sale`** |
+由 `sm-report-router` 确认槽位后加载本 Skill，**按下表复制 apiName**。
+
+| router | 意图 | apiName |
+|--------|------|---------|
+| **S1** | 经营总览（销售+毛利+损耗+促销） | `getShopSaleOverview` |
+| **S1a** | 线上分平台/类目销售毛利 | `listOnlineSales`（`startSaleDate`+`endSaleDate`） |
+| **S1b** | 复购会员人数 | `getRepurchaseSummary`（**仅 week/month**） |
+| **S2** | 折扣三列 | `getDiscountStructure` |
+| **S3** | 出清效率 | `getClearanceEfficiency` |
+| **S4** | 供应商促销分担 | `getSupplierPromoShare` |
+| **S5** | 新品/重点/TOP/出清结构 | `getProductLifecycleMix` |
+| **S6** | 经销/联营/租赁 | `getVentureStructure` |
+| **S7** | 门店库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopInventoryOverview`（**仅 week/month**） |
+| — | 品类结构 | Skill **`sm-shop-category-sale`** |
 
 ---
 

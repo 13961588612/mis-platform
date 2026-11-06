@@ -47,18 +47,21 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ---
 
-## 选用
+## 选用（router 代号 → apiName；权威在本表）
 
-| 意图 | apiName |
-|------|---------|
-| 品类销售/毛利/损耗/促销（任一或同时） | `getShopCategoryOverview` |
-| 品类库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopCategoryInventoryOverview`（**仅 week/month**） |
-| 品类折扣三列 | `getShopCategoryDiscountStructure` |
-| 品类出清效率 | `getShopCategoryClearanceEfficiency` |
-| 品类供应商促销分担 | `getShopCategorySupplierPromoShare` |
-| 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix` |
-| 品类经销/联营/租赁 | `getShopCategoryVentureStructure` |
-| 门店级（无类目） | Skill **`sm-shop-sale`** |
+由 `sm-report-router` 确认门店/时间/品类槽后加载本 Skill，**按下表复制 apiName**。  
+级别：`部门` / `柜组` / `大类` / `中类` / `小类`。品类角色等默认 **`categoryLevel=大类`**。
+
+| router | 意图 | apiName |
+|--------|------|---------|
+| **P1** | 品类销售/毛利/损耗/促销总览 | `getShopCategoryOverview` |
+| **P2** | 品类折扣三列 | `getShopCategoryDiscountStructure` |
+| **P3** | 品类出清效率 | `getShopCategoryClearanceEfficiency` |
+| **P4** | 品类供应商促销分担 | `getShopCategorySupplierPromoShare` |
+| **P5** | 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix` |
+| **P6** | 品类经销/联营/租赁 | `getShopCategoryVentureStructure` |
+| **P7** | 品类库存/滞销/缺货/周转/订货/退货 | `getShopCategoryInventoryOverview`（**仅 week/month**） |
+| — | 门店级（无类目） | Skill **`sm-shop-sale`** |
 
 ---
 
