@@ -1,22 +1,6 @@
 ---
 name: sm-shop-category-sale
-skill_id: sm-shop-category-sale
-description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + 折扣/出清/供应商/生命周期/经营方式）。当门店与时间槽位已由 sm-report-router 确认后，用户询问某店各部门/柜组/大中小类销售占比、品类毛利、品类损耗、品类促销、品类折扣/出清/供应商分担/新品重点TOP/经销联营，或按父分类下钻子类时触发。经营问数请先加载 sm-report-router。
-version: "1.0.2"
-category: supermarket
-tags:
-  - 超市
-  - 品类销售
-  - 类目结构
-  - sm-shop-category-sale
-source: package
-status: active
-timeout: 60
-requires_approval: false
-required_permissions:
-  - spm:report:read
-handler: mcp:mcp-sm-api-suite:callShopCategorySaleApi
-mcp_server: mcp-sm-api-suite
+description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + 品类库存订货 + 折扣/出清/供应商/生命周期/经营方式）。当用户询问某店各部门/柜组/大中小类销售占比、品类毛利、品类损耗、品类促销、品类库存/滞销/缺货/周转/订货/退货、品类折扣/出清/供应商分担/新品重点TOP/经销联营，或按父分类下钻子类时触发。
 ---
 
 # 品类销售（sm-shop-category-sale）
@@ -29,8 +13,7 @@ mcp_server: mcp-sm-api-suite
 
 ## MCP 前提
 
-- MCP 服务名：**`mcp-sm-api-suite`**
-- 工具：**`callShopCategorySaleApi`**（平台工具名形如 `mcp__mcp-sm-api-suite__callShopCategorySaleApi`）
+- 工具：**`callShopCategorySaleApi`**
 - 只传 **`apiName`** + **`params`**
 - **不要传 `serviceName` / `identity`**
 - `items`：**门店 + 类目**一行（`storeId` + `categoryId` / `categoryName`）
@@ -41,34 +24,22 @@ mcp_server: mcp-sm-api-suite
 
 ## 公共入参
 
-时间 + 门店范围与 sm-shop-sale 相同；品类范围按下列**硬约束**组装。
+时间 + 门店范围与 sm-shop-sale 相同，**另加** `categoryLevel` | `parentCategoryId` **二选一**。
 
 | 字段 | 何时必填 | 说明 |
 |------|----------|------|
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
 | `storeId` / `areaId` | 二选一 | 单店或区域 |
 | `startOrdDate`+`endOrdDate` / `ordWeek` / `ordMonth` | 按 period | 同 sm-shop-sale |
-| `categoryLevel` | 见下方约束 | 仅允许单独使用 `部门` / `柜组` |
-| `parentCategoryId` | 见下方约束 | 查该父类下一级子类；**大类/中类/小类必用** |
-
-### 品类范围硬约束（防大结果截断与重试）
-
-| 用户要看 | 正确入参 | 禁止 |
-|----------|----------|------|
-| 各部门 / 各柜组 | 仅 `categoryLevel=部门` 或 `categoryLevel=柜组` | — |
-| 各大类 / 中类 / 小类 | **必须** `parentCategoryId`（或其上级分类编号）；可再配合说明要哪一级 | 单独 `categoryLevel=大类/中类/小类`（整店该级清单过大，易被截断） |
-| 「某某分类下面…」 | `parentCategoryId`（名称不清先 `listCategories` / `listChildCategories` 请用户选） | 臆造编号 |
-
-未指定父分类又要查大类/中类/小类时：**不要调 MCP**，先列出可选父分类或请用户给出分类名称/编号。
-
-若工具结果出现 `Tool output truncated`：用预览中的 `summary` + 可见 `items` 直接作答，**禁止**同参反复重调。
+| `categoryLevel` | 与 parent 二选一 | `部门` / `柜组` / `大类` / `中类` / `小类` |
+| `parentCategoryId` | 与 level 二选一 | 查该父类下一级子类 |
 
 ### `data_type` 映射（门店内）
 
 | 模式 | 入参 | `data_type` |
 |------|------|-------------|
-| 按级别（仅部门/柜组） | `categoryLevel=部门` / `柜组` | `门店部门` / `门店柜组` |
-| 按父类下钻 | `parentCategoryId`（如父=部门 → 下级柜组/大类） | 对应下级 `门店*` |
+| 按级别 | `categoryLevel=大类` 等 | `门店部门` / `门店柜组` / `门店大类` / `门店中类` / `门店小类` |
+| 按父类 | 父为大类 → 查中类 | `门店中类`（父 deptLevel→下级 `门店*`） |
 
 占比均在**单店、当前结果集**内计算（总览的 share）；结构类指标的 rate/share 按该类目自身营业额/主营计算。
 
@@ -81,6 +52,7 @@ mcp_server: mcp-sm-api-suite
 | 意图 | apiName |
 |------|---------|
 | 品类销售/毛利/损耗/促销（任一或同时） | `getShopCategoryOverview` |
+| 品类库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopCategoryInventoryOverview`（**仅 week/month**） |
 | 品类折扣三列 | `getShopCategoryDiscountStructure` |
 | 品类出清效率 | `getShopCategoryClearanceEfficiency` |
 | 品类供应商促销分担 | `getShopCategorySupplierPromoShare` |
@@ -97,7 +69,7 @@ mcp_server: mcp-sm-api-suite
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
   "period": "week", "storeId": "6001", "ordWeek": "2026-W40",
-  "categoryLevel": "部门"
+  "categoryLevel": "大类"
 }}
 ```
 
@@ -107,8 +79,6 @@ mcp_server: mcp-sm-api-suite
   "parentCategoryId": "1024"
 }}
 ```
-
-> 查某部门下各大类：用该部门的 `parentCategoryId`，不要 `categoryLevel=大类`。
 
 ### 销售
 
@@ -121,7 +91,7 @@ mcp_server: mcp-sm-api-suite
 
 | 字段 | 含义 |
 |------|------|
-| `frontMarginAmt` / `ExTax` / `frontMarginRate` / `frontMarginShare` | 前台毛利与占比 |
+| `frontMarginAmt` / `ExTax` / `frontMarginRate` / `frontMarginRateExTax` / `frontMarginShare` | 前台毛利与占比；`frontMarginRate`=含税/营业额；`frontMarginRateExTax`=去税毛利/主营 |
 | `lossAmtTax` / `ExTax` / `lossAmtAbs` / `lossRateAbs` | 损耗 |
 | `pnlAmtTax` / `regularPnLAmtTax` / `freshPnLAmtTax` | 损溢 / 常规 / 生鲜 |
 | `promoTurnoverAmt` / `promoMainSaleAmt` / `promoSalesRatio` | 促销销售 |
@@ -133,7 +103,7 @@ mcp_server: mcp-sm-api-suite
 
 ## 结构类（与门店档对称；指标字段同 sm-shop-sale）
 
-入参同总览（部门/柜组可用 `categoryLevel`；大类/中类/小类须 `parentCategoryId`）。
+入参同总览（须带 `categoryLevel` 或 `parentCategoryId`）。
 
 ### `getShopCategoryDiscountStructure`
 

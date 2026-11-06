@@ -4,16 +4,18 @@ metadata:
   description: >
     超市业态经营分析 Worker（MVP）：路由问题域，追问槽位，经 iqd__ask（sm-data）取数后组织结论。
   version: "0.1.0"
-  enabled: true
+  # 2026-11：A 线（WrenAI/iqd）暂停；超市问数主路径改走 spm-report（MCP）
+  enabled: false
   tags:
     - mis
     - spm
     - supermarket
+    - paused
   capabilities:
     - supermarket_analysis
     - ask_data
 
-  when_to_use: 超市门店的经营日报、类目/生鲜、商品属性、促销出清、会员占比、毛利报损或明确拒答类问题需要查数时
+  when_to_use: （暂停）勿委派；超市经营问数请用 spm-report
   input_contract:
     - user_question
     - page_context_slice

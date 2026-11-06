@@ -1,24 +1,6 @@
 ---
 name: sm-shop-sale
-skill_id: sm-shop-sale
-description: 超市门店销售（经营总览 + 折扣/出清/供应商分担/生命周期/经营方式）。当门店与时间槽位已由 sm-report-router 确认后，用户询问营业额、客单、会员/线上销售、前台/综合毛利、损耗率、生鲜盈亏、促销占比、折扣结构、出清效率、供应商促销分担、新品/重点/TOP、经销联营租赁时触发。品类结构请用 sm-shop-category-sale。经营问数请先加载 sm-report-router。
-version: "1.0.1"
-category: supermarket
-tags:
-  - 超市
-  - 门店销售
-  - 毛利
-  - 损耗
-  - 促销
-  - sm-shop-sale
-source: package
-status: active
-timeout: 60
-requires_approval: false
-required_permissions:
-  - spm:report:read
-handler: mcp:mcp-sm-api-suite:callShopSaleApi
-mcp_server: mcp-sm-api-suite
+description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复购 + 折扣/出清/供应商分担/生命周期/经营方式）。当用户询问营业额、客单、会员/线上平台销售毛利、复购人数、前台/综合毛利、损耗、促销、库存、滞销、缺货、周转、订货验收、退货、交叉率、折扣结构、出清、供应商促销分担、新品/重点/TOP、经销联营租赁时触发。品类结构请用 sm-shop-category-sale Skill。
 ---
 
 # 门店销售（sm-shop-sale）
@@ -32,7 +14,7 @@ mcp_server: mcp-sm-api-suite
 ## MCP 与公共入参
 
 - MCP 服务名：**`mcp-sm-api-suite`**
-- 工具：**`callShopSaleApi`**（平台工具名形如 `mcp__mcp-sm-api-suite__callShopSaleApi`）
+- 工具：**`callShopSaleApi`**
 - `items` **一律按门店**汇总，含 `storeId` / `storeName`
 - 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`
 
@@ -41,7 +23,7 @@ mcp_server: mcp-sm-api-suite
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
 | `storeId` | 与 `areaId` 二选一 | 单店 |
 | `areaId` | 与 `storeId` 二选一 | 区域（权限门店 ∩ 区域） |
-| `startOrdDate` + `endOrdDate` | **仅 day** | `YYYY-MM-DD` 闭区间；**两端均须早于今天**（T+1；≥今天禁止调用，改由路由早停话术） |
+| `startOrdDate` + `endOrdDate` | **仅 day** | `YYYY-MM-DD` 闭区间 |
 | `ordWeek` | **仅 week** | ADS 周键 |
 | `ordMonth` | **仅 month** | ADS 月键如 `"2026-10"` |
 | `shopLevel` | 否 | 店型过滤 |
@@ -57,12 +39,83 @@ mcp_server: mcp-sm-api-suite
 | 意图 | apiName |
 |------|---------|
 | 门店经营/毛利/损耗/促销（任一或同时） | `getShopSaleOverview` |
+| 门店库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopInventoryOverview`（**仅 week/month**） |
+| 线上分平台/类目销售毛利 | `listOnlineSales`（日区间 `startSaleDate`+`endSaleDate`） |
+| 复购会员人数 | `getRepurchaseSummary`（**仅 week/month**） |
 | 折扣三列（总折扣/促销打折/处理打折） | `getDiscountStructure` |
 | 出清效率（出清销售 + 毛利回收） | `getClearanceEfficiency` |
 | 供应商促销分担 | `getSupplierPromoShare` |
 | 新品/重点/TOP/出清结构 | `getProductLifecycleMix` |
 | 经销/联营/租赁 | `getVentureStructure` |
 | 品类结构 | Skill **`sm-shop-category-sale`** |
+
+---
+
+## `listOnlineSales` — 线上明细销售毛利
+
+读 `ads_spm_trd_xsjlhz_onlineitem_df`（按日 `sdate`，**不是** `ord_date`）。
+
+```json
+{ "apiName": "listOnlineSales", "params": {
+  "storeId": "6001",
+  "startSaleDate": "2026-10-01",
+  "endSaleDate": "2026-10-07",
+  "groupBy": "platformStore"
+}}
+```
+
+| 参数 | 说明 |
+|------|------|
+| `startSaleDate` + `endSaleDate` | 必填，`YYYY-MM-DD` 闭区间 |
+| `groupBy` | 可选，默认 `platformStore`；另有 `platform` / `mainCategory` / `midCategory` |
+| `platform` | 可选，按平台名过滤 |
+
+| 字段 | 含义 |
+|------|------|
+| `platform` / `storeId` / `storeName` | 分组维（随 groupBy 有值或 null） |
+| `mainCategoryId/Name` / `midCategoryId/Name` | 类目维（类目分组时有值） |
+| `qty` / `saleAmt` / `saleAmtExTax` | 数量 / 含税销售 / 去税销售 |
+| `costAmt` / `costAmtExTax` / `marginAmt` / `marginAmtExTax` / `marginRate` | 成本与毛利（`marginRate=marginAmt/saleAmt`） |
+
+---
+
+## `getRepurchaseSummary` — 复购会员人数
+
+读 `ads_spm_trd_csmr_category_{week,month}_df`，`data_type='门店'`；`rep_cust` CAST 后 SUM。
+
+```json
+{ "apiName": "getRepurchaseSummary", "params": {
+  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+}}
+```
+
+| 字段 | 含义 |
+|------|------|
+| `repCustCnt` | 复购会员人数 |
+
+> 复购漏斗（1 次 vs ≥2 次等）属阶段 6，不在本接口。
+
+---
+
+## `getShopInventoryOverview` — 门店库存订货总览
+
+库存 + 滞销 + 缺货 + 周转 + 订货/验收 + 退货 + 交叉率，**一次返回**。  
+**仅 `period=week|month`**（无 day 表）。
+
+```json
+{ "apiName": "getShopInventoryOverview", "params": {
+  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+}}
+```
+
+| 字段 | 含义 / 口径 |
+|------|-------------|
+| `invAmtExTax` / `slowMovingInvAmtExTax` / `slowMovingShare` | 库存 / 滞销 / `zx/hj` |
+| `stockoutSkuCnt` / `stockoutSkuDenom` / `stockoutRate` | 缺货分子分母 / 率 |
+| `cogsExTax` / `invAmtExTaxNum` / `periodDays` / `turnoverDays` / `turnoverRate` | 成本 / 周转分子库存 / 天数 / 周转天 / `bhsxscb/kcbhsje`（分母 0→null） |
+| `orderAmt` / `receiveAmt` / `orderReceiveGapRatio` | 订货 / 验收 / `(dd-ys)/dd`（dd=0→null） |
+| `returnAmtExTax` / `returnRate` | 退货 / `th/hj` |
+| `frontMarginAmtExTax` / `mainSaleAmt` / `frontMarginRateExTax` / `crossRate` | 去税前台毛利 / 主营 / 毛利率 / `毛利率×周转率` |
 
 ---
 
@@ -75,6 +128,7 @@ mcp_server: mcp-sm-api-suite
   "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
 }}
 ```
+
 
 ### 销售
 
@@ -91,7 +145,8 @@ mcp_server: mcp-sm-api-suite
 |------|------|
 | `frontMarginAmt` / `frontMarginAmtExTax` | 前台毛利含税 / 不含税 |
 | `comprehensiveMarginAmt` / `comprehensiveMarginAmtExTax` | 综合毛利含税 / 不含税 |
-| `frontMarginRate` / `comprehensiveMarginRate` | 前台 / 综合毛利率（分母=营业额） |
+| `frontMarginRate` / `comprehensiveMarginRate` | 前台 / 综合毛利率（分母=**营业额** `turnoverAmt`） |
+| `frontMarginRateExTax` | 前台毛利率（去税）= `frontMarginAmtExTax / mainSaleAmt`（分母=**主营**） |
 
 ### 损耗
 
@@ -204,7 +259,8 @@ mcp_server: mcp-sm-api-suite
 
 ---
 
-## 暂缓
+## 对比与暂缓
 
-- `compareStores` / `getYoYMetrics`
-- `getMarginWaterfall` / `getLowMarginAlert`
+- **同比**：不依赖专用 YoY API；对「去年同周/同月/对应日」再用本 Skill 同一 `apiName` 查一次，与本期对照（时间键来自日历清单）。
+- **暂不支持**：时段峰谷、坪效/人效（无接口、不问数硬编）。
+- **仍暂缓的 API**：`compareStores` / `getMarginWaterfall` / `getLowMarginAlert`

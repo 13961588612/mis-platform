@@ -1,8 +1,8 @@
 ---
 name: sm-report-router
 skill_id: sm-report-router
-description: 超市报表总控路由。区域/门店/分类/日历/销售/毛利/损耗/促销/品类结构问数须先加载：意图与槽位 → MCP 拉权限门店与 ADS 日周月供选择 → 槽位齐后再 skill() 下游并指定 apiName。
-version: "2.1.1"
+description: 超市报表总控路由。区域/门店/分类/日历/销售/毛利/损耗/促销/库存订货/品类结构问数须先加载：意图与槽位 → MCP 拉权限门店与 ADS 日周月供选择 → 槽位齐后再 skill() 下游并指定 apiName。
+version: "2.3.0"
 category: supermarket
 tags:
   - 超市
@@ -53,18 +53,40 @@ required_permissions:
 | C1 | 某年有哪些天/周/月（不查销售） | calendar → `listYearDates/Weeks/Months` |
 | S1 | 门店总盘：营业额/客单/会员/毛利/损耗/促销 | sale → `getShopSaleOverview` |
 | S2～S6 | 折扣/出清/供应商/生命周期/经销联营 | sale → 对应 apiName（见 §7） |
+| S7 | 门店库存/滞销/缺货/周转/订货/退货/交叉率 | sale → `getShopInventoryOverview`（**仅 week/month**） |
 | P1～P6 | 门店内品类销售/结构 | category-sale → 对应 apiName |
-| X | 库存/采购/进销存/财务 | **拒答** |
+| P7 | 品类库存/滞销/缺货/周转/订货/退货 | category-sale → `getShopCategoryInventoryOverview`（**仅 week/month**） |
+| X | 采购合同/财务总账/未上线 MCP | **拒答**（库存订货走 S7/P7，勿拒） |
 
-仲裁：有「部门/柜组/大中小类/品类占比」→ P\*；只说销售毛利无品类词 → S1；「我能看哪些店」→ M2；「有哪些门店」→ M3。多问拆两次，槽位复用。
+仲裁：有「部门/柜组/大中小类/品类占比」→ P\*；库存+品类词 → P7；库存无品类词 → S7；只说销售毛利无品类词 → S1；「我能看哪些店」→ M2；「有哪些门店」→ M3。多问拆两次，槽位复用。
+
+### 分析主题映射（01 体系 · 勿再拆独立主题 Skill）
+
+经营总览 / 促销 / 库存 **已由** `sm-shop-sale`（及品类对称时 `sm-shop-category-sale`）覆盖。  
+**禁止**再新建 `sm-theme-overview` 之类 Skill 注入；只在本路由表选型 → `skill(sm-shop-sale|…)` → 下表 `apiName`。
+
+| 01 主题 | 用户说法（例） | 路由 | apiName（sale；品类对称见 §7 P*） |
+|---------|----------------|------|-----------------------------------|
+| **经营总览** | 经营情况、营业额、客单、会员占比、毛利损耗促销一起看、日报 | **S1** | `getShopSaleOverview` |
+| 经营总览·线上 | 线上/平台销售毛利 | S1 衍生 | `listOnlineSales`（日区间） |
+| 经营总览·复购人数 | 复购会员人数 | S1 衍生 | `getRepurchaseSummary`（仅周月） |
+| 经营总览·同比 | 较去年同期/同比 | **S1×2** | 同 apiName；日历取本期+同比期各查一次再对照 |
+| **促销** | 折扣构成 | **S2** | `getDiscountStructure` |
+| 促销 | 出清效率 | **S3** | `getClearanceEfficiency` |
+| 促销 | 供应商促销分担 | **S4** | `getSupplierPromoShare` |
+| 促销·弱 | 只问促销占比/促销毛利（无「折扣三列/出清/分担」） | **S1** 即可 | overview 内 promo* / coupon* |
+| **库存** | 库存/滞销/缺货/周转/订货/退货 | **S7** | `getShopInventoryOverview`（仅周月） |
+| 库存·品类 | 某大类库存… | **P7** | `getShopCategoryInventoryOverview` |
+
+时段峰谷 / 坪效 → §9 暂不支持。店长晨会「销售+毛利+损耗+促销」一轮说清 → **只打 S1 一次**，勿拆四次 MCP。
 
 ### 槽位矩阵
 
 | 意图 | store | 时间 | 品类 |
 |------|-------|------|------|
 | M*/C1 | 否 | C1 要 year+period | M4 按接口 |
-| S* | **是**（单店 `storeId` 或明确 `areaId`） | **是** | 否 |
-| P* | **是** | **是** | 部门/柜组→`categoryLevel`；大中小类→**必须**`parentCategoryId` |
+| S* | **是**（单店 `storeId` 或明确 `areaId`） | **是**（S7 仅 week/month） | 否 |
+| P* | **是** | **是**（P7 仅 week/month） | 部门/柜组→`categoryLevel`；大中小类→**必须**`parentCategoryId` |
 
 ---
 
@@ -112,8 +134,8 @@ skill(sm-common-info-master-data)
 
 0. **先判当日及之后**（见文首【早停】）：命中则固定话术结束，**不要**进入下面 1～4。  
 1. **year**：已给四位年→确认；今年/去年→换算后复述；未提→追问后停。  
-2. **period**：日→`day`；周→`week`；月→`month`；未清→追问三选一，**不要默认**。  
-3. **拉桶**：`skill(sm-common-info-calendar)` → `listYearDates|Weeks|Months` + `{year}`；空清单→换年/粒度，停。展示日清单时**不要**把今天及之后的公历日当成可选经营日推荐。  
+2. **period**：日→`day`；周→`week`；月→`month`；未清→追问（S7/P7 **只问周/月二选一**，说明无日表）。  
+3. **拉桶**：`skill(sm-common-info-calendar)` → `listYearDates|Weeks|Months` + `{year}`；空清单→换年/粒度，停。展示日清单时**不要**把今天及之后的公历日当成可选经营日推荐。S7/P7 **不要**拉日清单。  
 4. **请选**：展示周键/月键/日期表；选定后 week→`ordWeek`，month→`ordMonth`，day→`startOrdDate`+`endOrdDate`（单日两端相同）。**禁止**公历自算周序。选定日若 ≥ 今天 → 回【早停】，禁止调销售 MCP。
 
 ---
@@ -136,9 +158,9 @@ skill(sm-common-info-master-data)
 2. `params` 只含已确认槽位  
 3. 调对应 MCP  
 
-**sale / `callShopSaleApi`：** S1 `getShopSaleOverview`；S2 `getDiscountStructure`；S3 `getClearanceEfficiency`；S4 `getSupplierPromoShare`；S5 `getProductLifecycleMix`；S6 `getVentureStructure`  
+**sale / `callShopSaleApi`：** S1 `getShopSaleOverview`；S2 `getDiscountStructure`；S3 `getClearanceEfficiency`；S4 `getSupplierPromoShare`；S5 `getProductLifecycleMix`；S6 `getVentureStructure`；S7 `getShopInventoryOverview`  
 
-**category-sale：** P1 `getShopCategoryOverview`；P2 `getShopCategoryDiscountStructure`；P3 `getShopCategoryClearanceEfficiency`；P4 `getShopCategorySupplierPromoShare`；P5 `getShopCategoryProductLifecycleMix`；P6 `getShopCategoryVentureStructure`  
+**category-sale：** P1 `getShopCategoryOverview`；P2 `getShopCategoryDiscountStructure`；P3 `getShopCategoryClearanceEfficiency`；P4 `getShopCategorySupplierPromoShare`；P5 `getShopCategoryProductLifecycleMix`；P6 `getShopCategoryVentureStructure`；P7 `getShopCategoryInventoryOverview`  
 
 示例：`{"apiName":"getShopSaleOverview","params":{"period":"month","storeId":"0021","ordMonth":"2026年-9月"}}`（月键以日历清单原样为准）
 
@@ -159,9 +181,13 @@ skill(sm-common-info-master-data)
 
 ---
 
-## 9. 拒答
+## 9. 拒答与对比约定
 
-库存/采购/进销存/财务 → 未开放。NL2SQL → 超市分析智能体；百购 → 百购分析智能体。  
+采购合同 / 财务总账 / 未上线 MCP → 未开放。  
+**时段峰谷 / 坪效 / 人效** → **暂不支持**（说明数据未开放，勿空查）。  
+库存订货 → **走 S7/P7**，勿拒答。  
+**同比 / 较去年同期**：不新开专用 API；在日历中选定**本期 + 同比期**时间键，**各查一次**同一 `apiName`，再对照作答（禁止臆造同比列）。  
+WrenAI/NL2SQL（`spm-analyst`）本阶段**暂停**，超市问数一律本 Agent + MCP。百购 → 百购分析智能体。  
 当天及之后的经营日 / 尚未出数的周月 → 【早停】固定话术，禁止空转工具链。
 
 ---
