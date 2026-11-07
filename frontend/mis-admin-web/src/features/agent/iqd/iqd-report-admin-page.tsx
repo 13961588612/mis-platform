@@ -481,6 +481,7 @@ export default function IqdReportAdminPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-16 whitespace-nowrap">排序</TableHead>
                   <TableHead className="whitespace-nowrap">编号</TableHead>
                   <TableHead className="whitespace-nowrap">名称</TableHead>
                   <TableHead className="whitespace-nowrap">归属分类</TableHead>
@@ -495,7 +496,7 @@ export default function IqdReportAdminPage() {
               <TableBody>
                 {reports.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">
                       暂无报告
                     </TableCell>
                   </TableRow>
@@ -512,6 +513,9 @@ export default function IqdReportAdminPage() {
                     const slots = r.slots ?? [];
                     return (
                       <TableRow key={r.id} className={cn(!r.enabled && 'opacity-60')}>
+                        <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
+                          {r.sort_order ?? 0}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">{r.report_code}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
@@ -651,6 +655,25 @@ export default function IqdReportAdminPage() {
                       ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>排序</Label>
+                <Input
+                  type="number"
+                  value={categoryForm.sort_order}
+                  onChange={(e) =>
+                    setCategoryForm({
+                      ...categoryForm,
+                      sort_order: Number.isFinite(Number(e.target.value))
+                        ? Number(e.target.value)
+                        : 0,
+                    })
+                  }
+                  placeholder="数值越小越靠前"
+                />
+                <p className="text-xs text-muted-foreground">
+                  同级分类按此字段升序；Copilot 分组标签亦按此排序
+                </p>
               </div>
               <div className="flex items-center justify-between rounded-md border px-3 py-2">
                 <div>
@@ -913,6 +936,9 @@ function CatLevel({
                   <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
                 <span className="truncate">{n.name}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  #{n.sort_order ?? 0}
+                </span>
                 {n.is_group ? (
                   <span className="shrink-0 rounded bg-amber-100 px-1 text-[10px] text-amber-800">
                     分组
@@ -1041,6 +1067,23 @@ function ReportEditor({
             ))}
           </SelectContent>
         </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>排序</Label>
+        <Input
+          type="number"
+          value={value.sort_order ?? 0}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              sort_order: Number.isFinite(Number(e.target.value)) ? Number(e.target.value) : 0,
+            })
+          }
+          placeholder="数值越小越靠前"
+        />
+        <p className="text-xs text-muted-foreground">
+          同一分类下按此字段升序；Copilot 分组内子报告菜单按此排序
+        </p>
       </div>
       <div className="space-y-2">
         <Label>参数槽位（勾选来源）</Label>

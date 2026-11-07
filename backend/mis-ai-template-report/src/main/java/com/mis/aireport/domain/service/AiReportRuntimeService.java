@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -86,21 +87,35 @@ public class AiReportRuntimeService {
             byGroup.computeIfAbsent(groupId, k -> new ArrayList<>()).add(def);
         }
 
+        List<Long> groupIds = new ArrayList<>(byGroup.keySet());
+        groupIds.sort(Comparator
+                .comparingInt((Long id) -> {
+                    AiReportCategory g = cats.get(id);
+                    return g != null && g.getSortOrder() != null ? g.getSortOrder() : 0;
+                })
+                .thenComparingLong(id -> id));
+
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Map.Entry<Long, List<AiReportDef>> e : byGroup.entrySet()) {
-            AiReportCategory group = cats.get(e.getKey());
+        for (Long groupId : groupIds) {
+            AiReportCategory group = cats.get(groupId);
             if (group == null || group.getEnabled() == null || group.getEnabled() != 1) {
                 continue;
             }
             if (group.getIsGroup() == null || group.getIsGroup() != 1) {
                 continue;
             }
+            List<AiReportDef> groupDefs = new ArrayList<>(byGroup.getOrDefault(groupId, List.of()));
+            groupDefs.sort(Comparator
+                    .comparingInt((AiReportDef d) -> d.getSortOrder() != null ? d.getSortOrder() : 0)
+                    .thenComparingLong(AiReportDef::getId));
+
             Map<String, Object> node = new LinkedHashMap<>();
             node.put("group_id", group.getId());
             node.put("group_code", group.getCode());
             node.put("group_name", group.getName());
+            node.put("sort_order", group.getSortOrder() != null ? group.getSortOrder() : 0);
             List<Map<String, Object>> reports = new ArrayList<>();
-            for (AiReportDef def : e.getValue()) {
+            for (AiReportDef def : groupDefs) {
                 Map<String, Object> r = new LinkedHashMap<>();
                 r.put("report_code", def.getReportCode());
                 r.put("title", def.getTitle());
@@ -108,6 +123,7 @@ public class AiReportRuntimeService {
                 r.put("use_ai_workflow", def.getUseAiWorkflow() != null && def.getUseAiWorkflow() == 1);
                 r.put("workflow_code", def.getWorkflowCode());
                 r.put("workflow_platform_code", def.getWorkflowPlatformCode());
+                r.put("sort_order", def.getSortOrder() != null ? def.getSortOrder() : 0);
                 reports.add(r);
             }
             node.put("reports", reports);

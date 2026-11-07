@@ -28,7 +28,15 @@ export function ReportCatalogBar({ disabled, className }: ReportCatalogBarProps)
     setLoading(true);
     try {
       const data = await fetchAiReportCatalog();
-      setGroups(Array.isArray(data) ? data.filter((g) => (g.reports?.length ?? 0) > 0) : []);
+      const groups = Array.isArray(data) ? data.filter((g) => (g.reports?.length ?? 0) > 0) : [];
+      // 后端已按 sort_order 排序；此处再稳一次，避免旧缓存/中间层打乱
+      groups.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.group_id - b.group_id);
+      for (const g of groups) {
+        g.reports = [...(g.reports ?? [])].sort(
+          (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.report_code.localeCompare(b.report_code),
+        );
+      }
+      setGroups(groups);
     } catch (e) {
       setGroups([]);
       if (import.meta.env.DEV) {

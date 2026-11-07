@@ -153,12 +153,16 @@ export interface AiReportCatalogItem {
   use_ai_workflow?: boolean;
   workflow_code?: string | null;
   workflow_platform_code?: string | null;
+  /** 同组内升序；catalog 接口已排好序，前端可直接按返回顺序渲染 */
+  sort_order?: number;
 }
 
 export interface AiReportCatalogGroup {
   group_id: number;
   group_code: string;
   group_name: string;
+  /** 分组标签升序；catalog 接口已排好序 */
+  sort_order?: number;
   reports: AiReportCatalogItem[];
 }
 
