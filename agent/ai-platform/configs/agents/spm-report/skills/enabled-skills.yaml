@@ -24,5 +24,9 @@ skills:
     prompt_expose: false
   - skill_id: sm-shop-ops-inventory-report
     prompt_expose: false
+  - skill_id: sm-shop-ops-category-report
+    prompt_expose: false
+  - skill_id: sm-shop-ops-margin-report
+    prompt_expose: false
   custom_skills_dir: skills/custom-skills/
   overrides_dir: skills/skill-overrides/

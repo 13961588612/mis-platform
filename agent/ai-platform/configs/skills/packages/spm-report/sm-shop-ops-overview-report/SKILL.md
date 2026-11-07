@@ -2,7 +2,7 @@
 name: sm-shop-ops-overview-report
 skill_id: sm-shop-ops-overview-report
 description: 门店经营总览主题分析报告（Overview Theme Report）。基于 getShopSaleOverview 取数结果成文：当日数值 + 较前一天/上周同期升降比例；含销售与毛利损耗。不查数。综合分析见 sm-shop-ops-comprehensive-report。
-version: "1.3.0"
+version: "1.3.2"
 category: supermarket
 tags:
   - 超市
@@ -24,7 +24,11 @@ required_permissions:
 - 取数：router → `skill(sm-shop-sale)` → `getShopSaleOverview`（当日 + 前一天 + 上周同期，共最多 3 次；键来自日历）
 - **禁止**再调销售 MCP 以外的乱查；**禁止**另写 apiName
 - 加载时机：S1 取数成功后；或由 `sm-shop-ops-comprehensive-report` 按节调用
-- 综合报告请用 **`sm-shop-ops-comprehensive-report`**
+- 综合报告请用 **`sm-shop-ops-comprehensive-report`**（本主题为综合**第一章**）
+- 毛利瀑布 / 生鲜盈亏 / 低毛利专项 → **`sm-shop-ops-margin-report`**（本 Skill 只保留晨会毛利损耗轻量表）
+- S1a 线上分平台 / S1b 复购：有数则在销售概览后加**轻量句或小表**，不新开成文 Skill
+- **按周对比**：仅消费多周 `getShopSaleOverview`；可加「分周走势」小表（营业额/客单等），**勿**要求其它 apiName 按周取数（见 router §1.3）
+- 关系总表：`sm-report-router` §1.1 / §1.3
 
 ---
 
@@ -105,7 +109,7 @@ required_permissions:
 
 销售：`turnoverAmt` / `netSalesAmt` / `mainSaleAmt` / `ticketCount` / `ticketPrice` / `memberTurnoverRatio` / `onlineSalesRatio` / `promoSalesRatio`  
 毛利损耗：`frontMarginAmt` / `frontMarginRate` / `comprehensiveMarginAmt` / `comprehensiveMarginRate` / `lossAmtAbs` / `lossRateAbs`  
-（有亮点再补会员人数、促销前台毛利等。）
+（有亮点再补会员人数、促销前台毛利等。生鲜/常规盈亏深拆、瀑布、低毛利 → **margin-report**，本表不展开。）
 
 ---
 

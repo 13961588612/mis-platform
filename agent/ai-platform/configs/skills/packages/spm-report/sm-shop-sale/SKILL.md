@@ -1,6 +1,6 @@
 ---
 name: sm-shop-sale
-description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复购 + 折扣/出清/供应商分担/生命周期/经营方式）。当用户询问营业额、客单、会员/线上平台销售毛利、复购人数、前台/综合毛利、损耗、促销、库存、滞销、缺货、周转、订货验收、退货、交叉率、折扣结构、出清、供应商促销分担、新品/重点/TOP、经销联营租赁时触发。品类结构请用 sm-shop-category-sale Skill。
+description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复购 + 折扣/出清/供应商分担/生命周期/经营方式 + 毛利瀑布/低毛利预警/生鲜占比盈亏）。当用户询问营业额、客单、会员/线上平台销售毛利、复购人数、前台/综合毛利、毛利瀑布、低毛利预警、生鲜销售占比、生鲜盈亏、损耗、促销、库存、滞销、缺货、周转、订货验收、退货、交叉率、折扣结构、出清、供应商促销分担、新品/重点/TOP、经销联营租赁时触发。品类结构请用 sm-shop-category-sale Skill。
 ---
 
 # 门店销售（sm-shop-sale）
@@ -57,9 +57,12 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 | **S2** | 折扣三列 | `getDiscountStructure` |
 | **S3** | 出清效率 | `getClearanceEfficiency` |
 | **S4** | 供应商促销分担 | `getSupplierPromoShare` |
-| **S5** | 新品/重点/TOP/出清结构 | `getProductLifecycleMix` |
-| **S6** | 经销/联营/租赁 | `getVentureStructure` |
+| **S5** | 新品/重点/TOP/出清结构 | `getProductLifecycleMix`（表答或并入 `sm-shop-ops-category-report` 生命周期） |
+| **S6** | 经销/联营/租赁 | `getVentureStructure`（表答或并入 category-report 经营方式） |
 | **S7** | 门店库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopInventoryOverview`（**仅 week/month**） |
+| **S8** | 毛利瀑布（成本→前台→后台调整→综合） | `getMarginWaterfall`（成文 → `sm-shop-ops-margin-report`） |
+| **S9** | 生鲜占比/盈亏（类目 id 以 1 开头） | `getFreshOverview`（成文 → `sm-shop-ops-margin-report`） |
+| **S10** | 低毛利预警（低毛利率主营销售） | `getLowMarginAlert`（**仅 week/month**；成文 → `sm-shop-ops-margin-report`） |
 | — | 品类结构 | Skill **`sm-shop-category-sale`** |
 
 ---
@@ -167,7 +170,9 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 | 字段 | 含义 |
 |------|------|
 | `lossAmtTax` / `lossAmtExTax` / `lossAmtAbs` | 损耗含税 / 不含税 / 绝对值 |
-| `pnlAmtTax` / `regularPnLAmtTax` / `freshPnLAmtTax` | 损溢 / 常规盈亏 / 生鲜盈亏 |
+| `pnlAmtTax` | 损溢 |
+| `regularPnLAmtTax` / `regularPnLAmtExTax` / `regularPnLQty` | 常规盈亏含税 / 去税 / 数量 |
+| `freshPnLAmtTax` / `freshPnLAmtExTax` / `freshPnLQty` | 生鲜盈亏含税 / 去税 / 数量 |
 | `lossRateAbs` | 损耗率 = `lossAmtAbs / netSalesAmt` |
 
 > 不要把损耗说成「吃掉了多少毛利」。
@@ -273,8 +278,82 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ---
 
+## `getMarginWaterfall` — 毛利瀑布（查数）
+
+入参同 `getShopSaleOverview`（day/week/month）。读 cost，营业额 JOIN cpi。  
+**成文** → `sm-shop-ops-margin-report`。
+
+```json
+{ "apiName": "getMarginWaterfall", "params": {
+  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+}}
+```
+
+链路（含税主口径；去税并列 `*ExTax`）：
+
+营业额 → 销售成本 → 前台毛利 →（后台费用 / 供应商分担 / 配送加价 / 物流分摊 / 股权调整）→ 综合毛利。
+
+| 字段 | 含义 | 成文「对毛利」默认 |
+|------|------|-------------------|
+| `turnoverAmt` | 营业额（起点） | — |
+| `cogsAmtTax` / `cogsAmtExTax` | 销售成本 | 🔴减（相对营业额） |
+| `frontMarginAmt` / `frontMarginAmtExTax` | 前台毛利 | —（节点） |
+| `backendFeeAmtTax` / `backendFeeAmtExTax` | 后台费用 | 🔴减综合毛利 |
+| `supplierShareAmtTax` / `supplierShareAmtExTax` | 供应商分担 | 🟢增综合毛利 |
+| `deliveryMarkupAmtTax` / `deliveryMarkupAmtExTax` | 配送加价 | 🟢增综合毛利 |
+| `logisticsAllocAmtTax` / `logisticsAllocAmtExTax` | 物流分摊 | 🔴减综合毛利 |
+| `equityAdjMarginAmtTax` / `equityAdjMarginAmtExTax` | 股权调整 | 跟符号：正增负减 |
+| `comprehensiveMarginAmt` / `comprehensiveMarginAmtExTax` | 综合毛利（终点） | — |
+
+> 成文须写清每项 **增/减毛利多少**（见 `sm-shop-ops-margin-report` §2）；勿只写「调整」。科目并列入账，**禁止**说损耗「吃毛利」。
+
+---
+
+## `getFreshOverview` — 生鲜经营总览（查数）
+
+入参同总览。生鲜类目口径：**`dim_type_id LIKE '1%'`**（与 `dim_spm_chl_category_df.categoryid LIKE '1%'` 一致；**不用 goodstype**）。销售取 `data_type='门店小类'`，盈亏取 cost `门店` 预置列。  
+**成文** → `sm-shop-ops-margin-report`。
+
+```json
+{ "apiName": "getFreshOverview", "params": {
+  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+}}
+```
+
+| 字段 | 含义 |
+|------|------|
+| `freshTurnoverAmt` / `freshMainSaleAmt` / `freshQty` | 生鲜销售 |
+| `storeTurnoverAmt` / `storeMainSaleAmt` | 门店合计（分母） |
+| `freshSalesShare` / `freshMainShare` | 生鲜占门店营业额/主营（0～1） |
+| `freshFrontMarginAmt` / `freshFrontMarginAmtExTax` | 生鲜前台毛利（门店小类） |
+| `freshPnLAmtTax` / `freshPnLAmtExTax` / `freshPnLQty` | 生鲜盈亏 |
+| `regularPnLAmtTax` / `regularPnLAmtExTax` / `regularPnLQty` | 常规盈亏 |
+| `meta.freshCategoryRule` | 口径说明回显 |
+
+---
+
+## `getLowMarginAlert` — 低毛利预警（查数）
+
+仅 **week/month**（无 day）。KPI `lowml_zyxxsr`。  
+**成文** → `sm-shop-ops-margin-report`。
+
+```json
+{ "apiName": "getLowMarginAlert", "params": {
+  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+}}
+```
+
+| 字段 | 含义 |
+|------|------|
+| `lowMarginMainSaleAmt` | 低毛利率主营销售 |
+| `mainSaleAmt` / `turnoverAmt` | 主营 / 营业额 |
+| `lowMarginMainShare` | `lowMarginMainSaleAmt / mainSaleAmt`（0～1） |
+
+---
+
 ## 对比与暂缓
 
 - **同比**：不依赖专用 YoY API；对「去年同周/同月/对应日」再用本 Skill 同一 `apiName` 查一次，与本期对照（时间键来自日历清单）。
 - **暂不支持**：时段峰谷、坪效/人效（无接口、不问数硬编）。
-- **仍暂缓的 API**：`compareStores` / `getMarginWaterfall` / `getLowMarginAlert`
+- **仍暂缓的 API**：`compareStores` / `getYoYMetrics`
+- **成文分流**（详 router §1.1）：S1(+S1a/S1b) → overview；S2～S4 → promo；S5/S6 → 表答或 category；S7 → inventory；S8～S10 → margin；综合 → comprehensive

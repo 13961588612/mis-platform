@@ -2,7 +2,7 @@
 name: sm-shop-ops-inventory-report
 skill_id: sm-shop-ops-inventory-report
 description: 门店库存订货主题分析报告（Inventory Theme Report）。基于 getShopInventoryOverview 取数结果成文（仅周/月）。不查数。可被综合报告引用，也可单独做库存分析。
-version: "1.1.0"
+version: "1.2.0"
 category: supermarket
 tags:
   - 超市
@@ -23,9 +23,9 @@ required_permissions:
 **只做本主题解读**，不做查数。
 
 - 取数：router → `sm-shop-sale` → `getShopInventoryOverview`（**仅 week/month**）
-- 品类库存走 `sm-shop-category-sale` / P7，本 Skill 只解读**门店**库存总览
+- 品类库存 P7 → **`sm-shop-ops-category-report`**（库存要点）；本 Skill **只**门店 S7 总览
 - **禁止**再调 MCP；无数据不编造
-- 综合整合：`sm-shop-ops-comprehensive-report`
+- 综合报告中为本主题**第五章**；关系见 router §1.1
 
 ---
 

@@ -21,3 +21,7 @@ skill_permissions:
     required: [spm:report:read]
   sm-shop-ops-inventory-report:
     required: [spm:report:read]
+  sm-shop-ops-category-report:
+    required: [spm:report:read]
+  sm-shop-ops-margin-report:
+    required: [spm:report:read]

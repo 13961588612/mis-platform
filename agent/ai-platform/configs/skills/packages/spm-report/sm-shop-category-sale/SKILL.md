@@ -1,6 +1,6 @@
 ---
 name: sm-shop-category-sale
-description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + 品类库存订货 + 折扣/出清/供应商/生命周期/经营方式）。当用户询问某店各部门/柜组/大中小类销售占比、品类毛利、品类损耗、品类促销、品类库存/滞销/缺货/周转/订货/退货、品类折扣/出清/供应商分担/新品重点TOP/经销联营，或按父分类下钻子类时触发。
+description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + 品类库存订货 + 折扣/出清/供应商/生命周期/经营方式 + 类目四象限/类目ABC）。当用户询问某店各部门/柜组/大中小类销售占比、品类毛利、品类角色（利润品/客流品/结构品/问题品）、品类ABC、品类损耗/促销、品类库存、折扣/出清/供应商分担/新品重点TOP/经销联营，或按父分类下钻子类时触发。
 ---
 
 # 品类销售（sm-shop-category-sale）
@@ -63,18 +63,22 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 ## 选用（router 代号 → apiName；权威在本表）
 
 由 `sm-report-router` 确认门店/时间/品类槽后加载本 Skill，**按下表复制 apiName**。  
-级别：`部门` / `柜组` / `大类` / `中类` / `小类`。品类角色等默认 **`categoryLevel=大类`**。
+级别：`部门` / `柜组` / `大类` / `中类` / `小类`。品类角色 / ABC 等默认 **`categoryLevel=大类`**。
 
 | router | 意图 | apiName |
 |--------|------|---------|
-| **P1** | 品类销售/毛利/损耗/促销总览 | `getShopCategoryOverview` |
-| **P2** | 品类折扣三列 | `getShopCategoryDiscountStructure` |
-| **P3** | 品类出清效率 | `getShopCategoryClearanceEfficiency` |
-| **P4** | 品类供应商促销分担 | `getShopCategorySupplierPromoShare` |
-| **P5** | 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix` |
-| **P6** | 品类经销/联营/租赁 | `getShopCategoryVentureStructure` |
-| **P7** | 品类库存/滞销/缺货/周转/订货/退货 | `getShopCategoryInventoryOverview`（**仅 week/month**） |
+| **P1** | 品类销售/毛利/损耗/促销总览（**仅查数**） | `getShopCategoryOverview`（成文 → `sm-shop-ops-category-report`） |
+| **P2** | 品类折扣三列 | `getShopCategoryDiscountStructure`（成文 → category-report **轻量**；勿默认 promo） |
+| **P3** | 品类出清效率 | `getShopCategoryClearanceEfficiency`（同上） |
+| **P4** | 品类供应商促销分担 | `getShopCategorySupplierPromoShare`（同上） |
+| **P5** | 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix`（有数可成文 → category-report） |
+| **P6** | 品类经销/联营/租赁 | `getShopCategoryVentureStructure`（有数可成文 → category-report） |
+| **P7** | 品类库存/滞销/缺货/周转/订货/退货 | `getShopCategoryInventoryOverview`（**仅 week/month**；可选进 category-report） |
+| **P8** | 类目角色四象限（利润/客流/结构/问题） | `getShopCategoryRoleMatrix`（成文 → category-report） |
+| **P9** | 类目级 ABC（累计营业额） | `getShopCategoryAbc`（成文 → category-report） |
 | — | 门店级（无类目） | Skill **`sm-shop-sale`** |
+
+**解读 / 品类管理报告成文** 不在本 Skill，见 **`sm-shop-ops-category-report`**。
 
 ---
 
@@ -159,3 +163,58 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 |------|------|
 | `ventureMainSaleAmt` / `jointMainSaleAmt` / `rentMainSaleAmt` | 经销 / 联营 / 租赁主营 |
 | `ventureShare` / `jointShare` / `rentShare` | 占主营比 |
+
+### `getShopCategoryInventoryOverview` — 品类库存订货
+
+**仅 week/month**。指标口径与门店档 `getShopInventoryOverview` 同构，另带 `categoryId` / `categoryName`。  
+可选进成文 → `sm-shop-ops-category-report`（库存要点节）。
+
+| 字段 | 含义 |
+|------|------|
+| `invAmtExTax` / `slowMovingInvAmtExTax` / `slowMovingShare` | 库存 / 滞销 / 占比 |
+| `stockoutSkuCnt` / `stockoutSkuDenom` / `stockoutRate` | 缺货 |
+| `turnoverDays` / `turnoverRate` / `crossRate` | 周转 / 交叉率 |
+| `orderAmt` / `receiveAmt` / `orderReceiveGapRatio` | 订货 / 验收 / 缺口率 |
+| `returnAmtExTax` / `returnRate` | 退货 |
+
+---
+
+## 主题二扩展（ADS 近似，非订单明细）
+
+入参同总览。数据来自品类总览的销售占比 + 前台毛利率，**按门店分别**计算。品类角色 / ABC 默认 **`categoryLevel=大类`**。
+
+### `getShopCategoryRoleMatrix` — 类目角色四象限
+
+| 角色 | 规则（相对本店中位数） |
+|------|------------------------|
+| `利润品` | 高占比 × 高毛利率 |
+| `客流品` | 高占比 × 低毛利率 |
+| `结构品` | 低占比 × 高毛利率 |
+| `问题品` | 低占比 × 低毛利率 |
+
+| 字段 | 含义 |
+|------|------|
+| `role` | 上述四角色之一 |
+| `turnoverShare` / `frontMarginRate` | 划分依据 |
+| `shareMedian` / `marginRateMedian` | 本店阈值 |
+| `summary.roleCounts` / `roleTurnoverAmt` | 各角色计数与营业额 |
+
+### `getShopCategoryAbc` — 类目级 ABC
+
+门店内按 `turnoverAmt` 降序累计：`A` 累计前仍 <80%；`B` <95%；其余 `C`。
+
+| 字段 | 含义 |
+|------|------|
+| `abcClass` | `A` / `B` / `C` |
+| `rank` / `cumulativeShare` | 店内排名与累计占比 |
+| `summary.classCounts` / `classTurnoverShare` | 各类计数与营业额占比 |
+
+> **局限：** 类目级（非单品）；单品 ABC / 动销率 / 供应商销售集中度仍需订单明细，本 Skill 暂不覆盖。
+
+---
+
+## 对比与成文分流
+
+- **同比**：同门店档——另查对比期时间键，同一 `apiName` 再调一次。
+- **成文**（详 router §1.1）：P1～P9 → `sm-shop-ops-category-report`（P2～P4 仅轻量节）；门店促销专项才走 promo。
+- **门店级无类目** → `sm-shop-sale`。

@@ -2,7 +2,7 @@
 name: sm-shop-ops-promo-report
 skill_id: sm-shop-ops-promo-report
 description: 门店促销专项主题分析报告（Promo Theme Report）。基于折扣三列/出清/供应商分担等取数结果成文。不查数；apiName 在 sm-shop-sale。可被综合报告引用，也可单独做促销分析。
-version: "1.1.0"
+version: "1.2.0"
 category: supermarket
 tags:
   - 超市
@@ -21,10 +21,12 @@ required_permissions:
 
 **只做本主题解读**，不做查数。
 
-- 取数：router → `sm-shop-sale` → `getDiscountStructure` / `getClearanceEfficiency` / `getSupplierPromoShare`（按问法选；可多接口）
-- 弱问仅促销占比时，可用 `getShopSaleOverview` 中促销字段做轻量节
+- 取数：router → `sm-shop-sale` → `getDiscountStructure` / `getClearanceEfficiency` / `getSupplierPromoShare`（**门店** S2～S4）
+- **加载条件**：用户明确要「促销专项 / 折扣三列 / 出清 / 供应商分担」；综合报告第三章有门店专项数时
+- 弱问仅促销占比 → **不要**加载本 Skill，走 `overview-report`
+- **P2～P4（品类侧）默认进 `category-report` 轻量节**，禁止默认走本 Skill
 - **禁止**再调 MCP；**禁止**编造未取到的专项数
-- 综合整合：`sm-shop-ops-comprehensive-report`
+- 关系总表：`sm-report-router` §1.1；综合：`sm-shop-ops-comprehensive-report`
 
 ---
 
