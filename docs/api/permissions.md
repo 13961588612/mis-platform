@@ -205,7 +205,7 @@ if (hasPermission('system:user:edit')) { ... }
 
 | 权限码 | 菜单 | 说明 |
 |--------|------|------|
-| ai-report:view | 菜单 93201 | ping / 分类树 / 参数来源 / 工作流平台列表 / 报告 defs 读 / ACL 列表（sys_api **93211–93212,93216–93217,93220–93221,93225**）；S3：`catalog` / `prepare-card` / `execute`（**93228–93230**，亦绑问数旗舰页 93040） |
+| ai-report:view | 菜单 93201 | ping / 分类树 / 参数来源 / 工作流平台列表 / 报告 defs 读 / ACL 列表（sys_api **93211–93212,93216–93217,93220–93221,93225**）；S3：`catalog` / `prepare-card` / `execute` / `results`（**93228–93230,93232**，亦绑问数旗舰页 93040） |
 | ai-report:save | 菜单 93202 | 分类/报告/工作流平台/ACL 写（sys_api **93213–93215,93218–93219,93222–93224,93226–93227**） |
 
 报告 execute 旁路结果写入会话：`POST /api/v1/agent-ops/sessions/{id}/transcript`（sys_api **93231** / code **00920078**，V162；绑 `agent:chat:use` 92032 与问数旗舰页 93040）。

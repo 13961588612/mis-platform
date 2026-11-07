@@ -207,4 +207,13 @@ public class AiTemplateReportClient extends AbstractDownstreamClient {
                 .retrieve()
                 .bodyToMono(MAP_RESULT));
     }
+
+    public Map<String, Object> saveResult(Object body) {
+        return block(client().post()
+                .uri("/api/v1/ai-reports/results")
+                .headers(loginContextHeaders())
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
 }

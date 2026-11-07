@@ -4,7 +4,7 @@ import { AssistantAvatar } from '@/components/chat/CopilotAvatars';
 import { ReportParamPanel } from '@/components/chat/report/report-param-panel';
 import { buildReportSubmitText } from '@/components/chat/report/build-report-submit-text';
 import { formatExecuteResultMarkdown } from '@/components/chat/report/format-execute-result';
-import { executeAiReport } from '@/lib/api/ai-report';
+import { executeAiReport, saveAiReportResult } from '@/lib/api/ai-report';
 import { ApiError } from '@/lib/api/errors';
 import { appendSessionTranscript } from '@/features/agent/api/agent-ops-api';
 import { generateClientId, type ChatMessage } from '@/lib/chat/types';
@@ -12,17 +12,26 @@ import { useChatStore } from '@/stores/chat-store';
 
 export interface ReportParamCardBubbleProps {
   message: ChatMessage;
-  /** 兼容旧签名；当前提交走 execute API，不再经 Agent。 */
-  onSubmitText?: (text: string) => void;
+  /**
+   * 未命中缓存时：把已组装任务消息发往会话（硬派发 agent/skill）。
+   * 返回 Promise，resolve 时带上助手成文（用于回写缓存）。
+   */
+  onAgentRun?: (payload: {
+    message: string;
+    agentId: string;
+    skillId?: string | null;
+    reportCode: string;
+    metadata: Record<string, unknown>;
+  }) => Promise<string | void>;
 }
 
 /**
  * 助手侧气泡：模板报告参数卡。
- * 提交 → {@link executeAiReport}（BFF → mis-ai-template-report execute），
- * 本地插入用户文案 + 助手结果，并旁路写入会话 transcript（供会话管理可见）。
+ * execute → cached 直接展示 / agent_run 会话硬派发 / table 模拟表。
  */
-export function ReportParamCardBubble({ message }: ReportParamCardBubbleProps) {
+export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBubbleProps) {
   const [submitting, setSubmitting] = useState(false);
+  const [regenerate, setRegenerate] = useState(false);
   const liveCard = useChatStore(
     (s) => s.messages.find((m) => m.id === message.id)?.reportParamCard,
   );
@@ -115,11 +124,67 @@ export function ReportParamCardBubble({ message }: ReportParamCardBubbleProps) {
     };
 
     try {
-      // POST /api/v1/ai-reports/execute → AiReportRuntimeService.execute
       const result = await executeAiReport({
         reportCode: card.reportCode,
         params,
+        regenerate,
       });
+
+      if (result.mode === 'cached' && result.content_md) {
+        const assistantContent =
+          (result.read_from_cache ? '> 来自缓存\n\n' : '') + result.content_md;
+        addMessage({
+          id: generateClientId('msg'),
+          sessionId: sid,
+          role: 'assistant',
+          content: assistantContent,
+          status: 'delivered',
+          timestamp: new Date().toISOString(),
+        });
+        await persistTranscript(assistantContent, true);
+        return;
+      }
+
+      if (result.mode === 'agent_run') {
+        const agentId = (result.agent_id || '').trim();
+        const runMessage = (result.message || text).trim();
+        if (!agentId || !runMessage) {
+          throw new Error('报告未配置目标智能体或任务文案');
+        }
+        if (!onAgentRun) {
+          throw new Error('当前会话不支持智能体成文');
+        }
+        const meta = {
+          ...(result.metadata ?? {}),
+          ai_report_run: {
+            agent_id: agentId,
+            skill_id: result.skill_id ?? null,
+            report_code: card.reportCode,
+          },
+        };
+        const finalText = await onAgentRun({
+          message: runMessage,
+          agentId,
+          skillId: result.skill_id,
+          reportCode: card.reportCode,
+          metadata: meta,
+        });
+        if (result.save_to_cache && result.cache_write_token && finalText?.trim()) {
+          try {
+            await saveAiReportResult({
+              reportCode: card.reportCode,
+              params,
+              contentMd: finalText.trim(),
+              cacheWriteToken: result.cache_write_token,
+            });
+          } catch (cacheErr) {
+            console.warn('报告缓存回写失败', cacheErr);
+            toast.message('报告已生成，但缓存未写入');
+          }
+        }
+        return;
+      }
+
       const assistantContent = formatExecuteResultMarkdown(result);
       addMessage({
         id: generateClientId('msg'),
@@ -160,6 +225,8 @@ export function ReportParamCardBubble({ message }: ReportParamCardBubbleProps) {
       <ReportParamPanel
         card={card}
         submitting={submitting || isGenerating}
+        regenerate={regenerate}
+        onRegenerateChange={setRegenerate}
         onChangeValue={onChangeValue}
         onSubmit={() => void onSubmit()}
         onCancel={onCancel}

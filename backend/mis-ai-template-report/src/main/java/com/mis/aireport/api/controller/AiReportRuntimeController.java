@@ -39,4 +39,9 @@ public class AiReportRuntimeController {
     public Result<Map<String, Object>> execute(@RequestBody Map<String, Object> body) {
         return Result.ok(runtimeService.execute(body == null ? Map.of() : body));
     }
+
+    @PostMapping("/results")
+    public Result<Map<String, Object>> saveResult(@RequestBody Map<String, Object> body) {
+        return Result.ok(runtimeService.saveResult(body == null ? Map.of() : body));
+    }
 }

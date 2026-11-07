@@ -57,6 +57,10 @@ export interface AiReportDef {
   use_ai_workflow: boolean;
   workflow_platform_code?: string | null;
   workflow_code?: string | null;
+  target_agent_id?: string | null;
+  target_skill_id?: string | null;
+  prompt_template?: string | null;
+  cache_ttl_hours?: number;
   enabled: boolean;
   sort_order: number;
 }
@@ -208,23 +212,53 @@ export async function prepareAiReportCard(reportCode: string): Promise<AiReportP
 }
 
 export interface AiReportExecuteResult {
+  mode?: 'cached' | 'agent_run' | 'table';
   report_code: string;
   title: string;
   params: Record<string, unknown>;
+  params_hash?: string;
+  content_md?: string;
+  agent_id?: string | null;
+  skill_id?: string | null;
+  message?: string;
+  read_from_cache?: boolean;
+  save_to_cache?: boolean;
+  cache_write_token?: string;
+  cached_at?: string;
+  expires_at?: string;
   use_ai_workflow?: boolean;
   workflow_code?: string | null;
   workflow_platform_code?: string | null;
+  metadata?: Record<string, unknown>;
   status: string;
-  message?: string;
   columns?: string[];
   rows?: Array<Record<string, unknown>>;
 }
 
-/** 执行报告（当前后端返回模拟明细）。body: reportCode + params(wireKey→value)。 */
+/** 执行报告：可能返回 cached / agent_run / table。 */
 export async function executeAiReport(body: {
   reportCode: string;
   params: Record<string, string>;
+  regenerate?: boolean;
 }): Promise<AiReportExecuteResult> {
   const res = await api.post<ApiResult<AiReportExecuteResult>>('/ai-reports/execute', body);
   return unwrap(res, '执行报告失败');
+}
+
+/** 流式成文成功后回写缓存（需带 execute 下发的 cache_write_token）。 */
+export async function saveAiReportResult(body: {
+  reportCode: string;
+  params: Record<string, string>;
+  contentMd: string;
+  cacheWriteToken: string;
+}): Promise<{ report_code: string; expires_at?: string }> {
+  const res = await api.post<
+    ApiResult<{ report_code: string; expires_at?: string }>
+  >('/ai-reports/results', {
+    report_code: body.reportCode,
+    params: body.params,
+    content_md: body.contentMd,
+    cache_write_token: body.cacheWriteToken,
+  });
+  return unwrap(res, '写入报告缓存失败');
 }

@@ -44,6 +44,18 @@ public class AiReportDef {
     @Column(name = "workflow_code", length = 128)
     private String workflowCode;
 
+    @Column(name = "target_agent_id", length = 128)
+    private String targetAgentId;
+
+    @Column(name = "target_skill_id", length = 128)
+    private String targetSkillId;
+
+    @Column(name = "prompt_template", columnDefinition = "text")
+    private String promptTemplate;
+
+    @Column(name = "cache_ttl_hours", nullable = false)
+    private Integer cacheTtlHours = 24;
+
     @JdbcTypeCode(SqlTypes.SMALLINT)
     @Column(nullable = false)
     private Integer enabled = 1;
@@ -130,6 +142,38 @@ public class AiReportDef {
 
     public void setWorkflowCode(String workflowCode) {
         this.workflowCode = workflowCode;
+    }
+
+    public String getTargetAgentId() {
+        return targetAgentId;
+    }
+
+    public void setTargetAgentId(String targetAgentId) {
+        this.targetAgentId = targetAgentId;
+    }
+
+    public String getTargetSkillId() {
+        return targetSkillId;
+    }
+
+    public void setTargetSkillId(String targetSkillId) {
+        this.targetSkillId = targetSkillId;
+    }
+
+    public String getPromptTemplate() {
+        return promptTemplate;
+    }
+
+    public void setPromptTemplate(String promptTemplate) {
+        this.promptTemplate = promptTemplate;
+    }
+
+    public Integer getCacheTtlHours() {
+        return cacheTtlHours;
+    }
+
+    public void setCacheTtlHours(Integer cacheTtlHours) {
+        this.cacheTtlHours = cacheTtlHours;
     }
 
     public Integer getEnabled() {

@@ -649,9 +649,34 @@ export function CopilotPanel({
                             <ReportParamCardBubble
                               key={msg.role + '-' + msg.id + '-' + index}
                               message={msg}
-                              onSubmitText={(text) => {
+                              onAgentRun={async ({ message: runText, metadata }) => {
                                 stickToBottomRef.current = true;
-                                chat.sendMessage(text);
+                                chat.sendMessage(runText, undefined, metadata);
+                                // 等本轮生成结束，取最新助手气泡正文供缓存回写
+                                await new Promise<void>((resolve) => {
+                                  const started = Date.now();
+                                  const tick = () => {
+                                    const st = useChatStore.getState();
+                                    if (!st.isGenerating) {
+                                      resolve();
+                                      return;
+                                    }
+                                    if (Date.now() - started > 15 * 60 * 1000) {
+                                      resolve();
+                                      return;
+                                    }
+                                    window.setTimeout(tick, 400);
+                                  };
+                                  window.setTimeout(tick, 600);
+                                });
+                                const msgs = useChatStore.getState().messages;
+                                for (let i = msgs.length - 1; i >= 0; i -= 1) {
+                                  const m = msgs[i];
+                                  if (m.role === 'assistant' && (m.content?.trim() || '')) {
+                                    return m.content.trim();
+                                  }
+                                }
+                                return undefined;
                               }}
                             />
                           );

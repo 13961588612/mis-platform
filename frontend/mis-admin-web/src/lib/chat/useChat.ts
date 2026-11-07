@@ -1041,7 +1041,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   );
 
   const sendMessage = useCallback(
-    (content: string, attachments?: Attachment[]): void => {
+    (
+      content: string,
+      attachments?: Attachment[],
+      metadataExtra?: Record<string, unknown>,
+    ): void => {
       const text = content.trim();
       if (!text && (!attachments || attachments.length === 0)) return;
       const sid = sessionIdRef.current;
@@ -1110,6 +1114,10 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       if (embedRef && typeof embedRef === 'object') {
         metadata.contextRef = embedRef;
       }
+      if (metadataExtra) {
+        Object.assign(metadata, metadataExtra);
+      }
+      const hasMeta = a2uiEnabled || uploaded.length > 0 || !!metadataExtra;
 
       const inbound: InboundMessage = {
         type: 'chat',
@@ -1121,7 +1129,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         // 触发 Gateway runChat（A2UI 中间件注入 render_a2ui 工具）；
         // 旧 text 通道经 a2uiEnabled=false 灰度回退。
         messageType: a2uiEnabled ? MESSAGE_TYPE_A2UI_CHAT : MESSAGE_TYPE_TEXT,
-        metadata: a2uiEnabled || uploaded.length > 0 ? metadata : undefined,
+        metadata: hasMeta ? metadata : undefined,
         timestamp: new Date().toISOString(),
       };
       if (!sendInbound(inbound)) {

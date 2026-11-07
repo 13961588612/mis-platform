@@ -19,6 +19,10 @@ public class AiReportDefVO {
     private Boolean useAiWorkflow;
     private String workflowPlatformCode;
     private String workflowCode;
+    private String targetAgentId;
+    private String targetSkillId;
+    private String promptTemplate;
+    private Integer cacheTtlHours;
     private Boolean enabled;
     private Integer sortOrder;
     private Instant createdAt;
@@ -99,6 +103,42 @@ public class AiReportDefVO {
 
     public void setWorkflowCode(String workflowCode) {
         this.workflowCode = workflowCode;
+    }
+
+    @JsonProperty("target_agent_id")
+    public String getTargetAgentId() {
+        return targetAgentId;
+    }
+
+    public void setTargetAgentId(String targetAgentId) {
+        this.targetAgentId = targetAgentId;
+    }
+
+    @JsonProperty("target_skill_id")
+    public String getTargetSkillId() {
+        return targetSkillId;
+    }
+
+    public void setTargetSkillId(String targetSkillId) {
+        this.targetSkillId = targetSkillId;
+    }
+
+    @JsonProperty("prompt_template")
+    public String getPromptTemplate() {
+        return promptTemplate;
+    }
+
+    public void setPromptTemplate(String promptTemplate) {
+        this.promptTemplate = promptTemplate;
+    }
+
+    @JsonProperty("cache_ttl_hours")
+    public Integer getCacheTtlHours() {
+        return cacheTtlHours;
+    }
+
+    public void setCacheTtlHours(Integer cacheTtlHours) {
+        this.cacheTtlHours = cacheTtlHours;
     }
 
     public Boolean getEnabled() {

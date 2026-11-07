@@ -303,7 +303,11 @@ export interface UseChatReturn {
   error: string | null;
   /** 历史加载状态（P0-2）。 */
   historyState: ChatHistoryState;
-  sendMessage: (content: string, attachments?: Attachment[]) => void;
+  sendMessage: (
+    content: string,
+    attachments?: Attachment[],
+    metadataExtra?: Record<string, unknown>,
+  ) => void;
   respondToApproval: (approvalId: string, decision: ApprovalDecision, comment?: string) => void;
   respondToEntitySelect: (data: {
     resumeToken: string;

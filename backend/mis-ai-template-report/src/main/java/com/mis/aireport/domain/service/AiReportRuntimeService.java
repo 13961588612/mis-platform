@@ -5,6 +5,7 @@ import com.mis.aireport.domain.entity.AiParamSource;
 import com.mis.aireport.domain.entity.AiReportAcl;
 import com.mis.aireport.domain.entity.AiReportCategory;
 import com.mis.aireport.domain.entity.AiReportDef;
+import com.mis.aireport.domain.entity.AiReportResultCache;
 import com.mis.aireport.domain.param.ParamOption;
 import com.mis.aireport.domain.param.ParamResolveResult;
 import com.mis.aireport.domain.param.ParamSourceCodes;
@@ -14,7 +15,11 @@ import com.mis.aireport.domain.repository.AiParamSourceRepository;
 import com.mis.aireport.domain.repository.AiReportAclRepository;
 import com.mis.aireport.domain.repository.AiReportCategoryRepository;
 import com.mis.aireport.domain.repository.AiReportDefRepository;
+import com.mis.aireport.domain.repository.AiReportResultCacheRepository;
 import com.mis.aireport.domain.repository.AiReportStoreDimRepository;
+import com.mis.aireport.support.IdGenerator;
+import com.mis.aireport.support.ReportCacheTokenService;
+import com.mis.aireport.support.ReportParamsHasher;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.security.context.SecurityContextHolder;
@@ -22,6 +27,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -29,6 +36,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,13 +46,18 @@ public class AiReportRuntimeService {
     /** 业务码：无权限或无可选参数 → 前端不插卡。 */
     public static final int CODE_NO_PARAM_ACCESS = 40321;
 
+    private static final Pattern PROMPT_PLACEHOLDER = Pattern.compile("\\{\\{\\s*([a-zA-Z0-9_]+)\\s*\\}\\}");
+
     private final AiReportCategoryRepository categoryRepository;
     private final AiReportDefRepository reportDefRepository;
     private final AiReportAclRepository aclRepository;
     private final AiParamSourceRepository paramSourceRepository;
     private final AiReportStoreDimRepository storeDimRepository;
+    private final AiReportResultCacheRepository resultCacheRepository;
     private final ParamSourceHandlerRegistry handlerRegistry;
     private final IamUserClient iamUserClient;
+    private final ReportParamsHasher paramsHasher;
+    private final ReportCacheTokenService cacheTokenService;
 
     public AiReportRuntimeService(
             AiReportCategoryRepository categoryRepository,
@@ -51,15 +65,21 @@ public class AiReportRuntimeService {
             AiReportAclRepository aclRepository,
             AiParamSourceRepository paramSourceRepository,
             AiReportStoreDimRepository storeDimRepository,
+            AiReportResultCacheRepository resultCacheRepository,
             ParamSourceHandlerRegistry handlerRegistry,
-            IamUserClient iamUserClient) {
+            IamUserClient iamUserClient,
+            ReportParamsHasher paramsHasher,
+            ReportCacheTokenService cacheTokenService) {
         this.categoryRepository = categoryRepository;
         this.reportDefRepository = reportDefRepository;
         this.aclRepository = aclRepository;
         this.paramSourceRepository = paramSourceRepository;
         this.storeDimRepository = storeDimRepository;
+        this.resultCacheRepository = resultCacheRepository;
         this.handlerRegistry = handlerRegistry;
         this.iamUserClient = iamUserClient;
+        this.paramsHasher = paramsHasher;
+        this.cacheTokenService = cacheTokenService;
     }
 
     @Transactional(readOnly = true)
@@ -203,11 +223,155 @@ public class AiReportRuntimeService {
             throw new BusinessException(CODE_NO_PARAM_ACCESS, "无权限执行该报告");
         }
 
+        boolean regenerate = Boolean.TRUE.equals(body.get("regenerate"))
+                || "true".equalsIgnoreCase(String.valueOf(body.getOrDefault("regenerate", "")));
+
         @SuppressWarnings("unchecked")
         Map<String, Object> params = body.get("params") instanceof Map<?, ?> m
                 ? (Map<String, Object>) m
                 : Map.of();
 
+        Map<String, Object> normalized = normalizeAndValidateParams(userId, def, params);
+        String paramsHash = paramsHasher.hash(normalized);
+        boolean useWf = def.getUseAiWorkflow() != null && def.getUseAiWorkflow() == 1;
+
+        if (!regenerate) {
+            AiReportResultCache cached = resultCacheRepository
+                    .findByReportCodeAndParamsHash(def.getReportCode(), paramsHash)
+                    .orElse(null);
+            if (cached != null
+                    && cached.getExpiresAt() != null
+                    && cached.getExpiresAt().isAfter(Instant.now())
+                    && StringUtils.hasText(cached.getContentMd())) {
+                Map<String, Object> hit = new LinkedHashMap<>();
+                hit.put("mode", "cached");
+                hit.put("report_code", def.getReportCode());
+                hit.put("title", def.getTitle());
+                hit.put("params", normalized);
+                hit.put("content_md", cached.getContentMd());
+                hit.put("read_from_cache", true);
+                hit.put("save_to_cache", false);
+                hit.put("cached_at", cached.getCachedAt() != null ? cached.getCachedAt().toString() : null);
+                hit.put("expires_at", cached.getExpiresAt().toString());
+                hit.put("status", "ok");
+                return hit;
+            }
+        }
+
+        if (useWf) {
+            String agentId = def.getTargetAgentId() != null ? def.getTargetAgentId().trim() : "";
+            if (!StringUtils.hasText(agentId)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "报告未配置目标智能体 target_agent_id");
+            }
+            String skillId = StringUtils.hasText(def.getTargetSkillId())
+                    ? def.getTargetSkillId().trim() : null;
+            String message = renderPrompt(def, normalized);
+            String token = cacheTokenService.issue(def.getReportCode(), paramsHash, userId, true);
+
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("kind", "ai_report_run");
+            metadata.put("report_code", def.getReportCode());
+            metadata.put("hard_dispatch", true);
+            if (skillId != null) {
+                metadata.put("target_skill_id", skillId);
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("mode", "agent_run");
+            result.put("report_code", def.getReportCode());
+            result.put("title", def.getTitle());
+            result.put("params", normalized);
+            result.put("params_hash", paramsHash);
+            result.put("agent_id", agentId);
+            result.put("skill_id", skillId);
+            result.put("message", message);
+            result.put("read_from_cache", false);
+            result.put("save_to_cache", true);
+            result.put("cache_write_token", token);
+            result.put("use_ai_workflow", true);
+            result.put("workflow_platform_code", def.getWorkflowPlatformCode());
+            result.put("metadata", metadata);
+            result.put("status", "ok");
+            return result;
+        }
+
+        // 非 AI 工作流：保留模拟表，便于联调
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("mode", "table");
+        result.put("report_code", def.getReportCode());
+        result.put("title", def.getTitle());
+        result.put("params", normalized);
+        result.put("use_ai_workflow", false);
+        result.put("read_from_cache", false);
+        result.put("save_to_cache", false);
+        result.put("status", "ok");
+        result.put("message", "模拟执行成功（未启用 AI 工作流）");
+        result.put("columns", List.of("维度", "指标", "数值", "单位"));
+        result.put("rows", buildMockRows(def.getReportCode(), normalized));
+        return result;
+    }
+
+    @Transactional
+    public Map<String, Object> saveResult(Map<String, Object> body) {
+        Long userId = requireUserId();
+        String reportCode = String.valueOf(body.getOrDefault("reportCode", body.getOrDefault("report_code", ""))).trim();
+        String token = String.valueOf(body.getOrDefault("cacheWriteToken",
+                body.getOrDefault("cache_write_token", ""))).trim();
+        String contentMd = String.valueOf(body.getOrDefault("contentMd",
+                body.getOrDefault("content_md", ""))).trim();
+        if (!StringUtils.hasText(reportCode)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "reportCode 不能为空");
+        }
+        if (!StringUtils.hasText(contentMd)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "content_md 不能为空");
+        }
+        AiReportDef def = reportDefRepository.findByReportCode(reportCode)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "报告不存在"));
+        if (!allowedReportCodes(userId).contains(def.getReportCode())) {
+            throw new BusinessException(CODE_NO_PARAM_ACCESS, "无权限写入该报告缓存");
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> params = body.get("params") instanceof Map<?, ?> m
+                ? (Map<String, Object>) m
+                : Map.of();
+        Map<String, Object> normalized = normalizeAndValidateParams(userId, def, params);
+        String paramsHash = paramsHasher.hash(normalized);
+        cacheTokenService.parseAndVerify(token, def.getReportCode(), paramsHash, userId);
+
+        Instant now = Instant.now();
+        int ttlHours = def.getCacheTtlHours() != null && def.getCacheTtlHours() > 0
+                ? def.getCacheTtlHours() : 24;
+        AiReportResultCache row = resultCacheRepository
+                .findByReportCodeAndParamsHash(def.getReportCode(), paramsHash)
+                .orElseGet(AiReportResultCache::new);
+        if (row.getId() == null) {
+            row.setId(IdGenerator.nextId());
+            row.setReportCode(def.getReportCode());
+            row.setParamsHash(paramsHash);
+            row.setCreatedBy(userId);
+            row.setCachedAt(now);
+        }
+        row.setParamsJson(new LinkedHashMap<>(normalized));
+        row.setContentMd(contentMd);
+        row.setAgentId(def.getTargetAgentId());
+        row.setSkillId(def.getTargetSkillId());
+        row.setExpiresAt(now.plus(ttlHours, ChronoUnit.HOURS));
+        row.setUpdatedAt(now);
+        resultCacheRepository.save(row);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("report_code", def.getReportCode());
+        out.put("params_hash", paramsHash);
+        out.put("cached_at", row.getCachedAt().toString());
+        out.put("expires_at", row.getExpiresAt().toString());
+        out.put("status", "ok");
+        return out;
+    }
+
+    private Map<String, Object> normalizeAndValidateParams(
+            Long userId, AiReportDef def, Map<String, Object> params) {
         List<Map<String, Object>> slots = def.getSlotsJson() == null ? List.of() : def.getSlotsJson();
         Map<String, Object> normalized = new LinkedHashMap<>();
         for (Map<String, Object> slot : slots) {
@@ -242,21 +406,31 @@ public class AiReportRuntimeService {
                 });
             }
         }
+        return normalized;
+    }
 
-        boolean useWf = def.getUseAiWorkflow() != null && def.getUseAiWorkflow() == 1;
-        // 以 def 为准，忽略客户端篡改；当前返回模拟明细，供 Copilot 联调
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("report_code", def.getReportCode());
-        result.put("title", def.getTitle());
-        result.put("params", normalized);
-        result.put("use_ai_workflow", useWf);
-        result.put("workflow_code", useWf ? def.getWorkflowCode() : null);
-        result.put("workflow_platform_code", useWf ? def.getWorkflowPlatformCode() : null);
-        result.put("status", "ok");
-        result.put("message", "模拟执行成功（尚未接真实取数引擎）");
-        result.put("columns", List.of("维度", "指标", "数值", "单位"));
-        result.put("rows", buildMockRows(def.getReportCode(), normalized));
-        return result;
+    private String renderPrompt(AiReportDef def, Map<String, Object> params) {
+        Map<String, Object> ctx = new LinkedHashMap<>(params);
+        ctx.put("title", def.getTitle());
+        ctx.put("report_code", def.getReportCode());
+        String template = def.getPromptTemplate();
+        if (!StringUtils.hasText(template)) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("请按「").append(def.getTitle()).append("」生成报告。\n");
+            for (Map.Entry<String, Object> e : params.entrySet()) {
+                sb.append(e.getKey()).append("：").append(e.getValue()).append('\n');
+            }
+            return sb.toString().trim();
+        }
+        Matcher m = PROMPT_PLACEHOLDER.matcher(template);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String key = m.group(1);
+            Object val = ctx.get(key);
+            m.appendReplacement(sb, Matcher.quoteReplacement(val == null ? "" : String.valueOf(val)));
+        }
+        m.appendTail(sb);
+        return sb.toString().trim();
     }
 
     /** 按报告编号拼几行可读模拟数据，把入参回显进结果。 */

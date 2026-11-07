@@ -311,6 +311,22 @@ public class AiReportAdminService {
                 ? dto.workflowPlatformCode().trim() : null);
         r.setWorkflowCode(useWf && StringUtils.hasText(dto.workflowCode())
                 ? dto.workflowCode().trim() : null);
+        String agentId = StringUtils.hasText(dto.targetAgentId()) ? dto.targetAgentId().trim() : null;
+        String skillId = StringUtils.hasText(dto.targetSkillId()) ? dto.targetSkillId().trim() : null;
+        if (useWf && !StringUtils.hasText(agentId)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "启用 AI 工作流时须填写目标智能体 target_agent_id");
+        }
+        if (StringUtils.hasText(skillId) && !StringUtils.hasText(agentId)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "指定 Skill 时须同时填写目标智能体");
+        }
+        r.setTargetAgentId(useWf ? agentId : null);
+        r.setTargetSkillId(useWf ? skillId : null);
+        r.setPromptTemplate(StringUtils.hasText(dto.promptTemplate()) ? dto.promptTemplate() : null);
+        int ttl = dto.cacheTtlHours() != null ? dto.cacheTtlHours() : 24;
+        if (ttl < 1 || ttl > 8760) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "cache_ttl_hours 须在 1～8760");
+        }
+        r.setCacheTtlHours(ttl);
         r.setSortOrder(dto.sortOrder() != null ? dto.sortOrder() : 0);
         r.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
     }
@@ -457,6 +473,10 @@ public class AiReportAdminService {
         vo.setUseAiWorkflow(r.getUseAiWorkflow() != null && r.getUseAiWorkflow() == 1);
         vo.setWorkflowPlatformCode(r.getWorkflowPlatformCode());
         vo.setWorkflowCode(r.getWorkflowCode());
+        vo.setTargetAgentId(r.getTargetAgentId());
+        vo.setTargetSkillId(r.getTargetSkillId());
+        vo.setPromptTemplate(r.getPromptTemplate());
+        vo.setCacheTtlHours(r.getCacheTtlHours() != null ? r.getCacheTtlHours() : 24);
         vo.setEnabled(r.getEnabled() != null && r.getEnabled() == 1);
         vo.setSortOrder(r.getSortOrder());
         vo.setCreatedAt(r.getCreatedAt());

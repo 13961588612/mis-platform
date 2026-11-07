@@ -1219,21 +1219,31 @@ class A2uiRunLoop:
                     sum_skill_ms=sum_skill_ms,
                 )
 
-            # JEV/规则命中 hard_dispatch_workers → 跳过 Coordinator 首轮 LLM，直接 invoke
-            # （不再首步无条件探测 template-report；模板报告仅经意图/LLM 委派进入）
+            # 模板报告 / JEV：硬派发 Worker（跳过 Coordinator 首轮选人 LLM）
             hard_worker = ""
-            if route_decision is not None:
+            report_forced = False
+            report_skill = ""
+            report_run_meta = ask_meta.get("ai_report_run") if isinstance(ask_meta, dict) else None
+            if isinstance(report_run_meta, dict):
+                hard_worker = str(report_run_meta.get("agent_id") or "").strip()
+                report_skill = str(report_run_meta.get("skill_id") or "").strip()
+                report_forced = bool(hard_worker)
+            if not hard_worker and route_decision is not None:
                 hard_worker = str(getattr(route_decision, "worker_id", None) or "").strip()
             if (
                 hard_worker
                 and last_user_for_route
-                and should_hard_dispatch(
-                    worker_id=hard_worker,
-                    hard_dispatch_workers=hard_dispatch_workers,
+                and (
+                    report_forced
+                    or should_hard_dispatch(
+                        worker_id=hard_worker,
+                        hard_dispatch_workers=hard_dispatch_workers,
+                    )
                 )
             ):
                 from src.intent_router.service import (
                     format_conversation_context_for_jev,
+                    format_router_skill_hint,
                 )
                 from src.runtime.step_timing import log_turn_step
 
@@ -1244,10 +1254,29 @@ class A2uiRunLoop:
                     max_context_turns=3,
                     max_msg_chars=800,
                 )
+                user_text_for_invoke = last_user_for_route
+                skill_for_hint = report_skill or (
+                    str(getattr(route_decision, "router_skill", None) or "").strip()
+                    if route_decision is not None
+                    else ""
+                )
+                if skill_for_hint:
+                    hint = format_router_skill_hint(skill_for_hint)
+                    if hint:
+                        user_text_for_invoke = (
+                            f"{last_user_for_route.rstrip()}\n\n{hint}"
+                            if last_user_for_route.strip()
+                            else hint
+                        )
                 invoke_args = build_hard_dispatch_invoke_args(
                     worker_id=hard_worker,
-                    user_text=last_user_for_route,
-                    intent=str(getattr(route_decision, "intent", None) or ""),
+                    user_text=user_text_for_invoke,
+                    intent=str(
+                        (report_run_meta or {}).get("report_code")
+                        if report_forced
+                        else (getattr(route_decision, "intent", None) or "")
+                    )
+                    or "",
                     conversation_context=hard_ctx,
                     mode="continue",
                 )

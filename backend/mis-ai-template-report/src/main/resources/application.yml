@@ -57,6 +57,8 @@ management:
 
 mis:
   ai-report:
+    # 成文回写 HMAC 密钥（生产务必覆盖）
+    cache-token-secret: ${MIS_AI_REPORT_CACHE_TOKEN_SECRET:mis-ai-report-cache-dev-secret}
     # 报告 ACL（角色）仍可读 IAM；槽位选项一律走 spm-big-data，不再用 IAM 门店范围
     iam:
       base-url: ${MIS_AI_REPORT_IAM_BASE_URL:http://127.0.0.1:8102}

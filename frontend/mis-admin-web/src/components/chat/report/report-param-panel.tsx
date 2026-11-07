@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import type { ReportParamCardMeta } from '@/lib/chat/types';
 import { ReportParamField } from '@/components/chat/report/report-param-fields';
@@ -7,6 +9,8 @@ import { ReportParamField } from '@/components/chat/report/report-param-fields';
 export interface ReportParamPanelProps {
   card: ReportParamCardMeta;
   submitting?: boolean;
+  regenerate: boolean;
+  onRegenerateChange: (v: boolean) => void;
   onChangeValue: (wireKey: string, value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
@@ -19,6 +23,8 @@ export interface ReportParamPanelProps {
 export function ReportParamPanel({
   card,
   submitting,
+  regenerate,
+  onRegenerateChange,
   onChangeValue,
   onSubmit,
   onCancel,
@@ -66,25 +72,40 @@ export function ReportParamPanel({
       </div>
 
       {card.state === 'active' ? (
-        <div className="flex items-center justify-end gap-2 pt-1">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={submitting}
-            onClick={onCancel}
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={submitting || missingRequired}
-            onClick={onSubmit}
-          >
-            {submitting ? '提交中…' : '生成报告'}
-          </Button>
-        </div>
+        <>
+          <div className="flex items-center justify-between rounded-md border px-3 py-2">
+            <div className="pr-2">
+              <Label className="text-sm font-medium">重新生成</Label>
+              <p className="text-[11px] text-muted-foreground">
+                关闭则优先用缓存；开启则跳过缓存并覆盖写入
+              </p>
+            </div>
+            <Switch
+              checked={regenerate}
+              disabled={submitting}
+              onCheckedChange={onRegenerateChange}
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={submitting}
+              onClick={onCancel}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={submitting || missingRequired}
+              onClick={onSubmit}
+            >
+              {submitting ? '提交中…' : regenerate ? '重新生成' : '生成报告'}
+            </Button>
+          </div>
+        </>
       ) : null}
     </div>
   );

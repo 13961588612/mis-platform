@@ -1174,6 +1174,14 @@ class InboundStreamWorker:
                 redis=redis,
                 session_id=inbound.session_id,
             )
+            # 模板报告硬派发：把 FE metadata.ai_report_run 透传到 run 循环
+            if isinstance(inbound.metadata, dict):
+                report_run = inbound.metadata.get("ai_report_run")
+                if isinstance(report_run, dict) and report_run.get("agent_id"):
+                    ask_tool_metadata = {
+                        **ask_tool_metadata,
+                        "ai_report_run": report_run,
+                    }
         except AskIdentityUnavailable as exc:
             logger.error(
                 "A2UI ask-identity blocked; stop before run",

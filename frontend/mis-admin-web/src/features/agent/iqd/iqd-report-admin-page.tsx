@@ -201,6 +201,10 @@ export default function IqdReportAdminPage() {
       workflow_code: null,
       enabled: true,
       sort_order: 0,
+      target_agent_id: null,
+      target_skill_id: null,
+      prompt_template: null,
+      cache_ttl_hours: 24,
     });
   };
 
@@ -228,6 +232,10 @@ export default function IqdReportAdminPage() {
       use_ai_workflow: editingReport.use_ai_workflow,
       workflow_platform_code: editingReport.workflow_platform_code || null,
       workflow_code: editingReport.workflow_code || null,
+      target_agent_id: editingReport.target_agent_id || null,
+      target_skill_id: editingReport.target_skill_id || null,
+      prompt_template: editingReport.prompt_template || null,
+      cache_ttl_hours: editingReport.cache_ttl_hours ?? 24,
       sort_order: editingReport.sort_order,
       enabled: editingReport.enabled,
     };
@@ -264,6 +272,10 @@ export default function IqdReportAdminPage() {
         use_ai_workflow: r.use_ai_workflow,
         workflow_platform_code: r.workflow_platform_code ?? null,
         workflow_code: r.workflow_code ?? null,
+        target_agent_id: r.target_agent_id ?? null,
+        target_skill_id: r.target_skill_id ?? null,
+        prompt_template: r.prompt_template ?? null,
+        cache_ttl_hours: r.cache_ttl_hours ?? 24,
         sort_order: r.sort_order,
         enabled: next,
       });
@@ -1110,7 +1122,7 @@ function ReportEditor({
       <div className="flex items-center justify-between rounded-md border px-3 py-2">
         <div>
           <div className="text-sm font-medium">在 AI 工作流平台运行</div>
-          <div className="text-xs text-muted-foreground">启用后须填写工作流编号</div>
+          <div className="text-xs text-muted-foreground">启用后须绑定目标智能体；成文走 Copilot 硬派发</div>
         </div>
         <Switch
           checked={value.use_ai_workflow}
@@ -1141,11 +1153,56 @@ function ReportEditor({
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label>工作流编号</Label>
+            <Label>目标智能体 ID</Label>
+            <Input
+              value={value.target_agent_id || ''}
+              onChange={(e) => onChange({ ...value, target_agent_id: e.target.value || null })}
+              placeholder="spm-report"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>目标 Skill ID（可选）</Label>
+            <Input
+              value={value.target_skill_id || ''}
+              onChange={(e) => onChange({ ...value, target_skill_id: e.target.value || null })}
+              placeholder="sm-shop-ops-comprehensive-report"
+            />
+            <p className="text-xs text-muted-foreground">
+              填写则强制本轮先加载该 Skill；须属于该智能体已启用列表
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <Label>任务提示词模板</Label>
+            <Input
+              value={value.prompt_template || ''}
+              onChange={(e) => onChange({ ...value, prompt_template: e.target.value || null })}
+              placeholder="请按「{{title}}」生成。门店：{{storeName}} 期间：{{spmOrdMonth}}"
+            />
+            <p className="text-xs text-muted-foreground">
+              占位符 {'{{wire_key}}'} / {'{{title}}'}；空则用默认参数罗列
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <Label>缓存 TTL（小时）</Label>
+            <Input
+              type="number"
+              value={value.cache_ttl_hours ?? 24}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  cache_ttl_hours: Number.isFinite(Number(e.target.value))
+                    ? Number(e.target.value)
+                    : 24,
+                })
+              }
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>工作流编号（兼容旧字段）</Label>
             <Input
               value={value.workflow_code || ''}
               onChange={(e) => onChange({ ...value, workflow_code: e.target.value })}
-              placeholder="wf_store_daily_v1"
+              placeholder="可选"
             />
           </div>
         </>
