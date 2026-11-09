@@ -78,6 +78,8 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 | **P9** | 类目级 ABC（累计营业额） | `getShopCategoryAbc`（成文 → category-report） |
 | — | 门店级（无类目） | Skill **`sm-shop-sale`** |
 
+**日粒度硬禁止**：`period=day` **不得**调用 `getShopCategoryInventoryOverview`；失败后禁止改 week 重试。
+
 **解读 / 品类管理报告成文** 不在本 Skill，见 **`sm-shop-ops-category-report`**。
 
 ---
@@ -167,7 +169,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 ### `getShopCategoryInventoryOverview` — 品类库存订货
 
 **仅 week/month**。指标口径与门店档 `getShopInventoryOverview` 同构，另带 `categoryId` / `categoryName`。  
-可选进成文 → `sm-shop-ops-category-report`（库存要点节）。
+**日报 / `period=day` 禁止调用**。可选进成文 → `sm-shop-ops-category-report`（库存要点节）。
 
 | 字段 | 含义 |
 |------|------|

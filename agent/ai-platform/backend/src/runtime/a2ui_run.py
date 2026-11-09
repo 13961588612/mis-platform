@@ -984,6 +984,13 @@ class A2uiRunLoop:
             mis_user_id=mis_user_id,
         )
         ask_meta: dict[str, Any] = dict(ask_tool_metadata or {})
+        forwarded_props = run_agent_input.get("forwardedProps")
+        if isinstance(forwarded_props, dict):
+            report_from_fwd = forwarded_props.get("ai_report_run")
+            if isinstance(report_from_fwd, dict) and str(
+                report_from_fwd.get("agent_id") or ""
+            ).strip():
+                ask_meta["ai_report_run"] = report_from_fwd
 
         history: list[LLMMessage] = await self._load_history(
             session_id,
@@ -1056,12 +1063,19 @@ class A2uiRunLoop:
                     resolve_intent_route,
                 )
 
-                route_decision = await resolve_intent_route(
-                    resolved_agent_id,
-                    last_user_for_route,
-                    history_messages=history_for_jev,
-                    session_id=session_id,
-                )
+                # 已确认模板报告任务：跳过意图预路由，避免再命中 template-report 开卡
+                report_run_skip_route = ask_meta.get("ai_report_run")
+                if isinstance(report_run_skip_route, dict) and str(
+                    report_run_skip_route.get("agent_id") or ""
+                ).strip():
+                    route_decision = None
+                else:
+                    route_decision = await resolve_intent_route(
+                        resolved_agent_id,
+                        last_user_for_route,
+                        history_messages=history_for_jev,
+                        session_id=session_id,
+                    )
                 if route_decision is not None:
                     hint = ""
                     if route_decision.worker_id or route_decision.intent:

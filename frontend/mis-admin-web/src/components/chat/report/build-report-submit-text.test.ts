@@ -96,4 +96,17 @@ describe('parseReportSubmitDisplay', () => {
   it('非模板报告返回 null', () => {
     expect(parseReportSubmitDisplay('普通提问')).toBeNull();
   });
+
+  it('硬派发任务句折叠为人话摘要', () => {
+    const raw = [
+      '【已确认模板报告任务】参数已齐，禁止再打开参数卡或走 template-report；请直接由绑定 Worker 按 Skill 成文。report_code=SPM-STORE-WEEK-REPORT',
+      '请按「周报」生成报告。',
+      '门店：宜兴城中店（0001）',
+      '期间：2026年-44周',
+    ].join('\n');
+    expect(parseReportSubmitDisplay(raw)).toEqual({
+      summary: '周报  宜兴城中店  2026年-44周',
+      detail: raw,
+    });
+  });
 });

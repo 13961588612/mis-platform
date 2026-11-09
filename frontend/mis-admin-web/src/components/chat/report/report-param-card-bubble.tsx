@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { AssistantAvatar } from '@/components/chat/CopilotAvatars';
 import { ReportParamPanel } from '@/components/chat/report/report-param-panel';
-import { buildReportSubmitText } from '@/components/chat/report/build-report-submit-text';
+import {
+  buildReportSubmitSummary,
+  buildReportSubmitText,
+} from '@/components/chat/report/build-report-submit-text';
 import { formatExecuteResultMarkdown } from '@/components/chat/report/format-execute-result';
 import { executeAiReport, saveAiReportResult } from '@/lib/api/ai-report';
 import { ApiError } from '@/lib/api/errors';
@@ -40,6 +43,7 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
   const cancelActiveReportCard = useChatStore((s) => s.cancelActiveReportCard);
   const setActiveReportCardId = useChatStore((s) => s.setActiveReportCardId);
   const addMessage = useChatStore((s) => s.addMessage);
+  const updateMessage = useChatStore((s) => s.updateMessage);
 
   const card = liveCard ?? message.reportParamCard;
   if (!card) return null;
@@ -70,6 +74,7 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
     }
 
     const text = buildReportSubmitText(card);
+    const summary = buildReportSubmitSummary(card);
     const params: Record<string, string> = {};
     for (const slot of card.slots) {
       const v = (card.values[slot.wire_key] ?? '').trim();
@@ -80,13 +85,15 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
     patchReportParamCard(message.id, { state: 'submitted' });
     setActiveReportCardId(null);
 
+    const userMsgId = generateClientId('msg');
     addMessage({
-      id: generateClientId('msg'),
+      id: userMsgId,
       sessionId: sid,
       role: 'user',
       content: text,
       status: 'delivered',
       timestamp: new Date().toISOString(),
+      reportSubmitDisplay: { summary, detail: text },
     });
 
     const persistTranscript = async (
@@ -162,6 +169,9 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
             report_code: card.reportCode,
           },
         };
+        updateMessage(userMsgId, {
+          reportSubmitDisplay: { summary, detail: runMessage },
+        });
         const finalText = await onAgentRun({
           message: runMessage,
           agentId,
@@ -170,16 +180,26 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
           metadata: meta,
         });
         if (result.save_to_cache && result.cache_write_token && finalText?.trim()) {
-          try {
-            await saveAiReportResult({
-              reportCode: card.reportCode,
-              params,
-              contentMd: finalText.trim(),
-              cacheWriteToken: result.cache_write_token,
-            });
-          } catch (cacheErr) {
-            console.warn('报告缓存回写失败', cacheErr);
-            toast.message('报告已生成，但缓存未写入');
+          const body = finalText.trim();
+          const notReport =
+            body.length < 80 ||
+            body.includes('参数卡') ||
+            body.includes('模拟执行') ||
+            body.includes('模拟结果');
+          if (notReport) {
+            toast.message('本轮未产出成文，未写入缓存');
+          } else {
+            try {
+              await saveAiReportResult({
+                reportCode: card.reportCode,
+                params,
+                contentMd: body,
+                cacheWriteToken: result.cache_write_token,
+              });
+            } catch (cacheErr) {
+              console.warn('报告缓存回写失败', cacheErr);
+              toast.message('报告已生成，但缓存未写入');
+            }
           }
         }
         return;

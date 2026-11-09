@@ -1045,6 +1045,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       content: string,
       attachments?: Attachment[],
       metadataExtra?: Record<string, unknown>,
+      options?: { skipUserBubble?: boolean },
     ): void => {
       const text = content.trim();
       if (!text && (!attachments || attachments.length === 0)) return;
@@ -1070,15 +1071,17 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         : [];
 
       const userMessageId = generateClientId('msg');
-      store.addMessage({
-        id: userMessageId,
-        sessionId: sid,
-        role: 'user',
-        content: text,
-        status: 'delivered',
-        timestamp: new Date().toISOString(),
-        attachments: uploaded.length > 0 ? uploaded : undefined,
-      });
+      if (!options?.skipUserBubble) {
+        store.addMessage({
+          id: userMessageId,
+          sessionId: sid,
+          role: 'user',
+          content: text,
+          status: 'delivered',
+          timestamp: new Date().toISOString(),
+          attachments: uploaded.length > 0 ? uploaded : undefined,
+        });
+      }
 
       const assistantId = generateClientId('msg');
       store.addMessage({

@@ -266,7 +266,7 @@ mcp_server: mcp-sm-api-suite
 | 某个分类编号是什么 | `getCategoryById` |
 | 某分类下面有哪些子类 | `listChildCategories` |
 | 顶级 / 部门级分类树根 | `listTopCategories` 或 `listDeptLevelCategories` |
-| 某年有哪些天 / 周 / 月、周月起止日 | 见 Skill **`sm-common-info-calendar`**（`listYearDates` / `listYearWeeks` / `listYearMonths`） |
+| 某年有哪些天 / 周 / 月、周月起止日 | 见 Skill **`sm-common-info-calendar`**（日报 `listMonthDates`；整年才 `listYearDates`；周/月 `listYearWeeks` / `listYearMonths`） |
 
 ---
 

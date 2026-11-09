@@ -86,6 +86,8 @@ export interface ChatMessage {
    * 渲染走 ReportParamPanel，不经 A2UI。
    */
   reportParamCard?: ReportParamCardMeta;
+  /** 模板报告提交气泡：首行人话，任务句在「展开原文」。 */
+  reportSubmitDisplay?: { summary: string; detail: string };
 }
 
 /** 模板报告参数卡会话态。 */
@@ -307,6 +309,7 @@ export interface UseChatReturn {
     content: string,
     attachments?: Attachment[],
     metadataExtra?: Record<string, unknown>,
+    options?: { skipUserBubble?: boolean },
   ) => void;
   respondToApproval: (approvalId: string, decision: ApprovalDecision, comment?: string) => void;
   respondToEntitySelect: (data: {

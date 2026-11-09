@@ -45,6 +45,7 @@
 | **Coordinator–Worker 全套文档（需求/架构/决策/规范）** | **[coordinator-worker/](coordinator-worker/README.md)** |
 | **智能体运营控制台全套文档（需求/界面/架构/决策/规范）** | **[agent-ops-console/](agent-ops-console/README.md)** · [界面设计](agent-ops-console/ui.md) |
 | **百购分析智能体（Worker `bgbh-analyst`）** | **[bgbh-analyst/](bgbh-analyst/README.md)** |
+| **超市分析智能体（Worker `spm-report`）** | **[spm-report/](spm-report/README.md)** · [知识库](spm-report/超市分析知识库.md) |
 | 融合部署架构决策（H5 入口 / A2UI / PG·Redis 共享 / 去 nginx） | [decisions/deploy.md](decisions/deploy.md) |
 | JWT / 身份建模澄清决策 | [decisions/identity-jwt.md](decisions/identity-jwt.md) |
 | 阶段5 前端融合 PRD | [specs/phase5-frontend-prd.md](specs/phase5-frontend-prd.md) |

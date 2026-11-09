@@ -98,8 +98,13 @@ async def test_resolve_disabled_returns_none() -> None:
 
 
 def test_format_hints() -> None:
-    assert "sm-report-router" in format_router_skill_hint("sm-report-router")
+    router_hint = format_router_skill_hint("sm-report-router")
+    assert "sm-report-router" in router_hint
+    assert "router skill" not in router_hint
     assert format_router_skill_hint("") == ""
+    diary_hint = format_router_skill_hint("sm-shop-ops-diary-report")
+    assert "sm-shop-ops-diary-report" in diary_hint
+    assert "其它" in diary_hint
     hint = format_coordinator_route_hint(worker_id="spm-report", intent="spm_report")
     assert "spm-report" in hint
     assert "spm_report" in hint

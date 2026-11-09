@@ -450,7 +450,7 @@ curl -fsS http://127.0.0.1/nginx-health
 
 | 类别  | 软件 / 组件                     | 版本（钉扎）                         |
 | --- | --------------------------- | ------------------------------ |
-| 外部  | **RAGFlow**                 | `infiniflow/ragflow:v0.26.4`   |
+| 外部  | **RAGFlow**                 | `infiniflow/ragflow:v0.27.2`   |
 | 外部  | **MySQL**（RAGFlow 元数据）      | **8.0.39**                     |
 | 外部  | **MinIO**（RAGFlow 对象存储）     | `RELEASE.2023-12-20T01-00-02Z` |
 | 外部  | **Valkey**（Redis 协议兼容队列/缓存） | **8**（镜像 `valkey/valkey:8`）    |
@@ -829,7 +829,7 @@ docker logs mis-nacos --tail 80
 | MinIO（MIS）                   | quay.io … `RELEASE.2024-04-18T19-09-19Z` | S4            |
 | Qdrant                       | v1.9.0                       | S4                     |
 | Embedding 模型                 | BAAI/bge-small-zh-v1.5       | S1                     |
-| RAGFlow                      | v0.26.4                      | S3                     |
+| RAGFlow                      | v0.27.2                      | S3                     |
 | MySQL（RAGFlow）               | 8.0.39                       | S3                     |
 | MinIO（RAGFlow）               | RELEASE.2023-12-20T01-00-02Z | S3                     |
 | Valkey                       | 8                            | S3                     |

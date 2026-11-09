@@ -3,14 +3,17 @@
 #
 # prod MUST connect to a real engine: type=ragflow, base-url / api-key injected by ops via
 # Nacos secrets or container env vars. NEVER write real keys into this file or commit them.
-# Engine version pinned to v0.26.4 (see pinned-versions table in deploy/ragflow/README.md).
+# Engine version pinned to v0.27.2 (see pinned-versions table in deploy/ragflow/README.md).
+# v0.27.x rejects parser_config.ext; mis-kb sends toc/image/overlap as parser_config top-level keys.
 server:
   port: 8108
 
 mis:
   kb:
+    # Prod JARs share S1; there is no Docker DNS name "mis-iam".
+    # Same-host IAM (matches prod mis-admin-bff iam-base-url).
     iam:
-      base-url: ${MIS_KB_IAM_BASE_URL:http://mis-iam:8102}
+      base-url: ${MIS_KB_IAM_BASE_URL:http://127.0.0.1:8102}
     engine:
       type: ${MIS_KB_ENGINE_TYPE:ragflow}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}

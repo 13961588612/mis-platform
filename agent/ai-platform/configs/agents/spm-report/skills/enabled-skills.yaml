@@ -16,7 +16,11 @@ skills:
     prompt_expose: false
   - skill_id: sm-shop-category-sale
     prompt_expose: false
-  - skill_id: sm-shop-ops-comprehensive-report
+  - skill_id: sm-shop-ops-diary-report
+    prompt_expose: false
+  - skill_id: sm-shop-ops-week-report
+    prompt_expose: false
+  - skill_id: sm-shop-ops-month-report
     prompt_expose: false
   - skill_id: sm-shop-ops-overview-report
     prompt_expose: false

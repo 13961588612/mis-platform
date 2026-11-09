@@ -1,8 +1,8 @@
 ---
 name: sm-shop-ops-category-report
 skill_id: sm-shop-ops-category-report
-description: 门店品类管理主题分析报告（Category Theme Report）。基于品类总览/四象限/ABC/生命周期等取数结果成文。不查数；apiName 在 sm-shop-category-sale。可被综合报告引用，也可单独做品类分析。
-version: "1.2.0"
+description: 门店品类管理主题报告。独立服务：结构/四象限/ABC/生命周期等。不调用其它 ops-report。门店促销全文走 promo；门店库存全文走 inventory。
+version: "1.3.0"
 category: supermarket
 tags:
   - 超市
@@ -19,12 +19,11 @@ required_permissions:
 
 # 品类管理主题分析（sm-shop-ops-category-report）
 
-**只做本主题解读与成文**，不做查数。
+独立主题服务。用户要「品类管理 / 结构 / 四象限 / ABC」时加载。  
+**禁止** `skill` 其它 ops-report。门店促销全文 → promo；门店库存总览 → inventory。P2～P4 轻量留在本 Skill。
 
-- 取数：router → `skill(sm-shop-category-sale)` → 按意图选 apiName（见下）；门店 S5/S6 有数时可并入生命周期/经营方式节
-- **禁止**再调 MCP；**禁止**编造未取到的专项数；**禁止**另写 apiName
-- 加载时机：P1 / P5～P9（及「品类管理报告」已取数）成功后；或由 comprehensive **第二章**调用
-- 本 Skill **只管品类维度**；门店促销全文 → promo；门店库存全文 → inventory；关系见 router §1.1
+- 槽位齐后：`skill(sm-shop-category-sale)` → 按意图选用表 apiName，对照一期，并行。
+- 日粒度不写 P7、禁止改查 week。成文后禁止再 MCP。
 
 ### 取数 → 章节对照（只写已有结果的节）
 
@@ -35,7 +34,7 @@ required_permissions:
 | `getShopCategoryAbc` | § 类目 ABC |
 | `getShopCategoryProductLifecycleMix` 或门店 `getProductLifecycleMix` | § 生命周期结构 |
 | `getShopCategoryVentureStructure` 或门店 `getVentureStructure` | § 经营方式结构 |
-| `getShopCategoryInventoryOverview` | § 品类库存要点（仅周月） |
+| `getShopCategoryInventoryOverview` | § 品类库存要点（仅周月；**日粒度不写、禁止改查 week**） |
 | P2～P4 折扣/出清/分担 | **轻量节或一句**（默认本 Skill；**勿转 promo**） |
 
 默认级别：**大类**（角色/ABC 尤其如此）；标题写明级别或父类下钻口径。
@@ -119,7 +118,7 @@ required_permissions:
 
 ## 5. 自检
 
-- [ ] 未查数；未编造未取到章节  
+- [ ] 未查数；未编造未取到章节；日粒度未写品类库存、未改查 week  
 - [ ] 金额万元 2 位；占比已换算  
 - [ ] 标题含店名 · 时间 · 品类管理 · 级别  
 - [ ] TOP≤10；ABC 已声明类目级局限  

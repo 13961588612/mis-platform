@@ -209,6 +209,19 @@ describe('sendMessage 附件落地（P0-1）', () => {
     });
     expect(useChatStore.getState().messages.length).toBe(before);
   });
+
+  it('skipUserBubble 不插用户气泡，仍发通道并插入助手占位', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) }) as never));
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      result.current.sendMessage('【已确认模板报告任务】内部任务句', undefined, undefined, {
+        skipUserBubble: true,
+      });
+    });
+    const msgs = useChatStore.getState().messages;
+    expect(msgs.some((m) => m.role === 'user')).toBe(false);
+    expect(msgs.some((m) => m.role === 'assistant')).toBe(true);
+  });
 });
 
 describe('新建会话防串历史（P0 / TASK-002）', () => {

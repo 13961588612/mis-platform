@@ -94,9 +94,15 @@ def format_router_skill_hint(router_skill: str) -> str:
     sid = (router_skill or "").strip()
     if not sid:
         return ""
+    if sid == "sm-report-router":
+        return (
+            f"【意图预路由】本轮必须先 skill 加载 `{sid}` 做意图与槽位路由，"
+            f"再 skill **唯一**下游成文 Skill；禁止跳过路由直接调 MCP。"
+        )
     return (
-        f"【意图预路由】本轮必须先 skill 加载 `{sid}`（router skill），"
-        f"再按其正文编排下游；禁止跳过该 Skill 直接调 MCP。"
+        f"【意图预路由】槽位已齐则直接 skill 加载 `{sid}`，按其正文自行查数并成文；"
+        f"禁止再 skill 其它 `sm-shop-ops-*-report`；禁止称其为 router。"
+        f"槽位不齐时先 skill(`sm-report-router`)。"
     )
 
 

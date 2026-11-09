@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -68,6 +69,12 @@ import type { RoleItem } from '@/types/api';
 import { cn } from '@/lib/utils';
 
 export const IQD_REPORT_ADMIN_PAGE_PATH = '/iqd/reports';
+
+/** 启用 AI 工作流时的默认绑定（可改）。 */
+const DEFAULT_TARGET_AGENT_ID = 'spm-report';
+const DEFAULT_TARGET_SKILL_ID = 'sm-report-router';
+const DEFAULT_PROMPT_TEMPLATE =
+  '【已确认模板报告任务】参数已齐，禁止再打开参数卡。\n请按「{{title}}」直接成文。\n门店：{{storeName}}（{{spmStoreId}}）\n期间：{{spmOrdMonth}}{{spmOrdWeek}}{{spmBizDate}}';
 
 type CatSel = 'all' | 'uncategorized' | string;
 
@@ -196,21 +203,28 @@ export default function IqdReportAdminPage() {
       description: '',
       category_id: selected !== 'all' && selected !== 'uncategorized' ? Number(selected) : null,
       slots: sources.slice(0, 1).map((s) => ({ source_code: s.source_code, required: true })),
-      use_ai_workflow: false,
-      workflow_platform_code: null,
+      use_ai_workflow: true,
+      workflow_platform_code: platforms[0]?.platform_code ?? null,
       workflow_code: null,
       enabled: true,
       sort_order: 0,
-      target_agent_id: null,
-      target_skill_id: null,
-      prompt_template: null,
+      target_agent_id: DEFAULT_TARGET_AGENT_ID,
+      target_skill_id: DEFAULT_TARGET_SKILL_ID,
+      prompt_template: DEFAULT_PROMPT_TEMPLATE,
       cache_ttl_hours: 24,
     });
   };
 
   const openEditReport = (r: AiReportDef) => {
     setCreatingReport(false);
-    setEditingReport({ ...r, slots: r.slots ?? [] });
+    setEditingReport({
+      ...r,
+      slots: r.slots ?? [],
+      target_agent_id: r.target_agent_id || DEFAULT_TARGET_AGENT_ID,
+      target_skill_id: r.target_skill_id || DEFAULT_TARGET_SKILL_ID,
+      prompt_template: r.prompt_template || DEFAULT_PROMPT_TEMPLATE,
+      cache_ttl_hours: r.cache_ttl_hours ?? 24,
+    });
   };
 
   const saveReport = async () => {
@@ -827,7 +841,7 @@ export default function IqdReportAdminPage() {
           }
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{creatingReport || editingReport?.id === 0 ? '新建报告' : '编辑报告'}</DialogTitle>
           </DialogHeader>
@@ -1047,59 +1061,77 @@ function ReportEditor({
     onChange({ ...value, slots });
   };
 
+  const enableAiWorkflow = (on: boolean) => {
+    if (!on) {
+      onChange({ ...value, use_ai_workflow: false });
+      return;
+    }
+    onChange({
+      ...value,
+      use_ai_workflow: true,
+      workflow_platform_code:
+        value.workflow_platform_code || platforms[0]?.platform_code || null,
+      target_agent_id: value.target_agent_id || DEFAULT_TARGET_AGENT_ID,
+      target_skill_id: value.target_skill_id || DEFAULT_TARGET_SKILL_ID,
+      prompt_template: value.prompt_template || DEFAULT_PROMPT_TEMPLATE,
+      cache_ttl_hours: value.cache_ttl_hours ?? 24,
+    });
+  };
+
   return (
     <div className="space-y-3 py-1">
-      <div className="grid gap-2">
-        <Label>报告编号</Label>
-        <Input
-          value={value.report_code}
-          onChange={(e) => onChange({ ...value, report_code: e.target.value })}
-          placeholder="RPT_DAILY"
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label>报告编号</Label>
+          <Input
+            value={value.report_code}
+            onChange={(e) => onChange({ ...value, report_code: e.target.value })}
+            placeholder="RPT_DAILY"
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label>名称</Label>
+          <Input value={value.title} onChange={(e) => onChange({ ...value, title: e.target.value })} />
+        </div>
+        <div className="grid gap-2">
+          <Label>分类</Label>
+          <Select
+            value={value.category_id != null ? String(value.category_id) : 'none'}
+            onValueChange={(v) => onChange({ ...value, category_id: v === 'none' ? null : Number(v) })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="未分类" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">未分类</SelectItem>
+              {categories.map((c) => (
+                <SelectItem key={c.id} value={String(c.id)}>
+                  {'—'.repeat(c.depth)} {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label>排序</Label>
+          <Input
+            type="number"
+            value={value.sort_order ?? 0}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                sort_order: Number.isFinite(Number(e.target.value)) ? Number(e.target.value) : 0,
+              })
+            }
+            placeholder="数值越小越靠前"
+          />
+          <p className="text-xs text-muted-foreground">同分类升序；Copilot 组内按此排序</p>
+        </div>
       </div>
-      <div className="grid gap-2">
-        <Label>名称</Label>
-        <Input value={value.title} onChange={(e) => onChange({ ...value, title: e.target.value })} />
-      </div>
-      <div className="grid gap-2">
-        <Label>分类</Label>
-        <Select
-          value={value.category_id != null ? String(value.category_id) : 'none'}
-          onValueChange={(v) => onChange({ ...value, category_id: v === 'none' ? null : Number(v) })}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="未分类" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">未分类</SelectItem>
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={String(c.id)}>
-                {'—'.repeat(c.depth)} {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid gap-2">
-        <Label>排序</Label>
-        <Input
-          type="number"
-          value={value.sort_order ?? 0}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              sort_order: Number.isFinite(Number(e.target.value)) ? Number(e.target.value) : 0,
-            })
-          }
-          placeholder="数值越小越靠前"
-        />
-        <p className="text-xs text-muted-foreground">
-          同一分类下按此字段升序；Copilot 分组内子报告菜单按此排序
-        </p>
-      </div>
+
       <div className="space-y-2">
         <Label>参数槽位（勾选来源）</Label>
-        <div className="space-y-1 rounded-md border p-2">
+        <div className="grid grid-cols-1 gap-1 rounded-md border p-2 sm:grid-cols-2">
           {sources.map((s) => {
             const checked = value.slots?.some((x) => x.source_code === s.source_code) ?? false;
             return (
@@ -1119,18 +1151,17 @@ function ReportEditor({
           })}
         </div>
       </div>
+
       <div className="flex items-center justify-between rounded-md border px-3 py-2">
         <div>
           <div className="text-sm font-medium">在 AI 工作流平台运行</div>
-          <div className="text-xs text-muted-foreground">启用后须绑定目标智能体；成文走 Copilot 硬派发</div>
+          <div className="text-xs text-muted-foreground">启用后绑定智能体成文；默认 spm-report</div>
         </div>
-        <Switch
-          checked={value.use_ai_workflow}
-          onCheckedChange={(c) => onChange({ ...value, use_ai_workflow: c })}
-        />
+        <Switch checked={value.use_ai_workflow} onCheckedChange={enableAiWorkflow} />
       </div>
+
       {value.use_ai_workflow ? (
-        <>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="grid gap-2">
             <Label>工作流平台</Label>
             <Select
@@ -1153,36 +1184,6 @@ function ReportEditor({
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label>目标智能体 ID</Label>
-            <Input
-              value={value.target_agent_id || ''}
-              onChange={(e) => onChange({ ...value, target_agent_id: e.target.value || null })}
-              placeholder="spm-report"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>目标 Skill ID（可选）</Label>
-            <Input
-              value={value.target_skill_id || ''}
-              onChange={(e) => onChange({ ...value, target_skill_id: e.target.value || null })}
-              placeholder="sm-shop-ops-comprehensive-report"
-            />
-            <p className="text-xs text-muted-foreground">
-              填写则强制本轮先加载该 Skill；须属于该智能体已启用列表
-            </p>
-          </div>
-          <div className="grid gap-2">
-            <Label>任务提示词模板</Label>
-            <Input
-              value={value.prompt_template || ''}
-              onChange={(e) => onChange({ ...value, prompt_template: e.target.value || null })}
-              placeholder="请按「{{title}}」生成。门店：{{storeName}} 期间：{{spmOrdMonth}}"
-            />
-            <p className="text-xs text-muted-foreground">
-              占位符 {'{{wire_key}}'} / {'{{title}}'}；空则用默认参数罗列
-            </p>
-          </div>
-          <div className="grid gap-2">
             <Label>缓存 TTL（小时）</Label>
             <Input
               type="number"
@@ -1198,6 +1199,36 @@ function ReportEditor({
             />
           </div>
           <div className="grid gap-2">
+            <Label>目标智能体 ID</Label>
+            <Input
+              value={value.target_agent_id || ''}
+              onChange={(e) => onChange({ ...value, target_agent_id: e.target.value || null })}
+              placeholder={DEFAULT_TARGET_AGENT_ID}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>目标 Skill ID</Label>
+            <Input
+              value={value.target_skill_id || ''}
+              onChange={(e) => onChange({ ...value, target_skill_id: e.target.value || null })}
+              placeholder={DEFAULT_TARGET_SKILL_ID}
+            />
+            <p className="text-xs text-muted-foreground">强制先加载该 Skill；须在智能体启用列表内</p>
+          </div>
+          <div className="grid gap-2 sm:col-span-2">
+            <Label>任务提示词模板</Label>
+            <Textarea
+              rows={4}
+              value={value.prompt_template || ''}
+              onChange={(e) => onChange({ ...value, prompt_template: e.target.value || null })}
+              placeholder={DEFAULT_PROMPT_TEMPLATE}
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              占位符 {'{{wire_key}}'} / {'{{title}}'} / {'{{storeName}}'} 等
+            </p>
+          </div>
+          <div className="grid gap-2 sm:col-span-2">
             <Label>工作流编号（兼容旧字段）</Label>
             <Input
               value={value.workflow_code || ''}
@@ -1205,8 +1236,9 @@ function ReportEditor({
               placeholder="可选"
             />
           </div>
-        </>
+        </div>
       ) : null}
+
       <div className="flex items-center justify-between rounded-md border px-3 py-2">
         <div className="text-sm font-medium">启用</div>
         <Switch

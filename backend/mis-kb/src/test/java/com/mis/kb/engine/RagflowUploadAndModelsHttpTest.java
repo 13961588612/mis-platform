@@ -282,16 +282,15 @@ class RagflowUploadAndModelsHttpTest {
             assertEquals("###", parserConfig.get("delimiter").asText());
             assertEquals(8, parserConfig.get("auto_keywords").asInt());
             assertEquals(5, parserConfig.get("auto_questions").asInt());
-            JsonNode ext = parserConfig.get("ext");
-            assertFalse(ext.has("toc_extraction"), "pageIndex=null 时不写 ext.toc_extraction");
-            assertEquals(300, ext.get("image_table_context_window").asInt());
-            assertEquals(300, ext.get("image_context_size").asInt());
-            assertFalse(parserConfig.has("toc_extraction"), "顶层不得直写 toc_extraction");
+            assertFalse(parserConfig.has("ext"));
+            assertFalse(parserConfig.has("toc_extraction"), "pageIndex=null 时不写 toc_extraction");
+            assertEquals(300, parserConfig.get("image_table_context_window").asInt());
+            assertEquals(300, parserConfig.get("image_context_size").asInt());
         }
 
         @Test
-        @DisplayName("ext 修正：pageIndex/imageTable 非空 → parser_config.ext 下发，顶层不含这些键")
-        void fileLevelSendsTocContextViaExt() throws Exception {
+        @DisplayName("pageIndex/imageTable 非空 → parser_config 顶层下发，不含 ext")
+        void fileLevelSendsTocContextDirectly() throws Exception {
             RagflowClient client = newClient();
 
             client.updateDocumentConfig("ds-1", "doc-1",
@@ -299,14 +298,10 @@ class RagflowUploadAndModelsHttpTest {
                             Boolean.FALSE, 512, 0, 0));
 
             JsonNode parserConfig = mapper.readTree(requests.get(0).body()).get("parser_config");
-            assertFalse(parserConfig.has("toc_extraction"),
-                    "顶层不得直写 toc_extraction（code:102）");
-            assertFalse(parserConfig.has("image_table_context_window"),
-                    "顶层不得直写 image_table_context_window");
-            JsonNode ext = parserConfig.get("ext");
-            assertFalse(ext.get("toc_extraction").asBoolean());
-            assertEquals(512, ext.get("image_table_context_window").asInt());
-            assertEquals(512, ext.get("table_context_size").asInt());
+            assertFalse(parserConfig.has("ext"));
+            assertFalse(parserConfig.get("toc_extraction").asBoolean());
+            assertEquals(512, parserConfig.get("image_table_context_window").asInt());
+            assertEquals(512, parserConfig.get("table_context_size").asInt());
             assertEquals(0, parserConfig.get("auto_keywords").asInt());
             assertEquals(0, parserConfig.get("auto_questions").asInt());
         }

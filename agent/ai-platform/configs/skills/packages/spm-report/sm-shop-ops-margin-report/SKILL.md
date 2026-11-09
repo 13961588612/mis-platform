@@ -1,8 +1,8 @@
 ---
 name: sm-shop-ops-margin-report
 skill_id: sm-shop-ops-margin-report
-description: 门店毛利与损耗主题分析报告（Margin & Loss Theme Report）。基于毛利瀑布/生鲜盈亏/低毛利预警及总览毛利损耗字段成文。不查数；apiName 在 sm-shop-sale。晨会轻量毛利损耗仍见 overview-report。
-version: "1.3.0"
+description: 门店毛利与损耗专项主题报告。独立服务：瀑布/生鲜/低毛利。不调用其它 ops-report。晨会毛利损耗两列表走 overview-report。
+version: "1.4.0"
 category: supermarket
 tags:
   - 超市
@@ -20,12 +20,12 @@ required_permissions:
 
 # 毛利与损耗主题分析（sm-shop-ops-margin-report）
 
-**只做本主题解读与成文**，不做查数。
+独立主题服务。用户要「毛利损耗专项 / 瀑布 / 生鲜盈亏 / 低毛利」时加载。  
+**禁止** `skill` 其它 ops-report。晨会两列表 → overview-report。
 
-- 取数：router → `skill(sm-shop-sale)` → `getMarginWaterfall` / `getFreshOverview` / `getLowMarginAlert`（按问法；可多接口）；可对照已有 `getShopSaleOverview` 的毛利损耗字段
-- **禁止**再调 MCP；**禁止**编造未取数字段；**禁止**另写 apiName
-- 加载时机：S8 / S9 / S10 取数成功后；或用户要「毛利损耗专项 / 瀑布 / 生鲜盈亏 / 低毛利」且已有相关结果；或由 comprehensive 按节调用
-- **与 overview 分工**：晨会「毛利与损耗」两列表 → **overview**；本 Skill 只做**专项深拆**（瀑布/生鲜/低毛利）。综合报告中为本报告**第四章**。关系见 router §1.1
+- 槽位齐后：`skill(sm-shop-sale)` → 按问法 S8/S9/S10，对照一期，并行。
+- **日粒度禁止** S10；禁止改查 week 填低毛利。S8/S9 可按日。
+- 成文后禁止再 MCP。
 
 ### 取数 → 章节对照（只写已有结果的节）
 
@@ -113,15 +113,33 @@ required_permissions:
 > 无瀑布结果则整节省略。
 
 ### 生鲜占比与盈亏
-| 指标 | 本期 |
-|------|------|
-| 生鲜营业额 / 占门店 | **xx.xx 万元** / **x.x%** |
-| 生鲜主营 / 占门店 | … |
-| 生鲜前台毛利 | … |
-| 生鲜盈亏（含税） | … |
-| 常规盈亏（含税） | … |
+周/月必须带「较上一周/月」列（规则同 overview：本期绝对值，对比列只写升降）。日报告用「较上期」。
+
+| 指标 | 本期 | 较上一周 |
+|------|------|----------|
+| 生鲜营业额 / 占门店 | **xx.xx 万元** / **x.x%** | 金额 `%`；占比 `pp`（可写在同一格，如 `↑ +x% / ↓ -x.xpp`） |
+| 生鲜主营 / 占门店主营 | **xx.xx 万元** / **x.x%** | **金额 `%` + 占比 `pp`，禁止只填金额或只填 `—`** |
+| 生鲜前台毛利 | **xx.xx 万元** | 金额 `%` |
+| 生鲜盈亏（含税） | **±x.xx 万元** | 上期非 0：金额 `%`；上期≈0：写 `上期 ±x.xx 万元`（防除零） |
+| 常规盈亏（含税） | **±x.xx 万元** | 同上 |
 
 > 口径：类目 id 以 `1` 开头；有 `meta.freshCategoryRule` 可一句转述。无 Fresh 则整节省略。
+
+#### 生鲜对比列（强制）
+
+`getFreshOverview` **无现成环比**。本轮若已取本期 + 上期（如 44 周 + 43 周），必须用两期 `summary` 自算：
+
+| 展示 | 字段 | 对比 |
+|------|------|------|
+| 生鲜营业额 | `freshTurnoverAmt` | 金额相对差 `%` |
+| 占门店营业额 | `freshSalesShare` | `pp` |
+| **生鲜主营** | `freshMainSaleAmt` | 金额相对差 `%` |
+| **占门店主营** | `freshMainShare` | `pp` |
+| 生鲜前台毛利 | `freshFrontMarginAmt` | 金额相对差 `%` |
+| 生鲜/常规盈亏 | `freshPnLAmtTax` / `regularPnLAmtTax` | 见上（除零用上期绝对值） |
+
+**禁止**：两期都有回包时，「生鲜主营 / 占门店主营」对比格填 `—`（即使营业额占比已有 `pp`，主营占比仍要单独算）。  
+`—` **仅**当该对比期没有 `getFreshOverview` 回包。
 
 ### 低毛利预警
 | 指标 | 本期 |
@@ -129,7 +147,7 @@ required_permissions:
 | 低毛利率主营销售 | **xx.xx 万元** |
 | 占主营 | **x.x%** |
 
-> **仅 week/month**。无 Alert 或日粒度 → 整省或注明「仅支持周/月」。
+> **仅 week/month**。无 Alert 或日粒度 → **整省或注明「仅支持周/月」**；禁止为补此节改查 week。
 
 ### 毛利损耗快览（可选）
 有 overview 且需环比对照时：前台/综合毛利额·率、损耗额·率 3～6 行；有瀑布时从简。
@@ -170,4 +188,5 @@ required_permissions:
 - [ ] 已写 **前台→综合差额** 及主要来源 1～2 项  
 - [ ] 未查数；未编造未取到章节  
 - [ ] 金额万元 2 位；未说损耗吃毛利  
-- [ ] 日粒度未硬编低毛利预警  
+- [ ] 日粒度未硬编低毛利预警、**未改查 week Alert**  
+- [ ] 已取上期 Fresh 时：生鲜主营金额与占门店主营 `pp` 对比列均不是 `—`  

@@ -12,7 +12,7 @@
 
 - `use_ai_workflow`：启用智能体成文
 - `target_agent_id`：硬派发 Worker（必填）
-- `target_skill_id`：可选，强制先 `skill()` 加载
+- `target_skill_id`：可选，成文 Skill（日报 `sm-shop-ops-diary-report`、周报 `week-report`、月报 `month-report`）。**不是** router；槽位不齐才先加载 `sm-report-router`
 - `prompt_template`：任务消息模板（`{{wire_key}}`）
 - `cache_ttl_hours`：缓存 TTL，默认 24
 
@@ -35,7 +35,7 @@ FE 发会话消息时带：
 { "ai_report_run": { "agent_id": "spm-report", "skill_id": "...", "report_code": "..." } }
 ```
 
-ai-platform 跳过选人 LLM，直接 `agent__invoke`；有 `skill_id` 时注入 `format_router_skill_hint`。
+ai-platform 跳过选人 LLM，直接 `agent__invoke`；有 `skill_id` 时注入 `format_router_skill_hint`（成文 Skill ≠ router）。
 
 ## API
 

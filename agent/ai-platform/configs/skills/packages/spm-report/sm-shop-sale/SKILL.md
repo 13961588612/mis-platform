@@ -16,7 +16,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 - MCP 服务名：**`mcp-sm-api-suite`**
 - 工具：**`callShopSaleApi`**
 - `items` **一律按门店**汇总，含 `storeId` / `storeName`
-- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`
+- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`；日报日清单用 `listMonthDates`（禁止默认 `listYearDates`）
 
 | 字段 | 何时必填 | 说明 |
 |------|----------|------|
@@ -51,7 +51,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 | router | 意图 | apiName |
 |--------|------|---------|
-| **S1** | 经营总览（销售+毛利+损耗+促销；**仅查数**） | `getShopSaleOverview`（成文 → `sm-shop-ops-overview-report` / 综合 → `sm-shop-ops-comprehensive-report`） |
+| **S1** | 经营总览（销售+毛利+损耗+促销；**仅查数**） | `getShopSaleOverview`（主题成文 → overview-report；日/周/月综合 → diary/week/month-report） |
 | **S1a** | 线上分平台/类目销售毛利 | `listOnlineSales`（`startSaleDate`+`endSaleDate`） |
 | **S1b** | 复购会员人数 | `getRepurchaseSummary`（**仅 week/month**） |
 | **S2** | 折扣三列 | `getDiscountStructure` |
@@ -64,6 +64,8 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 | **S9** | 生鲜占比/盈亏（类目 id 以 1 开头） | `getFreshOverview`（成文 → `sm-shop-ops-margin-report`） |
 | **S10** | 低毛利预警（低毛利率主营销售） | `getLowMarginAlert`（**仅 week/month**；成文 → `sm-shop-ops-margin-report`） |
 | — | 品类结构 | Skill **`sm-shop-category-sale`** |
+
+**日粒度硬禁止**：`period=day` **不得**调用 `getShopInventoryOverview` / `getLowMarginAlert` / `getRepurchaseSummary`。校验失败后 **禁止**改 `period=week` 重试来填日报；缺节声明「仅支持周/月」。同一期多个 apiName **同一轮并行**。
 
 ---
 
@@ -97,7 +99,8 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ## `getRepurchaseSummary` — 复购会员人数
 
-读 `ads_spm_trd_csmr_category_{week,month}_df`，`data_type='门店'`；`rep_cust` CAST 后 SUM。
+读 `ads_spm_trd_csmr_category_{week,month}_df`，`data_type='门店'`；`rep_cust` CAST 后 SUM。  
+**仅 week/month**；**日报禁止调用**。
 
 ```json
 { "apiName": "getRepurchaseSummary", "params": {
@@ -116,7 +119,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 ## `getShopInventoryOverview` — 门店库存订货总览
 
 库存 + 滞销 + 缺货 + 周转 + 订货/验收 + 退货 + 交叉率，**一次返回**。  
-**仅 `period=week|month`**（无 day 表）。
+**仅 `period=week|month`**（无 day 表）。**日报 / `period=day` 禁止调用本接口**，即使综合报告缺库存章。
 
 ```json
 { "apiName": "getShopInventoryOverview", "params": {
@@ -138,7 +141,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 ## `getShopSaleOverview` — 门店总览（查数）
 
 销售 + 毛利损耗 + 促销 **同条件一次返回**。  
-**解读 / 同比上期 / 异常成文** 不在本 Skill，见 **`sm-shop-ops-overview-report`**（总览）或 **`sm-shop-ops-comprehensive-report`**（综合）。
+**解读 / 同比上期 / 异常成文** 不在本 Skill，见对应 ops-report（总览 overview；日报 diary；周报 week；月报 month）。
 
 ```json
 { "apiName": "getShopSaleOverview", "params": {
@@ -335,7 +338,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 ## `getLowMarginAlert` — 低毛利预警（查数）
 
 仅 **week/month**（无 day）。KPI `lowml_zyxxsr`。  
-**成文** → `sm-shop-ops-margin-report`。
+**日报 / `period=day` 禁止调用**，禁止改 week 重试。**成文** → `sm-shop-ops-margin-report`。
 
 ```json
 { "apiName": "getLowMarginAlert", "params": {
@@ -356,4 +359,4 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 - **同比**：不依赖专用 YoY API；对「去年同周/同月/对应日」再用本 Skill 同一 `apiName` 查一次，与本期对照（时间键来自日历清单）。
 - **暂不支持**：时段峰谷、坪效/人效（无接口、不问数硬编）。
 - **仍暂缓的 API**：`compareStores` / `getYoYMetrics`
-- **成文分流**（详 router §1.1）：S1(+S1a/S1b) → overview；S2～S4 → promo；S5/S6 → 表答或 category；S7 → inventory；S8～S10 → margin；综合 → comprehensive
+- **成文分流**：S1(+S1a/S1b) → overview；S2～S4 → promo；S5/S6 → 表答或 category；S7 → inventory；S8～S10 → margin；日/周/月综合 → diary/week/month-report

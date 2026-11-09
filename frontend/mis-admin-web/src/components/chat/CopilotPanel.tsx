@@ -369,19 +369,30 @@ export function CopilotPanel({
   }, []);
 
   // 新消息 / 流式更新 / 思考态 / 步骤条 → 仅在贴底时跟随；用 auto 避免「从顶 smooth 滑到底」
-  const lastContentLen =
-    chat.messages.length > 0 ? (chat.messages[chat.messages.length - 1]?.content?.length ?? 0) : 0;
+  const lastMsg = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : undefined;
+  const lastContentLen = lastMsg?.content?.length ?? 0;
+  const lastIsParamCard = Boolean(lastMsg?.reportParamCard);
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
-    const root = messagesScrollRef.current;
-    if (root) {
-      root.scrollTop = root.scrollHeight;
-      return;
+    // 弹出参数卡：强制滚到卡片，避免用户停在历史中间看不到表单
+    if (lastIsParamCard) {
+      stickToBottomRef.current = true;
     }
-    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'auto' });
+    if (!stickToBottomRef.current) return;
+    const scrollToEnd = () => {
+      const root = messagesScrollRef.current;
+      if (root) {
+        root.scrollTop = root.scrollHeight;
+        return;
+      }
+      messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'auto' });
+    };
+    scrollToEnd();
+    const raf = window.requestAnimationFrame(scrollToEnd);
+    return () => window.cancelAnimationFrame(raf);
   }, [
     chat.messages.length,
     lastContentLen,
+    lastIsParamCard,
     chat.isGenerating,
     orphanSurface,
     toolSteps.length,
@@ -651,7 +662,9 @@ export function CopilotPanel({
                               message={msg}
                               onAgentRun={async ({ message: runText, metadata }) => {
                                 stickToBottomRef.current = true;
-                                chat.sendMessage(runText, undefined, metadata);
+                                chat.sendMessage(runText, undefined, metadata, {
+                                  skipUserBubble: true,
+                                });
                                 // 等本轮生成结束，取最新助手气泡正文供缓存回写
                                 await new Promise<void>((resolve) => {
                                   const started = Date.now();
@@ -874,7 +887,9 @@ function ChatBubble({
       : [];
   const sources = mergeKbSources(contentSplit.sources, surfaceSources);
   const body = contentSplit.body;
-  const reportSubmitDisplay = isUser ? parseReportSubmitDisplay(rawContent) : null;
+  const reportSubmitDisplay = isUser
+    ? (message.reportSubmitDisplay ?? parseReportSubmitDisplay(rawContent))
+    : null;
 
   // 仅隐藏「空助手」重复气泡；用户 / 系统消息绝不能被藏掉
   if (hideEmptyDuplicate && message.role === 'assistant') {

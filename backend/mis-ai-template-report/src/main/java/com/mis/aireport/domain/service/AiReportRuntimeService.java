@@ -242,7 +242,8 @@ public class AiReportRuntimeService {
             if (cached != null
                     && cached.getExpiresAt() != null
                     && cached.getExpiresAt().isAfter(Instant.now())
-                    && StringUtils.hasText(cached.getContentMd())) {
+                    && StringUtils.hasText(cached.getContentMd())
+                    && !isNonReportCacheBody(cached.getContentMd())) {
                 Map<String, Object> hit = new LinkedHashMap<>();
                 hit.put("mode", "cached");
                 hit.put("report_code", def.getReportCode());
@@ -325,6 +326,10 @@ public class AiReportRuntimeService {
         }
         if (!StringUtils.hasText(contentMd)) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "content_md 不能为空");
+        }
+        if (isNonReportCacheBody(contentMd)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "正文不是成文（参数卡/模拟表），拒绝写入缓存");
         }
         AiReportDef def = reportDefRepository.findByReportCode(reportCode)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "报告不存在"));
@@ -409,13 +414,28 @@ public class AiReportRuntimeService {
         return normalized;
     }
 
+    /** 开卡提示、模拟表不得进成文缓存，否则下次 execute 会循环吐同一句话。 */
+    static boolean isNonReportCacheBody(String contentMd) {
+        String t = contentMd == null ? "" : contentMd.trim();
+        if (t.length() < 80) {
+            return true;
+        }
+        return t.contains("参数卡")
+                || t.contains("模拟执行")
+                || t.contains("模拟结果")
+                || t.contains("[[ai.report.open_card");
+    }
+
     private String renderPrompt(AiReportDef def, Map<String, Object> params) {
         Map<String, Object> ctx = new LinkedHashMap<>(params);
         ctx.put("title", def.getTitle());
         ctx.put("report_code", def.getReportCode());
+        String skipCard = "【已确认模板报告任务】参数已齐，禁止再打开参数卡或走 template-report；"
+                + "请直接由绑定 Worker 按 Skill 成文。report_code=" + def.getReportCode() + "\n";
         String template = def.getPromptTemplate();
         if (!StringUtils.hasText(template)) {
             StringBuilder sb = new StringBuilder();
+            sb.append(skipCard);
             sb.append("请按「").append(def.getTitle()).append("」生成报告。\n");
             for (Map.Entry<String, Object> e : params.entrySet()) {
                 sb.append(e.getKey()).append("：").append(e.getValue()).append('\n');
@@ -430,7 +450,11 @@ public class AiReportRuntimeService {
             m.appendReplacement(sb, Matcher.quoteReplacement(val == null ? "" : String.valueOf(val)));
         }
         m.appendTail(sb);
-        return sb.toString().trim();
+        String rendered = sb.toString().trim();
+        if (!rendered.contains("禁止再打开参数卡")) {
+            return skipCard + rendered;
+        }
+        return rendered;
     }
 
     /** 按报告编号拼几行可读模拟数据，把入参回显进结果。 */

@@ -90,6 +90,21 @@ skills:
     package: spm-report/sm-common-info-calendar
     name: 超市日历清单
     status: active
+  - id: sm-shop-ops-diary-report
+    category: supermarket
+    package: spm-report/sm-shop-ops-diary-report
+    name: 超市门店经营日报
+    status: active
+  - id: sm-shop-ops-week-report
+    category: supermarket
+    package: spm-report/sm-shop-ops-week-report
+    name: 超市门店经营周报
+    status: active
+  - id: sm-shop-ops-month-report
+    category: supermarket
+    package: spm-report/sm-shop-ops-month-report
+    name: 超市门店经营月报
+    status: active
   - id: sm-shop-sale
     category: supermarket
     package: spm-report/sm-shop-sale

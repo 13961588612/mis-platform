@@ -44,6 +44,8 @@ export function parseReportSubmitDisplay(
   text: string,
 ): { summary: string; detail: string } | null {
   const detail = text.trim();
+  const fromDispatch = parseDispatchPromptDisplay(detail);
+  if (fromDispatch) return fromDispatch;
   if (!detail.startsWith('模板报告：')) return null;
   const body = detail.slice('模板报告：'.length);
   const segments = body.split('；').map((s) => s.trim()).filter(Boolean);
@@ -75,6 +77,24 @@ export function parseReportSubmitDisplay(
   const summary = parts.join('  ').trim();
   if (!summary) return null;
   return { summary, detail };
+}
+
+/** 硬派发任务句（禁止开卡前缀）→ 人话摘要 + 全文进展开原文。 */
+function parseDispatchPromptDisplay(
+  detail: string,
+): { summary: string; detail: string } | null {
+  if (
+    !detail.startsWith('【已确认模板报告任务】') &&
+    !detail.includes('禁止再打开参数卡')
+  ) {
+    return null;
+  }
+  const title = detail.match(/请按「([^」]+)」/)?.[1]?.trim();
+  const storeLine = detail.match(/门店：([^\n]*)/)?.[1]?.trim() ?? '';
+  const storeName = storeLine.replace(/（[^）]*）\s*$/, '').trim() || storeLine;
+  const period = detail.match(/期间：([^\n]*)/)?.[1]?.trim();
+  const parts = [title, storeName, period].filter((s) => Boolean(s));
+  return { summary: parts.join('  ') || '模板报告', detail };
 }
 
 function humanParamLabel(value: string, label?: string | null): string {

@@ -273,19 +273,17 @@ class RagflowClientHttpTest {
             assertFalse(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
             assertTrue(body.get("parser_config").has("graphrag"));
             assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean());
-            // ext 修正：null 设置也按默认模板经 ext 下发 toc/image/overlap
-            JsonNode ext = body.get("parser_config").get("ext");
-            assertTrue(ext.get("toc_extraction").asBoolean(),
-                    "null 设置 → ext.toc_extraction 默认 true");
+            JsonNode pc = body.get("parser_config");
+            assertFalse(pc.has("ext"), "现网拒 parser_config.ext");
+            assertTrue(pc.get("toc_extraction").asBoolean(),
+                    "null 设置 → parser_config.toc_extraction 默认 true");
             assertEquals(RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW,
-                    ext.get("image_table_context_window").asInt());
-            assertFalse(body.get("parser_config").has("toc_extraction"),
-                    "顶层不得直写 toc_extraction（pydantic 拒收）");
+                    pc.get("image_table_context_window").asInt());
         }
 
         @Test
-        @DisplayName("ext 修正：pageIndex/imageTable/overlap 经 parser_config.ext 下发，顶层不含这些键")
-        void parserConfigCarriesTocImageOverlapViaExt() throws Exception {
+        @DisplayName("pageIndex/imageTable/overlap 写在 parser_config 顶层，不含 ext")
+        void parserConfigCarriesTocImageOverlapDirectly() throws Exception {
             RagSettings custom = new RagSettings(
                     20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
                     512, "###", null, null, null,
@@ -296,28 +294,20 @@ class RagflowClientHttpTest {
             newClient().updateDatasetSettings("ds-1", custom);
 
             JsonNode parserConfig = mapper.readTree(lastBody.get()).get("parser_config");
-            assertFalse(parserConfig.has("toc_extraction"),
-                    "顶层不得直写 toc_extraction");
-            assertFalse(parserConfig.has("image_table_context_window"),
-                    "顶层不得直写 image_table_context_window");
-            assertFalse(parserConfig.has("overlapped_percent"),
-                    "顶层不得直写 overlapped_percent");
-            JsonNode ext = parserConfig.get("ext");
-            assertFalse(ext.get("toc_extraction").asBoolean(),
-                    "pageIndex=false → ext.toc_extraction:false");
-            assertEquals(512, ext.get("image_table_context_window").asInt());
-            assertEquals(512, ext.get("image_context_size").asInt(),
+            assertFalse(parserConfig.has("ext"), "禁止 parser_config.ext");
+            assertFalse(parserConfig.get("toc_extraction").asBoolean(),
+                    "pageIndex=false → toc_extraction:false");
+            assertEquals(512, parserConfig.get("image_table_context_window").asInt());
+            assertEquals(512, parserConfig.get("image_context_size").asInt(),
                     "镜像 image_context_size 与 UI saving-button 一致");
-            assertEquals(512, ext.get("table_context_size").asInt());
-            assertEquals(15.0, ext.get("overlapped_percent").asDouble(), 0.001);
-            assertTrue(parserConfig.has("auto_keywords"),
-                    "ext 路径不影响 auto_keywords 恒下发");
-            assertTrue(parserConfig.has("auto_questions"),
-                    "ext 路径不影响 auto_questions 恒下发");
+            assertEquals(512, parserConfig.get("table_context_size").asInt());
+            assertEquals(15.0, parserConfig.get("overlapped_percent").asDouble(), 0.001);
+            assertTrue(parserConfig.has("auto_keywords"));
+            assertTrue(parserConfig.has("auto_questions"));
         }
 
         @Test
-        @DisplayName("legacy：闸门打开的旧工厂仍可用（ext 路径与闸门无关）")
+        @DisplayName("legacy：闸门打开的旧工厂仍下发顶层 toc/image 键")
         void parserConfigCarriesTocAndContextWindowWhenGatesOn() throws Exception {
             RagSettings custom = new RagSettings(
                     20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
@@ -329,11 +319,12 @@ class RagflowClientHttpTest {
             newClientWithParserGates().updateDatasetSettings("ds-1", custom);
 
             JsonNode body = mapper.readTree(lastBody.get());
-            JsonNode ext = body.get("parser_config").get("ext");
-            assertFalse(ext.get("toc_extraction").asBoolean(),
-                    "pageIndex=false → ext.toc_extraction:false");
-            assertEquals(512, ext.get("image_table_context_window").asInt(),
-                    "imageTableContextWindow=512 → ext 原样下发");
+            JsonNode pc = body.get("parser_config");
+            assertFalse(pc.has("ext"));
+            assertFalse(pc.get("toc_extraction").asBoolean(),
+                    "pageIndex=false → toc_extraction:false");
+            assertEquals(512, pc.get("image_table_context_window").asInt(),
+                    "imageTableContextWindow=512 原样下发");
         }
 
         @Test

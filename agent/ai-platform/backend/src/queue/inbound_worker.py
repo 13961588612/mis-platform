@@ -1174,14 +1174,24 @@ class InboundStreamWorker:
                 redis=redis,
                 session_id=inbound.session_id,
             )
-            # 模板报告硬派发：把 FE metadata.ai_report_run 透传到 run 循环
+            # 模板报告硬派发：FE metadata 可能在 inbound.metadata 或 RunAgentInput.forwardedProps
+            report_run = None
             if isinstance(inbound.metadata, dict):
-                report_run = inbound.metadata.get("ai_report_run")
-                if isinstance(report_run, dict) and report_run.get("agent_id"):
-                    ask_tool_metadata = {
-                        **ask_tool_metadata,
-                        "ai_report_run": report_run,
-                    }
+                cand = inbound.metadata.get("ai_report_run")
+                if isinstance(cand, dict) and cand.get("agent_id"):
+                    report_run = cand
+                a2ui_meta = inbound.metadata.get("a2ui")
+                if report_run is None and isinstance(a2ui_meta, dict):
+                    rai = a2ui_meta.get("runAgentInput")
+                    if isinstance(rai, dict):
+                        fwd = rai.get("forwardedProps")
+                        if isinstance(fwd, dict) and isinstance(fwd.get("ai_report_run"), dict):
+                            report_run = fwd.get("ai_report_run")
+            if isinstance(report_run, dict) and report_run.get("agent_id"):
+                ask_tool_metadata = {
+                    **ask_tool_metadata,
+                    "ai_report_run": report_run,
+                }
         except AskIdentityUnavailable as exc:
             logger.error(
                 "A2UI ask-identity blocked; stop before run",
