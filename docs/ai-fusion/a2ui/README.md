@@ -29,6 +29,7 @@
 | [`02-task-breakdown.md`](./02-task-breakdown.md) | **最终任务分解**：任务列表 T06'/T07'/T12/T09/T10/T11（含依赖/验收/懒加载阈值）、模块×功能×文件矩阵、依赖包列表、共享知识、数据结构、全链路时序图 | 在哪实现 | ✅ Ready（最终权威） |
 | [`03-permission-design.md`](./03-permission-design.md) | **最终权限设计**：双层模型（渲染 + 操作）、D5 声明机制（Gateway 权威）、D12 兑换权限视角（手机号匹配规则 + R1-R6）、KB ACL 联动、权限测试要点 | 如何授权 | ✅ Ready（最终权威） |
 | [`04-open-source-reuse.md`](./04-open-source-reuse.md) | **开源复用（收敛版）**：复用率结论（≈78% / ≥80%）、3 条 P1 采纳建议、8 项必须自研论证、CopilotKit 不采纳的准确理由、版本口径表 | 是否复用 | ✅ Ready（最终权威） |
+| [`copilot-voice-input.md`](./copilot-voice-input.md) | **Copilot 语音输入**：麦克风 → 云端 ASR → 填入输入框；http/https；非企微 P2-06 | 怎么建 | 规划已定 |
 
 > **阅读顺序**：README → 01（架构）→ 02（任务）→ 03（权限）→ 04（开源复用）。
 
