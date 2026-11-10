@@ -53,6 +53,7 @@ from src.coordinator.passthrough import (
 )
 from src.coordinator.routing_llm import enrich_invoke_args_with_template
 from src.coordinator.trace import peek_dispatch_traces
+from src.intent_router.service import is_confirmed_report_task
 from src.llm.gateway import LLMGateway
 from src.llm.models import LLMMessage, LLMRequest, LLMRole, LLMResponse
 from src.queue.a2ui_outbound import A2uiOutboundPublisher
@@ -1060,14 +1061,19 @@ class A2uiRunLoop:
                 from src.intent_router.service import (
                     format_coordinator_route_hint,
                     format_router_skill_hint,
+                    is_confirmed_report_task,
                     resolve_intent_route,
                 )
 
-                # 已确认模板报告任务：跳过意图预路由，避免再命中 template-report 开卡
+                # 已确认模板报告任务：跳过意图预路由，避免「日报」关键词再命中开卡
                 report_run_skip_route = ask_meta.get("ai_report_run")
-                if isinstance(report_run_skip_route, dict) and str(
-                    report_run_skip_route.get("agent_id") or ""
-                ).strip():
+                if (
+                    (
+                        isinstance(report_run_skip_route, dict)
+                        and str(report_run_skip_route.get("agent_id") or "").strip()
+                    )
+                    or is_confirmed_report_task(last_user_for_route)
+                ):
                     route_decision = None
                 else:
                     route_decision = await resolve_intent_route(
@@ -1258,6 +1264,7 @@ class A2uiRunLoop:
                 from src.intent_router.service import (
                     format_conversation_context_for_jev,
                     format_router_skill_hint,
+                    is_confirmed_report_task,
                 )
                 from src.runtime.step_timing import log_turn_step
 
@@ -1357,6 +1364,15 @@ class A2uiRunLoop:
                 await emit(AgentEvent.tool_result("agent__invoke", hard_result))
                 hard_output = str(hard_result.get("output") or "")
                 open_card = _parse_template_open_card_from_invoke_output(hard_output)
+                if open_card and (
+                    report_forced or is_confirmed_report_task(last_user_for_route)
+                ):
+                    logger.info(
+                        "suppress_open_card_on_confirmed_report",
+                        session_id=session_id,
+                        worker_id=hard_worker,
+                    )
+                    open_card = None
                 if open_card:
                     report_code, title, tip, card_values = open_card
                     if ms_to_first_text is None:
@@ -1705,6 +1721,11 @@ class A2uiRunLoop:
                         open_card = _parse_template_open_card_from_invoke_output(
                             str(result.get("output") or "")
                         )
+                        if open_card and (
+                            report_forced
+                            or is_confirmed_report_task(last_user_for_route)
+                        ):
+                            open_card = None
                     await emit(AgentEvent.tool_result(tool_name, result))
                     if open_card:
                         report_code, title, tip, card_values = open_card
@@ -1779,6 +1800,11 @@ class A2uiRunLoop:
                             card = _parse_template_open_card_from_invoke_output(
                                 inv_output
                             )
+                            if card and (
+                                report_forced
+                                or is_confirmed_report_task(last_user_for_route)
+                            ):
+                                card = None
                             if card:
                                 report_code, title, tip, card_values = card
                                 if ms_to_first_text is None:

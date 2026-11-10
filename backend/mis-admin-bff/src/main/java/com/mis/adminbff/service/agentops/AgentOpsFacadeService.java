@@ -547,6 +547,11 @@ public class AgentOpsFacadeService {
         return client.uploadFile(file);
     }
 
+    /** Copilot 语音转写（透传，音频不落会话附件）。 */
+    public JsonNode transcribeSpeech(MultipartFile file, Integer durationMs) {
+        return client.transcribeSpeech(file, durationMs);
+    }
+
     // ==================================================================
     // MCP §4.3 #34–#42
     // ==================================================================

@@ -547,6 +547,19 @@ class Settings(BaseSettings):
     QWEN_API_KEY: str = ""
     QWEN_API_ENDPOINT: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+    # Copilot 语音转写（复用 QWEN_API_KEY，不另造密钥）
+    SPEECH_ASR_MODEL: str = Field(
+        default="qwen3-asr-flash",
+        description="短语音同步 ASR 模型（DashScope compatible-mode）",
+    )
+    SPEECH_MAX_SECONDS: int = Field(default=60, ge=1, description="单次录音时长上限（秒）")
+    SPEECH_MAX_BYTES: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1024,
+        description="单次录音体积上限（字节）",
+    )
+    SPEECH_TIMEOUT_SECONDS: int = Field(default=30, ge=5, description="ASR HTTP 超时（秒）")
+
     # ===== 意图检测 / JEV（与主对话 QWEN_* 分离，独立 Key；tongyi-intent-detect）=====
     INTENT_DETECT_MODEL: str = Field(
         default="tongyi-intent-detect-v3",

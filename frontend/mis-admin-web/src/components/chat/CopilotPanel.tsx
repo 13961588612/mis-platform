@@ -27,6 +27,7 @@ import {
   Loader2,
   Maximize2,
   MessageSquarePlus,
+  Mic,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -45,6 +46,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { useChat } from '@/lib/chat/useChat';
 import { useAttachmentComposer } from '@/lib/chat/useAttachmentComposer';
+import { appendTranscript } from '@/lib/chat/speech-transcribe';
+import { useVoiceInput } from '@/lib/chat/use-voice-input';
 import { AttachmentChips } from '@/components/chat/AttachmentChips';
 import { AttachmentList } from '@/components/chat/AttachmentList';
 import { AssistantAvatar, UserAvatar } from '@/components/chat/CopilotAvatars';
@@ -260,6 +263,7 @@ export function CopilotPanel({
   const chat = useChat();
   const { closeSession, ensureSession, switchSession } = chat;
   const composer = useAttachmentComposer();
+  const voice = useVoiceInput();
   const dispatchTrace = useChatStore((s) => s.dispatchTrace);
   const toolSteps = useChatStore((s) => s.toolSteps);
   const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
@@ -776,6 +780,9 @@ export function CopilotPanel({
               {composer.rejectionHint ? (
                 <p className="mb-2 text-[11px] text-destructive">{composer.rejectionHint}</p>
               ) : null}
+              {voice.error ? (
+                <p className="mb-2 text-[11px] text-destructive">{voice.error}</p>
+              ) : null}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -799,6 +806,54 @@ export function CopilotPanel({
                 className="min-h-[3.25rem] w-full resize-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
               />
               <div className="mt-2 flex items-center justify-end gap-1.5">
+                {voice.status === 'recording' ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-9 w-9 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                    title="取消录音"
+                    aria-label="取消录音"
+                    onClick={() => voice.cancel()}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    'h-9 w-9 shrink-0 rounded-full',
+                    voice.status === 'recording'
+                      ? 'bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                  title={
+                    voice.status === 'recording'
+                      ? `停止并转写（${voice.elapsedSec}s）`
+                      : voice.status === 'transcribing'
+                        ? '正在转写'
+                        : '语音输入'
+                  }
+                  aria-label="语音输入"
+                  disabled={chat.isGenerating || voice.status === 'transcribing'}
+                  onClick={() => {
+                    if (voice.status === 'recording') {
+                      void voice.stopAndTranscribe().then((text) => {
+                        if (text) setInput((prev) => appendTranscript(prev, text));
+                      });
+                      return;
+                    }
+                    void voice.start();
+                  }}
+                >
+                  {voice.status === 'transcribing' ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                </Button>
                 <Button
                   type="button"
                   size="icon"
@@ -806,7 +861,7 @@ export function CopilotPanel({
                   className="h-9 w-9 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                   title="添加附件"
                   aria-label="添加附件"
-                  disabled={!composer.canAddMore || chat.isGenerating}
+                  disabled={!composer.canAddMore || chat.isGenerating || voice.status !== 'idle'}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Paperclip className="h-4 w-4" />

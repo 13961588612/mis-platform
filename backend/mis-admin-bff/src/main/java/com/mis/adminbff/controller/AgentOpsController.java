@@ -411,6 +411,18 @@ public class AgentOpsController {
         return Result.ok(facade.uploadFile(file));
     }
 
+    /**
+     * Copilot 语音转写（薄转发 ai-platform {@code /api/v1/speech/transcribe}）。
+     *
+     * <p>音频不落会话附件。权限 {@code agent:chat:use}，路径须与 sys_api 一致。
+     */
+    @PostMapping(value = "/speech/transcribe", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Result<JsonNode> transcribeSpeech(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "duration_ms", required = false) Integer durationMs) {
+        return Result.ok(facade.transcribeSpeech(file, durationMs));
+    }
+
     // ---------------------------------------------------------------- MCP #34–#42
 
     /** #34 MCP 服务器列表。 */

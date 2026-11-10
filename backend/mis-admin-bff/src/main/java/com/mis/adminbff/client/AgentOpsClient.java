@@ -411,6 +411,21 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + FILES + "/upload");
     }
 
+    /**
+     * Copilot 语音转写（薄转发 ai-platform {@code POST /api/v1/speech/transcribe}）。
+     */
+    public JsonNode transcribeSpeech(MultipartFile file, Integer durationMs) {
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        builder.part("file", file.getResource());
+        if (durationMs != null && durationMs > 0) {
+            builder.part("duration_ms", String.valueOf(durationMs));
+        }
+        return postMultipart(
+                uriBuilder -> uriBuilder.path("/api/v1/speech/transcribe").build(),
+                builder.build(),
+                "POST /api/v1/speech/transcribe");
+    }
+
     // ==================================================================
     // MCP §4.3 #34–#42
     //

@@ -692,6 +692,8 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/chat/sessions/{id}/messages",
             // ---- P0-1：Copilot 附件上传薄转发（sys_api 同域 agent:chat:use；deny-unmapped=true 必须登记）----
             "POST /api/v1/agent-ops/files/upload",
+            // ---- V167：Copilot 语音转写 ----
+            "POST /api/v1/agent-ops/speech/transcribe",
             "GET /api/v1/agent-ops/mcp/servers",
             "GET /api/v1/agent-ops/mcp/servers/health",
             "GET /api/v1/agent-ops/mcp/servers/{name}",

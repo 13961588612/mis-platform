@@ -841,20 +841,22 @@ export default function IqdReportAdminPage() {
           }
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{creatingReport || editingReport?.id === 0 ? '新建报告' : '编辑报告'}</DialogTitle>
           </DialogHeader>
           {editingReport ? (
-            <ReportEditor
-              value={editingReport}
-              sources={sources}
-              platforms={platforms}
-              categories={flatCats}
-              onChange={setEditingReport}
-            />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <ReportEditor
+                value={editingReport}
+                sources={sources}
+                platforms={platforms}
+                categories={flatCats}
+                onChange={setEditingReport}
+              />
+            </div>
           ) : null}
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button
               type="button"
               variant="outline"

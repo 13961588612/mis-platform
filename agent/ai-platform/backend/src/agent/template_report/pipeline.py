@@ -19,7 +19,10 @@ from src.agent.template_report.slot_resolve import (
     is_t1_blocked_date,
     resolve_slots_deterministic,
 )
-from src.intent_router.service import format_conversation_context_for_jev
+from src.intent_router.service import (
+    format_conversation_context_for_jev,
+    is_confirmed_report_task,
+)
 from src.intent_router.template_report import (
     NONE_LABEL,
     load_template_report_router_config,
@@ -173,6 +176,12 @@ async def run_template_report_turn(
 ) -> TemplateReportOutcome:
     """执行一轮：未命中立即 miss；命中则抽槽执行或开参数卡。"""
     t0 = perf_counter()
+    if is_confirmed_report_task(user_text):
+        return TemplateReportOutcome(
+            kind="miss",
+            detail="skip_open_card_confirmed",
+            latency_ms=0,
+        )
     cfg = load_template_report_router_config(AGENT_ID)
     if cfg is None or not cfg.enabled:
         return TemplateReportOutcome(

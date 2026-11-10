@@ -17,6 +17,15 @@ from src.coordinator.passthrough import is_skipped_invoke_output
 from src.intent_router.models import TemplateReportRouterConfig
 
 
+@pytest.mark.asyncio
+async def test_confirmed_task_does_not_open_card() -> None:
+    outcome = await run_template_report_turn(
+        user_text="【已确认模板报告任务】参数已齐，禁止再打开参数卡或走 template-report；请按「日报」直接成文。",
+    )
+    assert outcome.kind == "miss"
+    assert outcome.detail == "skip_open_card_confirmed"
+
+
 def test_open_card_marker_roundtrip() -> None:
     body = format_open_card_body(report_code="RPT_DAILY", title="门店经营日报")
     parsed = parse_open_card_marker(body)

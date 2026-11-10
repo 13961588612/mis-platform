@@ -22,6 +22,12 @@ _CACHE_TTL_S = 5.0
 _CONFIDENCE_RE = re.compile(r"confidence=([0-9]+(?:\.[0-9]+)?)")
 
 
+def is_confirmed_report_task(text: str) -> bool:
+    """参数卡已提交后的硬派发句：禁止再当「打开日报」走 template-report。"""
+    raw = (text or "").strip()
+    return raw.startswith("【已确认模板报告任务】") or "禁止再打开参数卡" in raw
+
+
 def _elapsed_ms(started: float) -> int:
     return max(0, int((perf_counter() - started) * 1000))
 
@@ -360,6 +366,9 @@ async def resolve_intent_route(
     """
     cfg = config if config is not None else load_intent_router_config(agent_id)
     if cfg is None or not cfg.enabled or cfg.engine == "off":
+        return None
+    # 提交后任务句含「日报/模板报告」，关键词会再次命中开卡 Worker
+    if is_confirmed_report_task(user_text):
         return None
 
     if cfg.engine == "rules":

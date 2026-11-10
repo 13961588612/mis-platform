@@ -1,6 +1,6 @@
 # Copilot 语音输入（云端转写）
 
-> 状态：规划已定，实现跟本文。最后更新：2026-11-10  
+> 状态：已按本文落地（Copilot 麦克风 + BFF/ai-platform 转写）。最后更新：2026-11-10  
 > 入口：管理台 [`CopilotPanel`](../../../frontend/mis-admin-web/src/components/chat/CopilotPanel.tsx) 输入区麦克风  
 > **不是** `agent/ai-platform-prd.md` P2-06（企业微信语音消息 + TTS 回复）。
 

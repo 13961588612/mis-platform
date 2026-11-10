@@ -17,6 +17,7 @@ from src.intent_router.service import (
     format_conversation_context_for_jev,
     format_coordinator_route_hint,
     format_router_skill_hint,
+    is_confirmed_report_task,
     resolve_intent_route,
 )
 
@@ -95,6 +96,38 @@ async def test_jev_step_uses_intent_detect() -> None:
 async def test_resolve_disabled_returns_none() -> None:
     cfg = IntentRouterConfig(enabled=False, engine="rules")
     assert await resolve_intent_route("spm-report", "门店", config=cfg) is None
+
+
+def test_is_confirmed_report_task() -> None:
+    assert is_confirmed_report_task(
+        "【已确认模板报告任务】参数已齐，禁止再打开参数卡或走 template-report；请按「日报」"
+    )
+    assert not is_confirmed_report_task("打开宜兴城中店日报")
+
+
+@pytest.mark.asyncio
+async def test_confirmed_task_skips_daily_keyword_open_card() -> None:
+    cfg = IntentRouterConfig(
+        enabled=True,
+        engine="rules",
+        on_fail="none",
+        rules=[
+            IntentRule(
+                id="daily",
+                when=IntentWhen(type="keyword", any=["日报", "模板报告"]),
+                then=IntentThen(worker_id="template-report", intent="template_report"),
+            )
+        ],
+    )
+    hit = await resolve_intent_route("mis-copilot", "给我出日报", config=cfg)
+    assert hit is not None
+    assert hit.worker_id == "template-report"
+    skip = await resolve_intent_route(
+        "mis-copilot",
+        "【已确认模板报告任务】参数已齐，禁止再打开参数卡或走 template-report；请按「日报」成文。",
+        config=cfg,
+    )
+    assert skip is None
 
 
 def test_format_hints() -> None:

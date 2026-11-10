@@ -210,6 +210,8 @@ if (hasPermission('system:user:edit')) { ... }
 
 报告 execute 旁路结果写入会话：`POST /api/v1/agent-ops/sessions/{id}/transcript`（sys_api **93231** / code **00920078**，V162；绑 `agent:chat:use` 92032 与问数旗舰页 93040）。
 
+Copilot 语音转写：`POST /api/v1/agent-ops/speech/transcribe`（sys_api **93233** / code **00920079**，V167；绑 `agent:chat:use` 92032）。音频不进会话附件。
+
 运行时业务码：**40321** = 无权限或必要参数无可选项（前端不插参数卡）。
 
 分类 API：`sys_api` **92980–92983** / `sys_menu_api` **92984–92987**（V148）。

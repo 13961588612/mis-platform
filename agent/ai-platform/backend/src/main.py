@@ -556,6 +556,7 @@ def create_app() -> FastAPI:
     from src.api.routes.push import router as push_router
     from src.api.routes.session import router as session_router
     from src.api.routes.skill import router as skill_router
+    from src.api.routes.speech import router as speech_router
 
     app.include_router(agent_router, prefix="/api/v1")
     app.include_router(agent_config_files_router, prefix="/api/v1")
@@ -564,6 +565,7 @@ def create_app() -> FastAPI:
     # T04 O1f：企微多 Bot 管理（#48–#54），BFF /agent-ops/channels/** 透传至此
     app.include_router(channels_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")
+    app.include_router(speech_router, prefix="/api/v1")
     app.include_router(skill_router, prefix="/api/v1/skills", tags=["skills"])
     app.include_router(mcp_router, prefix="/api/v1/mcp", tags=["mcp"])
     app.include_router(admin_router, prefix="/api/v1")
