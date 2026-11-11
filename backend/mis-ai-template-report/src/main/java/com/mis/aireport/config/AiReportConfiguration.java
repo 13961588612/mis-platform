@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@EnableConfigurationProperties(SpmBigDataProperties.class)
+@EnableConfigurationProperties({SpmBigDataProperties.class, BailianProperties.class})
 public class AiReportConfiguration {
 
     @Bean

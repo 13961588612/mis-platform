@@ -251,6 +251,17 @@ async def test_platform_skill_tool_delegates_model_instance(
     assert arguments.name == "member.coupons-account"
 
 
+def test_skill_tool_accepts_legacy_daily_report_alias() -> None:
+    tool = PlatformSkillTool(
+        allowed_skill_ids=[
+            "sm-shop-ops-diary-report",
+            "sm-report-router",
+        ]
+    )
+    parsed = tool.input_model(name="sm-shop-ops-daily-report")
+    assert parsed.name == "sm-shop-ops-diary-report"
+
+
 def test_create_agent_source_registry_registers_platform_skill_tool() -> None:
     registry = create_agent_source_registry(
         None, allowed_skill_ids=["member.profile"]

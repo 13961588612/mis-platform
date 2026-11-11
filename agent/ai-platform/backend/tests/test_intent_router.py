@@ -138,6 +138,9 @@ def test_format_hints() -> None:
     diary_hint = format_router_skill_hint("sm-shop-ops-diary-report")
     assert "sm-shop-ops-diary-report" in diary_hint
     assert "其它" in diary_hint
+    legacy_hint = format_router_skill_hint("sm-shop-ops-daily-report")
+    assert "sm-shop-ops-diary-report" in legacy_hint
+    assert "sm-shop-ops-daily-report" not in legacy_hint
     hint = format_coordinator_route_hint(worker_id="spm-report", intent="spm_report")
     assert "spm-report" in hint
     assert "spm_report" in hint

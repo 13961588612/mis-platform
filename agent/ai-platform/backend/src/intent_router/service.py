@@ -97,7 +97,9 @@ def clear_intent_router_cache(agent_id: str | None = None) -> None:
 
 def format_router_skill_hint(router_skill: str) -> str:
     """注入 turn_reminder 的强制加载提示（Worker）。"""
-    sid = (router_skill or "").strip()
+    from src.skills.skill_id_aliases import canonicalize_skill_id
+
+    sid = str(canonicalize_skill_id((router_skill or "").strip()) or "").strip()
     if not sid:
         return ""
     if sid == "sm-report-router":

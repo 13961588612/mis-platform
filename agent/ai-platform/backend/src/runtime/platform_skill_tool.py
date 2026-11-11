@@ -13,13 +13,14 @@ OpenHarness 原生 ``SkillTool`` 的入参描述是自由文本 ``name``，且
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence
+from typing import Annotated, Any, Literal, Sequence
 
 from openharness.skills import load_skill_registry
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from openharness.tools.skill_tool import SkillTool
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, BeforeValidator, Field, create_model, field_validator
 
+from src.skills.skill_id_aliases import canonicalize_skill_id
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.platform_skill_tool")
@@ -41,6 +42,11 @@ class PlatformSkillToolInput(BaseModel):
         ),
     )
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _canonicalize_name(cls, value: Any) -> Any:
+        return canonicalize_skill_id(value)
+
 
 def _build_input_model(allowed_ids: Sequence[str]) -> type[BaseModel]:
     """把 ``name`` 收窄为启用技能的 ``Literal`` 枚举。"""
@@ -50,12 +56,13 @@ def _build_input_model(allowed_ids: Sequence[str]) -> type[BaseModel]:
 
     literal_type: Any = Literal[tuple(ids)]  # type: ignore[valid-type]
     id_list = ", ".join(ids)
+    annotated = Annotated[literal_type, BeforeValidator(canonicalize_skill_id)]
     return create_model(  # type: ignore[call-overload]
         "PlatformSkillToolInput",
         __base__=PlatformSkillToolInput,
         __module__=PlatformSkillToolInput.__module__,
         name=(
-            literal_type,
+            annotated,
             Field(
                 ...,
                 description=(

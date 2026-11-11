@@ -9,6 +9,7 @@ import com.mis.aireport.api.dto.AiReportDefSaveRequest;
 import com.mis.aireport.api.dto.AiReportDefVO;
 import com.mis.aireport.api.dto.AiWorkflowPlatformSaveRequest;
 import com.mis.aireport.api.dto.AiWorkflowPlatformVO;
+import com.mis.aireport.domain.WorkflowPlatformCodes;
 import com.mis.aireport.domain.entity.AiParamSource;
 import com.mis.aireport.domain.entity.AiReportAcl;
 import com.mis.aireport.domain.entity.AiReportCategory;
@@ -217,7 +218,7 @@ public class AiReportAdminService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "报告编号已存在: " + code);
         }
         List<Map<String, Object>> slots = normalizeAndValidateSlots(dto.slots());
-        validateWorkflowFields(dto.useAiWorkflow(), dto.workflowPlatformCode(), dto.workflowCode());
+        validateWorkflowFields(dto.useAiWorkflow(), dto.workflowPlatformCode(), dto.workflowCode(), dto.workflowKey());
         if (dto.categoryId() != null) {
             ensureCategoryExists(dto.categoryId());
         }
@@ -243,7 +244,7 @@ public class AiReportAdminService {
             }
         });
         List<Map<String, Object>> slots = normalizeAndValidateSlots(dto.slots());
-        validateWorkflowFields(dto.useAiWorkflow(), dto.workflowPlatformCode(), dto.workflowCode());
+        validateWorkflowFields(dto.useAiWorkflow(), dto.workflowPlatformCode(), dto.workflowCode(), dto.workflowKey());
         if (dto.categoryId() != null) {
             ensureCategoryExists(dto.categoryId());
         }
@@ -311,9 +312,12 @@ public class AiReportAdminService {
                 ? dto.workflowPlatformCode().trim() : null);
         r.setWorkflowCode(useWf && StringUtils.hasText(dto.workflowCode())
                 ? dto.workflowCode().trim() : null);
+        r.setWorkflowKey(useWf && StringUtils.hasText(dto.workflowKey())
+                ? dto.workflowKey().trim() : null);
         String agentId = StringUtils.hasText(dto.targetAgentId()) ? dto.targetAgentId().trim() : null;
         String skillId = StringUtils.hasText(dto.targetSkillId()) ? dto.targetSkillId().trim() : null;
-        if (useWf && !StringUtils.hasText(agentId)) {
+        boolean bailian = WorkflowPlatformCodes.isAliyunBailian(dto.workflowPlatformCode());
+        if (useWf && !bailian && !StringUtils.hasText(agentId)) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "启用 AI 工作流时须填写目标智能体 target_agent_id");
         }
         if (StringUtils.hasText(skillId) && !StringUtils.hasText(agentId)) {
@@ -366,16 +370,23 @@ public class AiReportAdminService {
         return out;
     }
 
-    private void validateWorkflowFields(Boolean useAiWorkflow, String platformCode, String workflowCode) {
+    private void validateWorkflowFields(
+            Boolean useAiWorkflow, String platformCode, String workflowCode, String workflowKey) {
         if (!Boolean.TRUE.equals(useAiWorkflow)) {
             return;
-        }
-        if (!StringUtils.hasText(workflowCode)) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "启用工作流时必须填写 workflow_code");
         }
         if (StringUtils.hasText(platformCode)
                 && workflowPlatformRepository.findByPlatformCode(platformCode.trim()).isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "未知工作流平台: " + platformCode);
+        }
+        if (WorkflowPlatformCodes.isAliyunBailian(platformCode)) {
+            if (!StringUtils.hasText(workflowKey)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "选阿里百炼时必须填写 workflow_key（应用 APP_ID）");
+            }
+            return;
+        }
+        if (!StringUtils.hasText(workflowCode)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "启用工作流时必须填写 workflow_code");
         }
     }
 
@@ -473,6 +484,7 @@ public class AiReportAdminService {
         vo.setUseAiWorkflow(r.getUseAiWorkflow() != null && r.getUseAiWorkflow() == 1);
         vo.setWorkflowPlatformCode(r.getWorkflowPlatformCode());
         vo.setWorkflowCode(r.getWorkflowCode());
+        vo.setWorkflowKey(r.getWorkflowKey());
         vo.setTargetAgentId(r.getTargetAgentId());
         vo.setTargetSkillId(r.getTargetSkillId());
         vo.setPromptTemplate(r.getPromptTemplate());

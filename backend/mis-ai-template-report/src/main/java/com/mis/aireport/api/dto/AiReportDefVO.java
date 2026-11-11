@@ -19,6 +19,7 @@ public class AiReportDefVO {
     private Boolean useAiWorkflow;
     private String workflowPlatformCode;
     private String workflowCode;
+    private String workflowKey;
     private String targetAgentId;
     private String targetSkillId;
     private String promptTemplate;
@@ -103,6 +104,15 @@ public class AiReportDefVO {
 
     public void setWorkflowCode(String workflowCode) {
         this.workflowCode = workflowCode;
+    }
+
+    @JsonProperty("workflow_key")
+    public String getWorkflowKey() {
+        return workflowKey;
+    }
+
+    public void setWorkflowKey(String workflowKey) {
+        this.workflowKey = workflowKey;
     }
 
     @JsonProperty("target_agent_id")

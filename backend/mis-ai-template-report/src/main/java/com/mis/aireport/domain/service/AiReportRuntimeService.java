@@ -1,6 +1,8 @@
 package com.mis.aireport.domain.service;
 
+import com.mis.aireport.client.BailianAppClient;
 import com.mis.aireport.client.IamUserClient;
+import com.mis.aireport.domain.WorkflowPlatformCodes;
 import com.mis.aireport.domain.entity.AiParamSource;
 import com.mis.aireport.domain.entity.AiReportAcl;
 import com.mis.aireport.domain.entity.AiReportCategory;
@@ -58,6 +60,7 @@ public class AiReportRuntimeService {
     private final IamUserClient iamUserClient;
     private final ReportParamsHasher paramsHasher;
     private final ReportCacheTokenService cacheTokenService;
+    private final BailianAppClient bailianAppClient;
 
     public AiReportRuntimeService(
             AiReportCategoryRepository categoryRepository,
@@ -69,7 +72,8 @@ public class AiReportRuntimeService {
             ParamSourceHandlerRegistry handlerRegistry,
             IamUserClient iamUserClient,
             ReportParamsHasher paramsHasher,
-            ReportCacheTokenService cacheTokenService) {
+            ReportCacheTokenService cacheTokenService,
+            BailianAppClient bailianAppClient) {
         this.categoryRepository = categoryRepository;
         this.reportDefRepository = reportDefRepository;
         this.aclRepository = aclRepository;
@@ -80,6 +84,7 @@ public class AiReportRuntimeService {
         this.iamUserClient = iamUserClient;
         this.paramsHasher = paramsHasher;
         this.cacheTokenService = cacheTokenService;
+        this.bailianAppClient = bailianAppClient;
     }
 
     @Transactional(readOnly = true)
@@ -210,7 +215,7 @@ public class AiReportRuntimeService {
         return out;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Map<String, Object> execute(Map<String, Object> body) {
         Long userId = requireUserId();
         String reportCode = String.valueOf(body.getOrDefault("reportCode", body.getOrDefault("report_code", ""))).trim();
@@ -257,6 +262,28 @@ public class AiReportRuntimeService {
                 hit.put("status", "ok");
                 return hit;
             }
+        }
+
+        if (useWf && WorkflowPlatformCodes.isAliyunBailian(def.getWorkflowPlatformCode())) {
+            String appId = def.getWorkflowKey() == null ? "" : def.getWorkflowKey().trim();
+            if (!StringUtils.hasText(appId)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "报告未配置工作流 key（百炼 APP_ID）");
+            }
+            String prompt = renderPrompt(def, normalized);
+            String contentMd = bailianAppClient.complete(appId, prompt);
+            persistGeneratedContent(def, normalized, paramsHash, userId, contentMd, "aliyun-bailian", null);
+            Map<String, Object> hit = new LinkedHashMap<>();
+            hit.put("mode", "cached");
+            hit.put("report_code", def.getReportCode());
+            hit.put("title", def.getTitle());
+            hit.put("params", normalized);
+            hit.put("content_md", contentMd);
+            hit.put("read_from_cache", false);
+            hit.put("save_to_cache", false);
+            hit.put("status", "ok");
+            hit.put("use_ai_workflow", true);
+            hit.put("workflow_platform_code", def.getWorkflowPlatformCode());
+            return hit;
         }
 
         if (useWf) {
@@ -345,6 +372,26 @@ public class AiReportRuntimeService {
         String paramsHash = paramsHasher.hash(normalized);
         cacheTokenService.parseAndVerify(token, def.getReportCode(), paramsHash, userId);
 
+        AiReportResultCache row = persistGeneratedContent(
+                def, normalized, paramsHash, userId, contentMd, def.getTargetAgentId(), def.getTargetSkillId());
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("report_code", def.getReportCode());
+        out.put("params_hash", paramsHash);
+        out.put("cached_at", row.getCachedAt().toString());
+        out.put("expires_at", row.getExpiresAt().toString());
+        out.put("status", "ok");
+        return out;
+    }
+
+    private AiReportResultCache persistGeneratedContent(
+            AiReportDef def,
+            Map<String, Object> normalized,
+            String paramsHash,
+            Long userId,
+            String contentMd,
+            String agentId,
+            String skillId) {
         Instant now = Instant.now();
         int ttlHours = def.getCacheTtlHours() != null && def.getCacheTtlHours() > 0
                 ? def.getCacheTtlHours() : 24;
@@ -360,19 +407,11 @@ public class AiReportRuntimeService {
         }
         row.setParamsJson(new LinkedHashMap<>(normalized));
         row.setContentMd(contentMd);
-        row.setAgentId(def.getTargetAgentId());
-        row.setSkillId(def.getTargetSkillId());
+        row.setAgentId(agentId);
+        row.setSkillId(skillId);
         row.setExpiresAt(now.plus(ttlHours, ChronoUnit.HOURS));
         row.setUpdatedAt(now);
-        resultCacheRepository.save(row);
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("report_code", def.getReportCode());
-        out.put("params_hash", paramsHash);
-        out.put("cached_at", row.getCachedAt().toString());
-        out.put("expires_at", row.getExpiresAt().toString());
-        out.put("status", "ok");
-        return out;
+        return resultCacheRepository.save(row);
     }
 
     private Map<String, Object> normalizeAndValidateParams(

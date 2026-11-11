@@ -44,6 +44,10 @@ public class AiReportDef {
     @Column(name = "workflow_code", length = 128)
     private String workflowCode;
 
+    /** 百炼 APP_ID；非密钥。 */
+    @Column(name = "workflow_key", length = 128)
+    private String workflowKey;
+
     @Column(name = "target_agent_id", length = 128)
     private String targetAgentId;
 
@@ -142,6 +146,14 @@ public class AiReportDef {
 
     public void setWorkflowCode(String workflowCode) {
         this.workflowCode = workflowCode;
+    }
+
+    public String getWorkflowKey() {
+        return workflowKey;
+    }
+
+    public void setWorkflowKey(String workflowKey) {
+        this.workflowKey = workflowKey;
     }
 
     public String getTargetAgentId() {

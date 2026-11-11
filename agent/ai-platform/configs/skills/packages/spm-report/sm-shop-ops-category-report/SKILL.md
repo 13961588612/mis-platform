@@ -2,7 +2,7 @@
 name: sm-shop-ops-category-report
 skill_id: sm-shop-ops-category-report
 description: 门店品类管理主题报告。独立服务：结构/四象限/ABC/生命周期等。不调用其它 ops-report。门店促销全文走 promo；门店库存全文走 inventory。
-version: "1.3.0"
+version: "1.3.1"
 category: supermarket
 tags:
   - 超市
@@ -59,22 +59,22 @@ required_permissions:
 ## {店名} · {时间标签} · 品类管理（{大类|中类|…}）
 
 ### 品类结构概览
-| 类目 | 营业额 | 店内占比 | 前台毛利率 | 损耗率 | 促销销售占比 |
-|------|--------|----------|------------|--------|--------------|
+| 类目 | 主营销售 | 店内占比 | 前台毛利率（去税） | 损耗率 | 促销销售占比 |
+|------|----------|----------|--------------------|--------|--------------|
 | … | **xx.xx 万元** | **x.x%** | **x.x%** | … | … |
 
-> 按营业额占比降序，**最多 TOP10**；其余「另有 N 个类目未展开」。无 overview 则整省。
+> 按**主营销售**占比降序，**最多 TOP10**；其余「另有 N 个类目未展开」。无 overview 则整省。本表只有利率、不加前台毛利额列。
 
 ### 类目角色四象限
-| 角色 | 类目数 | 营业额合计 | 代表类目（≤3） |
-|------|--------|------------|----------------|
+| 角色 | 类目数 | 主营销售合计 | 代表类目（≤3） |
+|------|--------|--------------|----------------|
 | 利润品 / 客流品 / 结构品 / 问题品 | … | … | … |
 
-> 划线：本店中位数（`shareMedian` / `marginRateMedian`）。无 RoleMatrix 则整省。
+> 划线：本店中位数（`shareMedian` / `marginRateMedian`）。角色划分跟接口；合计金额按各类目 `mainSaleAmt` 加总。无 RoleMatrix 则整省。
 
 ### 类目 ABC
-| 分级 | 类目数 | 营业额累计占比 | 代表类目（≤3） |
-|------|--------|----------------|----------------|
+| 分级 | 类目数 | 主营销售累计占比 | 代表类目（≤3） |
+|------|--------|------------------|----------------|
 | A / B / C | … | … | … |
 
 > **必写局限一句**：类目级非单品；动销率/供应商集中度不覆盖。无 Abc 则整省。
@@ -94,9 +94,9 @@ required_permissions:
 
 | 章节 | 主要字段 |
 |------|----------|
-| 结构概览 | `categoryName` / `turnoverAmt` / `turnoverShare` / `frontMarginRate` / `lossRateAbs` / `promoSalesRatio` |
-| 四象限 | `role` / `turnoverShare` / `frontMarginRate` / `shareMedian` / `marginRateMedian` / `summary.roleCounts` / `roleTurnoverAmt` |
-| ABC | `abcClass` / `rank` / `cumulativeShare` / `summary.classCounts` / `classTurnoverShare` |
+| 结构概览 | `categoryName` / `mainSaleAmt` / 店内占比（主营自算） / `frontMarginRateExTax` / `lossRateAbs` / `promoSalesRatio` |
+| 四象限 | `role`（接口划分）/ 主营销售合计（P1 `mainSaleAmt` 按角色加总）/ `shareMedian` / `marginRateMedian` / `summary.roleCounts` |
+| ABC | 按 P1 `mainSaleAmt` 降序自算累计占比；`abcClass` 仅作对照 |
 | 生命周期 | `newMainSaleAmt` / `newMainShare` / `key*` / `top*` / `clear*` |
 | 经营方式 | `venture*` / `joint*` / `rent*` |
 | 品类库存 | 同门店库存字段 + `categoryId` / `categoryName` |

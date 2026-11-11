@@ -57,6 +57,8 @@ export interface AiReportDef {
   use_ai_workflow: boolean;
   workflow_platform_code?: string | null;
   workflow_code?: string | null;
+  /** 百炼 APP_ID；非 API Key */
+  workflow_key?: string | null;
   target_agent_id?: string | null;
   target_skill_id?: string | null;
   prompt_template?: string | null;

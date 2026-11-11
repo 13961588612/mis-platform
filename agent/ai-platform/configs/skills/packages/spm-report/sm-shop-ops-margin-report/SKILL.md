@@ -2,7 +2,7 @@
 name: sm-shop-ops-margin-report
 skill_id: sm-shop-ops-margin-report
 description: 门店毛利与损耗专项主题报告。独立服务：瀑布/生鲜/低毛利。不调用其它 ops-report。晨会毛利损耗两列表走 overview-report。
-version: "1.4.0"
+version: "1.4.1"
 category: supermarket
 tags:
   - 超市
@@ -42,7 +42,7 @@ required_permissions:
 
 | 类型 | 展示 |
 |------|------|
-| **金额**（营业额/成本/毛利额/费用/盈亏/低毛利主营等） | 元÷10000 → **万元**，**2 位小数**，后缀 `万元` |
+| **金额**（主营销售/成本/毛利额/费用/盈亏/低毛利主营等） | 元÷10000 → **万元**，**2 位小数**，后缀 `万元` |
 | 毛利率 / 占比 / 损耗率 | 百分数，1 位小数 + `%`（接口 0～1 则 ×100） |
 
 **禁止**：把损耗说成「吃掉了多少毛利」；未确认阈值喊「异常」；臆造盘点尖峰日期。禁止 HTML；勿对用户说字段名。
@@ -57,18 +57,18 @@ required_permissions:
 
 | 列 | 内容 |
 |----|------|
-| **环节** | 营业额 / 销售成本 / 前台毛利 / 各调整项 / 综合毛利 |
+| **环节** | 主营销售 / 销售成本 / 前台毛利去税 / 各调整项 / 综合毛利 |
 | **本期金额** | 接口原值换算万元（绝对值展示亦可，但影响额必须带符号语义） |
 | **对毛利** | `🟢增` / `🔴减` / `—`（节点行） |
 | **影响额** | 增减多少毛利：`+x.xx 万元` / `−x.xx 万元` / `—` |
 
-### 2.2 默认方向（含税主口径；按业务语义，勿改口胡说「吃毛利」）
+### 2.2 默认方向（**去税主口径**；按业务语义，勿改口胡说「吃毛利」）
 
 | 环节 | 对毛利 | 影响额怎么写 |
 |------|--------|--------------|
-| 营业额 | — | —（起点） |
-| 销售成本 | 🔴减（相对营业额，构成前台毛利） | `−` 成本额 |
-| 前台毛利 | — | 节点：营业额 − 销售成本（有数可一句验算） |
+| 主营销售 | — | —（起点，`mainSaleAmt`） |
+| 销售成本 | 🔴减（相对主营销售，构成前台毛利去税） | `−` `cogsAmtExTax` |
+| 前台毛利去税 | — | 节点：主营销售 − 去税成本（有数可一句验算） |
 | 后台费用 | 🔴减综合毛利 | `−` 费用额 |
 | 供应商分担 | 🟢增综合毛利 | `+` 分担额 |
 | 配送加价 | 🟢增综合毛利 | `+` 加价额 |
@@ -83,10 +83,10 @@ required_permissions:
 
 在综合毛利后（或表下）固定一行：
 
-- **前台→综合差额** = 综合毛利 − 前台毛利（万元，带 `+`/`−`）
+- **前台→综合差额** = 综合毛利 − 前台毛利去税（万元，带 `+`/`−`）
 - 用 1 句点出：**差额主要来自哪 1～2 个影响额最大的调整项**（按影响额绝对值排序）
 
-去税口径仅当用户追问或主表注明「去税并列」时再附；默认含税。
+调整项与综合毛利默认用 `*ExTax` / `comprehensiveMarginAmtExTax`。用户点名含税再并列含税列。
 
 ---
 
@@ -98,9 +98,9 @@ required_permissions:
 ### 毛利瀑布
 | 环节 | 本期金额 | 对毛利 | 影响额 |
 |------|----------|--------|--------|
-| 营业额 | **232.56 万元** | — | — |
+| 主营销售 | **210.00 万元** | — | — |
 | 销售成本 | **204.06 万元** | 🔴减 | **−204.06 万元** |
-| 前台毛利 | **28.50 万元** | — | — |
+| 前台毛利去税 | **28.50 万元** | — | — |
 | 后台费用 | **3.20 万元** | 🔴减 | **−3.20 万元** |
 | 供应商分担 | **5.10 万元** | 🟢增 | **+5.10 万元** |
 | 配送加价 | **1.20 万元** | 🟢增 | **+1.20 万元** |
@@ -108,7 +108,7 @@ required_permissions:
 | 股权调整 | **0.40 万元** | 🟢增 | **+0.40 万元** |
 | 综合毛利 | **31.20 万元** | — | — |
 
-**前台→综合差额：** **+2.70 万元**（综合 − 前台）。主要来自供应商分担（+5.10），被后台费用（−3.20）等部分抵消。
+**前台→综合差额：** **+2.70 万元**（综合 − 前台毛利去税）。主要来自供应商分担（+5.10），被后台费用（−3.20）等部分抵消。
 
 > 无瀑布结果则整节省略。
 
@@ -117,9 +117,8 @@ required_permissions:
 
 | 指标 | 本期 | 较上一周 |
 |------|------|----------|
-| 生鲜营业额 / 占门店 | **xx.xx 万元** / **x.x%** | 金额 `%`；占比 `pp`（可写在同一格，如 `↑ +x% / ↓ -x.xpp`） |
-| 生鲜主营 / 占门店主营 | **xx.xx 万元** / **x.x%** | **金额 `%` + 占比 `pp`，禁止只填金额或只填 `—`** |
-| 生鲜前台毛利 | **xx.xx 万元** | 金额 `%` |
+| 生鲜主营销售 / 占门店主营 | **xx.xx 万元** / **x.x%** | **金额 `%` + 占比 `pp`，禁止只填金额或只填 `—`** |
+| 生鲜前台毛利去税 | **xx.xx 万元** | 金额 `%` |
 | 生鲜盈亏（含税） | **±x.xx 万元** | 上期非 0：金额 `%`；上期≈0：写 `上期 ±x.xx 万元`（防除零） |
 | 常规盈亏（含税） | **±x.xx 万元** | 同上 |
 
@@ -131,14 +130,12 @@ required_permissions:
 
 | 展示 | 字段 | 对比 |
 |------|------|------|
-| 生鲜营业额 | `freshTurnoverAmt` | 金额相对差 `%` |
-| 占门店营业额 | `freshSalesShare` | `pp` |
-| **生鲜主营** | `freshMainSaleAmt` | 金额相对差 `%` |
+| **生鲜主营销售** | `freshMainSaleAmt` | 金额相对差 `%` |
 | **占门店主营** | `freshMainShare` | `pp` |
-| 生鲜前台毛利 | `freshFrontMarginAmt` | 金额相对差 `%` |
+| 生鲜前台毛利去税 | `freshFrontMarginAmtExTax` | 金额相对差 `%` |
 | 生鲜/常规盈亏 | `freshPnLAmtTax` / `regularPnLAmtTax` | 见上（除零用上期绝对值） |
 
-**禁止**：两期都有回包时，「生鲜主营 / 占门店主营」对比格填 `—`（即使营业额占比已有 `pp`，主营占比仍要单独算）。  
+**禁止**：两期都有回包时，「生鲜主营销售 / 占门店主营」对比格填 `—`。禁止再写「生鲜营业额」行。  
 `—` **仅**当该对比期没有 `getFreshOverview` 回包。
 
 ### 低毛利预警
@@ -150,7 +147,7 @@ required_permissions:
 > **仅 week/month**。无 Alert 或日粒度 → **整省或注明「仅支持周/月」**；禁止为补此节改查 week。
 
 ### 毛利损耗快览（可选）
-有 overview 且需环比对照时：前台/综合毛利额·率、损耗额·率 3～6 行；有瀑布时从简。
+有 overview 且需环比对照时：前台毛利去税·前台毛利率（去税）、综合毛利额·率、损耗额·率 3～6 行；有瀑布时从简。
 
 ### AI 诊断小结
 2～4 句；最多 3 个「核心关注」（可点名「某某调整项减毛利 x 万」）。
@@ -164,10 +161,10 @@ required_permissions:
 
 | 章节 | 主要字段 |
 |------|----------|
-| 瀑布 | `turnoverAmt` → `cogsAmtTax` → `frontMarginAmt` → `backendFeeAmtTax` / `supplierShareAmtTax` / `deliveryMarkupAmtTax` / `logisticsAllocAmtTax` / `equityAdjMarginAmtTax` → `comprehensiveMarginAmt`（及 `*ExTax`） |
-| 生鲜 | `freshTurnoverAmt` / `freshMainSaleAmt` / `freshSalesShare` / `freshMainShare` / `freshFrontMarginAmt` / `freshPnLAmtTax` / `regularPnLAmtTax` |
+| 瀑布 | `mainSaleAmt` → `cogsAmtExTax` → `frontMarginAmtExTax` → `backendFeeAmtExTax` / `supplierShareAmtExTax` / `deliveryMarkupAmtExTax` / `logisticsAllocAmtExTax` / `equityAdjMarginAmtExTax` → `comprehensiveMarginAmtExTax` |
+| 生鲜 | `freshMainSaleAmt` / `freshMainShare` / `freshFrontMarginAmtExTax` / `freshPnLAmtTax` / `regularPnLAmtTax` |
 | 低毛利 | `lowMarginMainSaleAmt` / `lowMarginMainShare` / `mainSaleAmt` |
-| 快览 | overview：`frontMarginAmt` / `comprehensiveMarginAmt` / `*Rate` / `lossAmtAbs` / `lossRateAbs` |
+| 快览 | overview：`frontMarginAmtExTax` / `frontMarginRateExTax` / `comprehensiveMarginAmt` / `*Rate` / `lossAmtAbs` / `lossRateAbs` |
 
 ---
 
@@ -189,4 +186,4 @@ required_permissions:
 - [ ] 未查数；未编造未取到章节  
 - [ ] 金额万元 2 位；未说损耗吃毛利  
 - [ ] 日粒度未硬编低毛利预警、**未改查 week Alert**  
-- [ ] 已取上期 Fresh 时：生鲜主营金额与占门店主营 `pp` 对比列均不是 `—`  
+- [ ] 已取上期 Fresh 时：生鲜主营销售金额与占门店主营 `pp` 对比列均不是 `—`  

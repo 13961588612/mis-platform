@@ -15,6 +15,7 @@ public record AiReportDefSaveRequest(
         @JsonProperty("use_ai_workflow") Boolean useAiWorkflow,
         @JsonProperty("workflow_platform_code") String workflowPlatformCode,
         @JsonProperty("workflow_code") String workflowCode,
+        @JsonProperty("workflow_key") String workflowKey,
         @JsonProperty("target_agent_id") String targetAgentId,
         @JsonProperty("target_skill_id") String targetSkillId,
         @JsonProperty("prompt_template") String promptTemplate,

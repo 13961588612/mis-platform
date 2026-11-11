@@ -206,6 +206,7 @@ export default function IqdReportAdminPage() {
       use_ai_workflow: true,
       workflow_platform_code: platforms[0]?.platform_code ?? null,
       workflow_code: null,
+      workflow_key: null,
       enabled: true,
       sort_order: 0,
       target_agent_id: DEFAULT_TARGET_AGENT_ID,
@@ -233,9 +234,16 @@ export default function IqdReportAdminPage() {
       toast.error('请填写报告编号与名称');
       return;
     }
-    if (editingReport.use_ai_workflow && !editingReport.workflow_code?.trim()) {
-      toast.error('启用 AI 工作流时须填写工作流编号');
-      return;
+    if (editingReport.use_ai_workflow) {
+      const bailian = editingReport.workflow_platform_code === 'aliyun-bailian';
+      if (bailian && !editingReport.workflow_key?.trim()) {
+        toast.error('选阿里百炼时须填写工作流 key（APP_ID）');
+        return;
+      }
+      if (!bailian && !editingReport.workflow_code?.trim()) {
+        toast.error('启用 AI 工作流时须填写工作流编号');
+        return;
+      }
     }
     const body = {
       report_code: editingReport.report_code.trim(),
@@ -246,6 +254,7 @@ export default function IqdReportAdminPage() {
       use_ai_workflow: editingReport.use_ai_workflow,
       workflow_platform_code: editingReport.workflow_platform_code || null,
       workflow_code: editingReport.workflow_code || null,
+      workflow_key: editingReport.workflow_key || null,
       target_agent_id: editingReport.target_agent_id || null,
       target_skill_id: editingReport.target_skill_id || null,
       prompt_template: editingReport.prompt_template || null,
@@ -286,6 +295,7 @@ export default function IqdReportAdminPage() {
         use_ai_workflow: r.use_ai_workflow,
         workflow_platform_code: r.workflow_platform_code ?? null,
         workflow_code: r.workflow_code ?? null,
+        workflow_key: r.workflow_key ?? null,
         target_agent_id: r.target_agent_id ?? null,
         target_skill_id: r.target_skill_id ?? null,
         prompt_template: r.prompt_template ?? null,
@@ -1230,13 +1240,32 @@ function ReportEditor({
               占位符 {'{{wire_key}}'} / {'{{title}}'} / {'{{storeName}}'} 等
             </p>
           </div>
-          <div className="grid gap-2 sm:col-span-2">
-            <Label>工作流编号（兼容旧字段）</Label>
+          <div className="grid gap-2">
+            <Label>
+              工作流编号
+              {value.workflow_platform_code === 'aliyun-bailian' ? '（可选）' : ''}
+            </Label>
             <Input
               value={value.workflow_code || ''}
               onChange={(e) => onChange({ ...value, workflow_code: e.target.value })}
-              placeholder="可选"
+              placeholder="控制台应用名或内部编号"
             />
+          </div>
+          <div className="grid gap-2">
+            <Label>
+              工作流 key
+              {value.workflow_platform_code === 'aliyun-bailian' ? '（必填，APP_ID）' : ''}
+            </Label>
+            <Input
+              value={value.workflow_key || ''}
+              onChange={(e) => onChange({ ...value, workflow_key: e.target.value })}
+              placeholder="阿里百炼应用 ID"
+            />
+            {value.workflow_platform_code === 'aliyun-bailian' ? (
+              <p className="text-xs text-muted-foreground">
+                对应 DashScope {'apps/{APP_ID}/completion'}；API Key 由平台环境变量配置，勿填在此
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}
