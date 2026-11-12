@@ -1,0 +1,55 @@
+server:
+  port: 8109
+
+spring:
+  application:
+    name: mis-iqd
+  config:
+    # Boot 3 推荐：用 ConfigData import 拉 Nacos；imported 文档优先级高于本文件，
+    # 从而真正使用 mis-common 的 spring.datasource / redis（不必在 mis-iqd.env 配库）。
+    # Data ID 与控制台一致（无 .yaml 后缀）。MIS_REMOTE=false 时 optional 不阻断启动。
+    import:
+      - optional:nacos:mis-common?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+      - optional:nacos:${spring.application.name}?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+  cloud:
+    nacos:
+      config:
+        # import 解析时仍读这些项（与 bootstrap 对齐；env 可覆盖）
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+  # 仅 MIS_REMOTE=false 本地兜底；remote 时由上方 import 的 mis-common 覆盖
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10}
+    username: ${SPRING_DATASOURCE_USERNAME:${DB_USER:mis}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${DB_PASSWORD:mis123}}
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+mis:
+  iqd:
+    config-base-url: ${MIS_IQD_CONFIG_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.mis.iqd: DEBUG

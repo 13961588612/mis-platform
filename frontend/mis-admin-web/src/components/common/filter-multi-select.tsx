@@ -24,6 +24,7 @@ export function FilterMultiSelect({
   onChange,
   multiple = true,
   triggerClassName,
+  matchTriggerWidth = false,
 }: {
   options: FilterSelectOption[];
   value: unknown;
@@ -31,6 +32,8 @@ export function FilterMultiSelect({
   multiple?: boolean;
   /** 覆盖触发器高度/内边距，便于与同排 Input 对齐 */
   triggerClassName?: string;
+  /** 下拉面板宽度与触发器一致（默认固定 w-72，筛栏场景够用） */
+  matchTriggerWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const current: (string | number)[] = multiple
@@ -100,7 +103,10 @@ export function FilterMultiSelect({
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-72" align="start">
+      <PopoverContent
+        className={matchTriggerWidth ? 'w-[var(--radix-popover-trigger-width)]' : 'w-72'}
+        align="start"
+      >
         {multiple ? (
           <div className="mb-2 flex items-center gap-2">
             <button

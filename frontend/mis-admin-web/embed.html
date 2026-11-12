@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MIS AI Copilot 嵌入</title>
+    <!-- CSP 收紧（01-architecture.md §5.3）：仅同源脚本/样式；postMessage 鉴权不受 CSP 限制 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/embed/main.tsx"></script>
+  </body>
+</html>

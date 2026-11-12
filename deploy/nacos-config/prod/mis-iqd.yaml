@@ -1,0 +1,14 @@
+# Nacos config: mis-iqd (prod)
+# Service-only. DB/Redis come from shared Data ID mis-common.
+server:
+  port: 8109
+
+spring:
+  jpa:
+    hibernate:
+      # Tables from mis-migrator; override mis-common ddl-auto=none
+      ddl-auto: validate
+
+logging:
+  level:
+    com.mis.iqd: INFO

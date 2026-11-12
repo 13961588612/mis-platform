@@ -12,7 +12,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
 
 /**
  * 企微 Bot 域 BFF 端点（§4.3 #48–#54）。
@@ -83,5 +86,96 @@ public class AgentOpsChannelController {
     @GetMapping("/bots/health")
     public Result<JsonNode> healthBots() {
         return Result.ok(wecomFacade.healthBots());
+    }
+
+    // ==================================================================
+    // 企微用户身份绑定（wecom-user-binding-design.md §11）
+    //
+    // #59–#62 落在 ai-platform backend 的 /api/v1/channels/wecom/users**，
+    // 与 Bot 域同源；bind/unbind/verify = agent:wecom:user:manage。
+    // ==================================================================
+
+    /** #59 绑定列表（agent:wecom:user:list）。 */
+    @GetMapping("/users")
+    public Result<JsonNode> listBindings(@RequestParam Map<String, String> query) {
+        return Result.ok(wecomFacade.listWecomBindings(query));
+    }
+
+    /** #60 人工绑定（agent:wecom:user:manage）。 */
+    @PostMapping("/users/{corpId}/{wecomUserId}/bind")
+    public Result<JsonNode> bindUser(
+            @PathVariable String corpId,
+            @PathVariable String wecomUserId,
+            @RequestBody(required = false) JsonNode body) {
+        return Result.ok(wecomFacade.bindWecomUser(corpId, wecomUserId, body));
+    }
+
+    /** #61 解绑（置 disabled；agent:wecom:user:manage）。 */
+    @PostMapping("/users/{corpId}/{wecomUserId}/unbind")
+    public Result<JsonNode> unbindUser(
+            @PathVariable String corpId, @PathVariable String wecomUserId) {
+        return Result.ok(wecomFacade.unbindWecomUser(corpId, wecomUserId));
+    }
+
+    /** #62 校验（刷新 last_verified_at；agent:wecom:user:manage）。 */
+    @PostMapping("/users/{corpId}/{wecomUserId}/verify")
+    public Result<JsonNode> verifyUser(
+            @PathVariable String corpId, @PathVariable String wecomUserId) {
+        return Result.ok(wecomFacade.verifyWecomUser(corpId, wecomUserId));
+    }
+
+    /** #63 P5 同步回填（agent:wecom:user:manage）。 */
+    @PostMapping("/users/sync-backfill")
+    public Result<JsonNode> syncBackfill(@RequestParam Map<String, String> query) {
+        return Result.ok(wecomFacade.syncBackfillWecomBindings(query));
+    }
+
+    // ==================================================================
+    // 企微企业配置（方案 B：#64–#70，agent:wecom:manage）
+    // ==================================================================
+
+    /** #64 企业列表。 */
+    @GetMapping("/corps")
+    public Result<JsonNode> listCorps() {
+        return Result.ok(wecomFacade.listWecomCorps());
+    }
+
+    /** #65 新增企业。 */
+    @PostMapping("/corps")
+    public Result<JsonNode> createCorp(@RequestBody(required = false) JsonNode body) {
+        return Result.ok(wecomFacade.createWecomCorp(body));
+    }
+
+    /** #66 更新企业。 */
+    @PutMapping("/corps/{corpId}")
+    public Result<JsonNode> updateCorp(
+            @PathVariable String corpId, @RequestBody(required = false) JsonNode body) {
+        return Result.ok(wecomFacade.updateWecomCorp(corpId, body));
+    }
+
+    /** #67 删除企业（delete_secret=true 时一并清理密钥）。 */
+    @DeleteMapping("/corps/{corpId}")
+    public Result<JsonNode> deleteCorp(
+            @PathVariable String corpId, @RequestParam Map<String, String> query) {
+        return Result.ok(wecomFacade.deleteWecomCorp(corpId, query));
+    }
+
+    /** #68 写入 / 覆盖 corpsecret。 */
+    @PutMapping("/corps/{corpId}/secret")
+    public Result<JsonNode> setCorpSecret(
+            @PathVariable String corpId, @RequestBody(required = false) JsonNode body) {
+        return Result.ok(wecomFacade.setWecomCorpSecret(corpId, body));
+    }
+
+    /** #69 删除 corpsecret。 */
+    @DeleteMapping("/corps/{corpId}/secret")
+    public Result<JsonNode> deleteCorpSecret(@PathVariable String corpId) {
+        return Result.ok(wecomFacade.deleteWecomCorpSecret(corpId));
+    }
+
+    /** #70 连通性测试。 */
+    @PostMapping("/corps/{corpId}/test")
+    public Result<JsonNode> testCorp(@PathVariable String corpId) {
+        return Result.ok(wecomFacade.testWecomCorp(corpId));
     }
 }

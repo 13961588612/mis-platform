@@ -4,6 +4,9 @@ import com.mis.common.core.result.Result;
 import com.mis.org.dto.OrgCreateRequest;
 import com.mis.org.dto.OrgUpdateRequest;
 import com.mis.org.dto.OrgVO;
+import com.mis.org.dto.OrgVO;
+import com.mis.org.dto.UserDataSetScopeVO;
+import com.mis.org.service.DataSetScopeService;
 import com.mis.org.service.OrgService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,9 +28,11 @@ import java.util.Map;
 public class OrgController {
 
     private final OrgService orgService;
+    private final DataSetScopeService dataSetScopeService;
 
-    public OrgController(OrgService orgService) {
+    public OrgController(OrgService orgService, DataSetScopeService dataSetScopeService) {
         this.orgService = orgService;
+        this.dataSetScopeService = dataSetScopeService;
     }
 
     @GetMapping
@@ -59,6 +64,12 @@ public class OrgController {
     @PutMapping("/{id}")
     public Result<OrgVO> update(@PathVariable Long id, @Valid @RequestBody OrgUpdateRequest request) {
         return Result.ok(orgService.update(id, request));
+    }
+
+    /** Data scope view for IQD Worker. */
+    @GetMapping("/users/{userId}/data-scope")
+    public Result<UserDataSetScopeVO> userDataScope(@PathVariable Long userId) {
+        return Result.ok(dataSetScopeService.getUserDataSetScope(userId));
     }
 
     @DeleteMapping("/{id}")

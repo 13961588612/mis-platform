@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useState } from 'react';
 import { PlayCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -355,7 +355,7 @@ function DetailBlock({
                 {rows.map((r) => (
                   <tr key={r.key} className="border-t border-border/50">
                     {r.cells.map((c, i) => (
-                      <td key={i} className="break-all py-1 pr-3 font-mono">
+                      <td key={`cell-${i}`} className="break-all py-1 pr-3 font-mono">
                         {c}
                       </td>
                     ))}

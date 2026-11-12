@@ -1,0 +1,12 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "traces":  [
+
+                            ],
+                 "total":  0
+             },
+    "traceId":  null,
+    "success":  true
+}

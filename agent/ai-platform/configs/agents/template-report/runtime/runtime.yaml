@@ -1,0 +1,13 @@
+runtime:
+  type: openharness
+  version: "1.0.0"
+  # 实际执行走 invoke_agent 快路径（pipeline），不依赖 OH 工具循环
+  allowed_tools: []
+  params:
+    maxSteps: 1
+    temperature: 0
+    maxTokens: 1024
+    forceLiveQuery: false
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}

@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mis.adminbff.config.AgentOpsProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.Map;
@@ -51,17 +54,40 @@ public class AgentOpsClient extends AgentOpsTransport {
     private static final String ADMIN = "/api/v1/admin";
     /** HITL 审批与主动推送域（T04 收口：审批端点从 /admin 迁到 /push）。 */
     private static final String PUSH = "/api/v1/push";
+    /** 附件上传域（P0-1 先传后引：ai-platform 已存在 /api/v1/files/upload）。 */
+    private static final String FILES = "/api/v1/files";
+
+    /**
+     * 单次响应允许缓冲的最大字节数（16MB）。
+     *
+     * <p>WebClient 默认只给 256KB。技能池 {@code GET /api/v1/skills?page_size=100}
+     * 会带回多条 Skill 的 description / 元数据（包技能增加后实测可超过 256KB），
+     * 越界抛 {@code DataBufferLimitException}，被传输层兜成「下游不可达：…
+     * Exceeded limit on max bytes to buffer : 262144」——状态其实常是下游已 200。
+     * 会话消息、配置文件全文等同理。
+     *
+     * <p>只放宽本客户端：{@code clone()} 后再 {@code codecs()}，避免污染
+     * {@code plainWebClientBuilder} 单例（与 {@link IqdClient} / {@link KbWebClient} 同口径）。
+     */
+    private static final int MAX_IN_MEMORY_BYTES = 16 * 1024 * 1024;
 
     public AgentOpsClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             AgentOpsProperties properties,
             ObjectMapper objectMapper) {
         super(
-                plainBuilder.clone().baseUrl(properties.getBackendBaseUrl()).build(),
-                plainBuilder.clone().baseUrl(properties.getGatewayBaseUrl()).build(),
+                buildClient(plainBuilder, properties.getBackendBaseUrl()),
+                buildClient(plainBuilder, properties.getGatewayBaseUrl()),
                 properties.getTimeoutMs(),
                 properties.getChatTimeoutMs(),
                 objectMapper);
+    }
+
+    private static WebClient buildClient(WebClient.Builder plainBuilder, String baseUrl) {
+        return plainBuilder.clone()
+                .baseUrl(baseUrl)
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
+                .build();
     }
 
     // ==================================================================
@@ -331,6 +357,23 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SESSIONS + "/feedback/batch-process");
     }
 
+    /**
+     * 用户端评价提交（新增写入端点，feedback-enhance §2.2）。
+     *
+     * <p>下游 {@code POST /api/v1/sessions/{session_id}/feedback}（`MessageFeedbackRequest`：
+     * rating up/down 必填、comment ≤500 且 down 必填、message_id/content 可选）；幂等由下游
+     * agent_feedback 唯一约束保证（重复提交覆盖写）。操作人/身份经 {@link AgentOpsTransport}
+     * 登录上下文头透传（X-User-Id / X-Username，对齐既有 `_operator_identity` 约定）。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param body      {@code {rating, comment?, message_id?, content?}}
+     * @return 下游反馈写入结果（透传）
+     */
+    public JsonNode submitFeedback(String sessionId, Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/{id}/feedback").build(sessionId), body,
+                "POST " + SESSIONS + "/{id}/feedback");
+    }
+
     /** #32 {@code POST /api/v1/sessions}（新建对话会话）。 */
     public JsonNode createChatSession(Object body) {
         return postJson(builder -> builder.path(SESSIONS).build(), body, "POST " + SESSIONS);
@@ -340,6 +383,47 @@ public class AgentOpsClient extends AgentOpsTransport {
     public JsonNode sendChatMessage(String sessionId, Object body) {
         return postChatJson(builder -> builder.path(SESSIONS + "/{id}/messages").build(sessionId), body,
                 "POST " + SESSIONS + "/{id}/messages");
+    }
+
+    /** 追加 transcript（只落库，不跑 Agent）。 */
+    public JsonNode appendTranscript(String sessionId, Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/{id}/transcript").build(sessionId), body,
+                "POST " + SESSIONS + "/{id}/transcript");
+    }
+
+    /**
+     * P0-1 附件上传（薄转发 ai-platform {@code POST /api/v1/files/upload}）。
+     *
+     * <p>「先传后引」两段式第一段：BFF 不做存储，仅把 {@code MultipartFile} 转发下游，
+     * 拿回 {@code fileId/url} 交由前端放入消息 {@code metadata.attachments}。下游校验
+     * 白名单 + 大小上限（{@code UPLOAD_MAX_BYTES}）；BFF 仅做透传 + 限定 multipart
+     * 内容类型，避免非文件负载绕过后端。
+     *
+     * @param file 待上传文件（字段名 {@code file}，与 ai-platform 契约一致）
+     * @return 下游上传结果（透传 {@code {fileId,name,mimeType,size,url}}）
+     */
+    public JsonNode uploadFile(MultipartFile file) {
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        builder.part("file", file.getResource());
+        return postMultipart(
+                uriBuilder -> uriBuilder.path(FILES + "/upload").build(),
+                builder.build(),
+                "POST " + FILES + "/upload");
+    }
+
+    /**
+     * Copilot 语音转写（薄转发 ai-platform {@code POST /api/v1/speech/transcribe}）。
+     */
+    public JsonNode transcribeSpeech(MultipartFile file, Integer durationMs) {
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        builder.part("file", file.getResource());
+        if (durationMs != null && durationMs > 0) {
+            builder.part("duration_ms", String.valueOf(durationMs));
+        }
+        return postMultipart(
+                uriBuilder -> uriBuilder.path("/api/v1/speech/transcribe").build(),
+                builder.build(),
+                "POST /api/v1/speech/transcribe");
     }
 
     // ==================================================================
@@ -486,6 +570,107 @@ public class AgentOpsClient extends AgentOpsTransport {
     public JsonNode wecomBotsHealth() {
         return getGatewayJson(builder -> builder.path("/admin/bots/health").build(),
                 "GET gateway /admin/bots/health");
+    }
+
+    // ==================================================================
+    // 企微用户身份绑定（wecom-user-binding-design.md §11）
+    //
+    // 路径同样**不带 /admin 段**：绑定路由挂在 ai-platform backend 的
+    // /api/v1/channels/wecom/users**（无 /admin），写错会把 404 伪装成
+    // 「未实现」（与 #48 历史 bug 同款）。
+    // ==================================================================
+
+    private static final String WECOM_USERS = "/api/v1/channels/wecom/users";
+
+    /** #59 {@code GET /api/v1/channels/wecom/users}。 */
+    public JsonNode listWecomBindings(Map<String, String> query) {
+        return getJson(builder -> AgentOpsUri.query(builder.path(WECOM_USERS), query).build(),
+                "GET " + WECOM_USERS);
+    }
+
+    /** #60 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/bind}。 */
+    public JsonNode bindWecomUser(String corpId, String wecomUserId, Object body) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/bind")
+                        .build(corpId, wecomUserId),
+                body,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/bind");
+    }
+
+    /** #61 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/unbind}。 */
+    public JsonNode unbindWecomUser(String corpId, String wecomUserId) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/unbind")
+                        .build(corpId, wecomUserId),
+                null,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/unbind");
+    }
+
+    /** #62 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/verify}。 */
+    public JsonNode verifyWecomUser(String corpId, String wecomUserId) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/verify")
+                        .build(corpId, wecomUserId),
+                null,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/verify");
+    }
+
+    /** #63 P5 同步回填 {@code POST /api/v1/channels/wecom/users/sync-backfill}。 */
+    public JsonNode syncBackfillWecomBindings(Map<String, String> query) {
+        return postJson(
+                builder -> AgentOpsUri.query(builder.path(WECOM_USERS + "/sync-backfill"), query)
+                        .build(),
+                null,
+                "POST " + WECOM_USERS + "/sync-backfill");
+    }
+
+    // ----- 企微企业配置（方案 B：#64–#70）-----
+
+    private static final String WECOM_CORPS = "/api/v1/channels/wecom/corps";
+
+    /** #64 {@code GET /api/v1/channels/wecom/corps}。 */
+    public JsonNode listWecomCorps() {
+        return getJson(builder -> builder.path(WECOM_CORPS).build(), "GET " + WECOM_CORPS);
+    }
+
+    /** #65 {@code POST /api/v1/channels/wecom/corps}。 */
+    public JsonNode createWecomCorp(Object body) {
+        return postJson(builder -> builder.path(WECOM_CORPS).build(), body, "POST " + WECOM_CORPS);
+    }
+
+    /** #66 {@code PUT /api/v1/channels/wecom/corps/{corpId}}。 */
+    public JsonNode updateWecomCorp(String corpId, Object body) {
+        return putJson(builder -> builder.path(WECOM_CORPS + "/{corpId}").build(corpId), body,
+                "PUT " + WECOM_CORPS + "/{corpId}");
+    }
+
+    /** #67 {@code DELETE /api/v1/channels/wecom/corps/{corpId}}。 */
+    public JsonNode deleteWecomCorp(String corpId, Map<String, String> query) {
+        return deleteJson(
+                builder -> AgentOpsUri.query(builder.path(WECOM_CORPS + "/{corpId}"), query)
+                        .build(corpId),
+                "DELETE " + WECOM_CORPS + "/{corpId}");
+    }
+
+    /** #68 {@code PUT /api/v1/channels/wecom/corps/{corpId}/secret}。 */
+    public JsonNode setWecomCorpSecret(String corpId, Object body) {
+        return putJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/secret").build(corpId), body,
+                "PUT " + WECOM_CORPS + "/{corpId}/secret");
+    }
+
+    /** #69 {@code DELETE /api/v1/channels/wecom/corps/{corpId}/secret}。 */
+    public JsonNode deleteWecomCorpSecret(String corpId) {
+        return deleteJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/secret").build(corpId),
+                "DELETE " + WECOM_CORPS + "/{corpId}/secret");
+    }
+
+    /** #70 {@code POST /api/v1/channels/wecom/corps/{corpId}/test}。 */
+    public JsonNode testWecomCorp(String corpId) {
+        return postJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/test").build(corpId), null,
+                "POST " + WECOM_CORPS + "/{corpId}/test");
     }
 
     // ==================================================================

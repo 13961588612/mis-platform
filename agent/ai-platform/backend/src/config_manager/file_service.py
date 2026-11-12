@@ -14,8 +14,10 @@
   字段替换为 ``MASKED_VALUE``，响应 ``masked=true``；整体保存含占位符的文件
   被拒绝（``ConfigFileMaskedError``，验收③）。写回时自动从原文件还原真实值
   （即「留空 = 不修改」语义）。
-* **校验 + 热更新**：写 ``.yaml`` 走 :class:`ConfigValidator` 结构校验；落盘后
-  调 :meth:`ConfigManager.reload_agent` 触发 reload 链路（含
+* **校验 + 热更新**：写 ``agent.yaml`` 走 :class:`ConfigValidator` 的
+  ``agent.*`` 结构校验；其它 ``.yaml`` 仅做语法 / 顶层类型 / 脱敏校验，
+  避免把 ``metadata.yaml`` 等误当成 ``agent.yaml``。落盘后调
+  :meth:`ConfigManager.reload_agent` 触发 reload 链路（含
   ``refresh_worker_catalog``，§10.3 约定 11），不自己 ``yaml.safe_dump`` 后
   绕过回调链。
 * **永不抛未捕获异常给主链路**：路径越界 / 不存在 / 体积超限都转为明确错误码。
@@ -76,6 +78,8 @@ WHITELIST_PATTERNS: tuple[str, ...] = (
     "runtime/prompts/*.md",
     "skills/enabled-skills.yaml",
     "system/*.yaml",
+    "intent-router.yaml",
+    "coordination.yaml",
 )
 
 #: 只读文件（运营台不得整体保存，含访问控制 / 连接密钥）。
@@ -400,7 +404,7 @@ def read_config_file(agent_id: str, rel_path: str) -> dict[str, Any]:
     }
 
 
-def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, Any]:
+async def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, Any]:
     """写入单个配置文件内容（校验 + 密钥还原 + 热更新）。
 
     Args:
@@ -451,15 +455,16 @@ def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, A
                 original_parsed = {}
             incoming = restore_masked(original_parsed, incoming)
 
-        # 结构校验（复用既有 ConfigValidator）
-        validator: ConfigValidator = get_config_validator()
-        errors: list[str] = validator.validate_yaml_dict(
-            incoming if isinstance(incoming, dict) else {"agent": {}}
-        )
-        if errors:
-            from src.utils.exceptions import ConfigValidationError
+        # 仅 agent.yaml 走 agent.* schema；metadata.yaml 等根节点不同，不可复用
+        if normalized == "agent.yaml":
+            validator: ConfigValidator = get_config_validator()
+            errors: list[str] = validator.validate_yaml_dict(
+                incoming if isinstance(incoming, dict) else {"agent": {}}
+            )
+            if errors:
+                from src.utils.exceptions import ConfigValidationError
 
-            raise ConfigValidationError(errors)
+                raise ConfigValidationError(errors)
 
         # 以还原后的结构重新序列化为落盘内容（保持脱敏前真实值）
         save_text: str = yaml.safe_dump(incoming, allow_unicode=True, sort_keys=False)
@@ -474,8 +479,15 @@ def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, A
     reloaded = False
     try:
         manager: ConfigManager = get_config_manager()
-        result = manager.reload_agent(agent_id)
-        reloaded = result is not None
+        result, runtime_error = await manager.reload_agent(agent_id)
+        reloaded = result is not None and runtime_error is None
+        if runtime_error:
+            logger.warning(
+                "write_config_file: reload_agent partial failure",
+                agent_id=agent_id,
+                path=normalized,
+                error=runtime_error,
+            )
     except Exception as exc:  # noqa: BLE001 - 写文件成功即视为成功，reload 失败仅告警
         logger.warning(
             "write_config_file: reload_agent failed",

@@ -103,9 +103,10 @@ async def test_reload_agent_success_updates_cache_and_fires_callbacks(
     cb = MagicMock()
     mgr.on_config_change(cb)
 
-    result = await mgr.reload_agent("a1")
+    result, runtime_error = await mgr.reload_agent("a1")
 
     assert result is config
+    assert runtime_error is None
     assert mgr.get_config_cached("a1") is config
     cb.assert_called_once_with("a1", "updated", config)
 
@@ -120,9 +121,10 @@ async def test_reload_agent_failure_treated_as_deleted(
     cb = MagicMock()
     mgr.on_config_change(cb)
 
-    result = await mgr.reload_agent("a1")
+    result, runtime_error = await mgr.reload_agent("a1")
 
     assert result is None
+    assert runtime_error is not None
     assert mgr.get_config_cached("a1") is None
     cb.assert_called_once_with("a1", "deleted", None)
 

@@ -1,0 +1,163 @@
+package com.mis.adminbff.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * D12 嵌入身份兑换端点配置（{@code mis.embed}）。
+ *
+ * <p>宿主共享密钥（client_secret）由部署侧环境变量注入（不入库明文，
+ * 与 {@code agent_external_host.client_secret_hash} 配对校验），形如：
+ * <pre>
+ * mis:
+ *   embed:
+ *     client-secrets:
+ *       crm-web: ${MIS_EMBED_HOST_CRM_WEB_CLIENT_SECRET:}
+ *     salt: ${MIS_EMBED_PHONE_HASH_SALT:}
+ *     ticket-hosts:
+ *       seeyon-a8:
+ *         provider: seeyon
+ *         base-url: ${MIS_EMBED_SEEYON_BASE_URL:}
+ *         rest-username: ${MIS_EMBED_SEEYON_REST_USER:}
+ *         rest-password: ${MIS_EMBED_SEEYON_REST_PASSWORD:}
+ * </pre>
+ *
+ * <p><b>为什么 secret 走配置而非 DB</b>：R1 要求用宿主共享密钥验签
+ * externalToken（HS256）。HMAC 验签必须持有密钥明文，而
+ * {@code agent_external_host.client_secret_hash} 只存哈希（泄露面最小）。
+ * 故验签密钥取自本配置，哈希列用于「配置与注册一致性」交叉校验
+ * （sha256(secret) != client_secret_hash ⇒ 拒绝，fail-closed）。
+ *
+ * <p>ticket-pull（致远等）出站凭证同样只走本配置，不落库明文。
+ */
+@ConfigurationProperties(prefix = "mis.embed")
+public class EmbedIdentityProperties {
+
+    /** 宿主共享密钥（hostId → client_secret 明文，用于 externalToken HS256 验签）。 */
+    private Map<String, String> clientSecrets = new LinkedHashMap<>();
+
+    /** phone_hash = sha256(phone + salt) 的 salt（R5 脱敏存储；空 = 不加盐）。 */
+    private String salt = "";
+
+    /** 手机号匹配开关（host 级，默认 true；03 §5.2 phone_match_enabled 默认 true）。 */
+    private boolean phoneMatchEnabled = true;
+
+    /** 兑换限流：同一 hostId 每分钟最大请求数（R6 防撞库），默认 60。 */
+    private int rateLimitPerMinute = 60;
+
+    /**
+     * ticket-pull 宿主配置（hostId → 出站验票）。
+     * 未配置或 base-url 为空则该 host 拒绝 ticket-exchange。
+     */
+    private Map<String, TicketHostConfig> ticketHosts = new LinkedHashMap<>();
+
+    public Map<String, String> getClientSecrets() {
+        return clientSecrets;
+    }
+
+    public void setClientSecrets(Map<String, String> clientSecrets) {
+        this.clientSecrets = clientSecrets != null ? clientSecrets : new LinkedHashMap<>();
+    }
+
+    public String getSalt() {
+        return salt;
+    }
+
+    public void setSalt(String salt) {
+        this.salt = salt != null ? salt : "";
+    }
+
+    public boolean isPhoneMatchEnabled() {
+        return phoneMatchEnabled;
+    }
+
+    public void setPhoneMatchEnabled(boolean phoneMatchEnabled) {
+        this.phoneMatchEnabled = phoneMatchEnabled;
+    }
+
+    public int getRateLimitPerMinute() {
+        return rateLimitPerMinute;
+    }
+
+    public void setRateLimitPerMinute(int rateLimitPerMinute) {
+        this.rateLimitPerMinute = rateLimitPerMinute;
+    }
+
+    public Map<String, TicketHostConfig> getTicketHosts() {
+        return ticketHosts;
+    }
+
+    public void setTicketHosts(Map<String, TicketHostConfig> ticketHosts) {
+        this.ticketHosts = ticketHosts != null ? ticketHosts : new LinkedHashMap<>();
+    }
+
+    /** 单个 ticket-pull 宿主出站配置。 */
+    public static class TicketHostConfig {
+        /** 适配器类型：目前仅 {@code seeyon}。 */
+        private String provider = "seeyon";
+        /** OA 根地址，如 https://oa.example.com（不要尾斜杠）。 */
+        private String baseUrl = "";
+        /** REST 用户名（出站鉴权）。 */
+        private String restUsername = "";
+        /** REST 密码（出站鉴权；仅配置中心）。 */
+        private String restPassword = "";
+        private int connectTimeoutMs = 5_000;
+        private int readTimeoutMs = 10_000;
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public void setProvider(String provider) {
+            this.provider = provider != null ? provider : "seeyon";
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl != null ? baseUrl.trim() : "";
+        }
+
+        public String getRestUsername() {
+            return restUsername;
+        }
+
+        public void setRestUsername(String restUsername) {
+            this.restUsername = restUsername != null ? restUsername : "";
+        }
+
+        public String getRestPassword() {
+            return restPassword;
+        }
+
+        public void setRestPassword(String restPassword) {
+            this.restPassword = restPassword != null ? restPassword : "";
+        }
+
+        public int getConnectTimeoutMs() {
+            return connectTimeoutMs;
+        }
+
+        public void setConnectTimeoutMs(int connectTimeoutMs) {
+            this.connectTimeoutMs = connectTimeoutMs > 0 ? connectTimeoutMs : 5_000;
+        }
+
+        public int getReadTimeoutMs() {
+            return readTimeoutMs;
+        }
+
+        public void setReadTimeoutMs(int readTimeoutMs) {
+            this.readTimeoutMs = readTimeoutMs > 0 ? readTimeoutMs : 10_000;
+        }
+
+        public boolean isConfigured() {
+            return baseUrl != null && !baseUrl.isBlank()
+                    && restUsername != null && !restUsername.isBlank()
+                    && restPassword != null && !restPassword.isBlank();
+        }
+    }
+}

@@ -20,7 +20,7 @@
 
 - 业务多 Agent / Worker 选择器  
 - 将运行时搬进 Java `mis-agent`（本期）  
-- 以 ai-platform/frontend 作为产品主验收面  
+- 以旧独立 H5 前端（T11 已退役删除）作为产品主验收面  
 - 无白名单任意文件浏览；完整 DAG 编排器  
 
 ---
@@ -39,7 +39,7 @@
 | `/agent/agents/:id/skills` | 可用技能 | #5 |
 | `/agent/agents/:id/config` | 人设与配置 | #9 |
 | `/agent/agents/:id/coordination` | C–W 调度配置 | #10 |
-| `/agent/catalog` | Worker Catalog | #10 |
+| `/agent/agents`（含原 Catalog 摘要；`/agent/catalog` 重定向） | Agent 总览 + Worker Catalog 只读 | #10 |
 | `/agent/dispatch` | 调度观测 | — |
 | `/agent/skills` | 技能池 | #1 #7 |
 | `/agent/skills/permissions` | 技能权限 | #2 |

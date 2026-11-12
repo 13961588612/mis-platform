@@ -30,6 +30,11 @@ import java.time.Duration;
         BffProperties.class,
         AiPlatformProperties.class,
         AgentOpsProperties.class,
+        EmbedIdentityProperties.class,
+        IqdProperties.class,
+        AiTemplateReportProperties.class,
+        BankReceiptProperties.class,
+        SmpProperties.class,
         ReconProperties.class
 })
 @EnableScheduling
@@ -49,13 +54,17 @@ public class BffConfiguration {
     public WebClient.Builder plainWebClientBuilder() {
         ConnectionProvider provider = ConnectionProvider.builder("bff-plain")
                 .maxConnections(100)
-                .maxIdleTime(Duration.ofSeconds(3))
-                .maxLifeTime(Duration.ofSeconds(30))
-                .evictInBackground(Duration.ofSeconds(5))
-                .pendingAcquireTimeout(Duration.ofSeconds(5))
+                .maxIdleTime(Duration.ofSeconds(30))
+                // 问数编排链可达 180s；30s maxLifeTime 会在长请求中途回收连接，
+                // 导致 ai-platform 侧 CancelledError → BFF 看到 HTTP 500。
+                .maxLifeTime(Duration.ofMinutes(5))
+                .evictInBackground(Duration.ofSeconds(30))
+                .pendingAcquireTimeout(Duration.ofSeconds(10))
                 .build();
         HttpClient httpClient = HttpClient.create(provider)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3_000);
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3_000)
+                // 响应读超时须覆盖 ask-timeout-ms（默认 180s）
+                .responseTimeout(Duration.ofMinutes(5));
         return WebClient.builder()
                 .clientConnector(new ReactorClientHttpConnector(httpClient));
     }
@@ -65,5 +74,16 @@ public class BffConfiguration {
     @Qualifier("loadBalancedWebClientBuilder")
     public WebClient.Builder loadBalancedWebClientBuilder() {
         return WebClient.builder();
+    }
+
+    /**
+     * D12 兑换限流器（进程内固定窗口，R6 防撞库）。
+     *
+     * @param embedProperties 嵌入身份配置（rate-limit-per-minute）
+     * @return 限流器
+     */
+    @Bean
+    public EmbedExchangeRateLimiter embedExchangeRateLimiter(EmbedIdentityProperties embedProperties) {
+        return new EmbedExchangeRateLimiter(embedProperties.getRateLimitPerMinute());
     }
 }

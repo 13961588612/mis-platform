@@ -130,6 +130,8 @@ export interface RagResponse {
 }
 
 export interface ChatMessage {
+  /** 可选消息 ID（后端流式消息可能携带；缺省前端按序号生成 key）。 */
+  id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
 }

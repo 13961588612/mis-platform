@@ -15,7 +15,7 @@ mock ``WecomBotStore``，**禁止读写真实配置文件 / 连接真实服务**
 * ``GET    /channels/wecom/bots/runtime``         — Gateway 运行时清单（内部令牌闸门）
 
 wire 契约（断言铁律）：``WecomBot`` 一律 snake_case——
-``bot_id / name / enabled / ws_url / secret_masked / bound_agent_id? / health``，
+``bot_id / name / enabled / bot_secret_id / secret_masked / bound_agent_id? / health``，
 运营端点响应**绝不出现明文 ``secret`` 键**。
 """
 
@@ -33,11 +33,15 @@ import src.api.routes.channels as channels_mod
 from src.api.deps import get_current_user
 from src.api.routes.channels import get_wecom_bot_store_dep, router
 from src.channels.models import WecomBotRecord
-from src.channels.wecom_bot_store import WecomBotConflictError, WecomBotNotFoundError
+from src.channels.wecom_bot_store import (
+    SECRET_REF_PREFIX,
+    WecomBotConflictError,
+    WecomBotNotFoundError,
+)
 
 #: 前端 ``WecomBot`` 契约必含字段（bound_agent_id 未绑定时不下发，另行断言）。
 WECOM_WIRE_REQUIRED_KEYS: frozenset[str] = frozenset(
-    {"bot_id", "name", "enabled", "ws_url", "secret_masked", "health"}
+    {"bot_id", "name", "enabled", "bot_secret_id", "secret_masked", "health"}
 )
 
 INTERNAL_TOKEN: str = "tok-abc-123"
@@ -49,15 +53,20 @@ def _record(
     enabled: bool = True,
     secret: str = "plain-secret-1",
     bound_agent_id: str = "a1",
-    ws_url: str = "wss://qyapi.weixin.qq.com/ws/1",
+    bot_secret_id: str = "wxbot-1",
 ) -> WecomBotRecord:
-    """构造一条落盘态记录（含明文 secret，仅供 store mock 内部使用）。"""
+    """构造一条落盘态记录。
+
+    ``secret`` 参数保留是为了让旧用例不改写法：它现在表示「该 Bot 已配置密钥」，
+    落盘只写 Vault 引用（``secret://wecom/bot/<bot_id>``）；明文由
+    ``WecomBotSecretService.resolve_secret`` 在运行时提供。
+    """
     return WecomBotRecord(
         bot_id=bot_id,
         name=name,
         enabled=enabled,
-        ws_url=ws_url,
-        secret=secret,
+        bot_secret_id=bot_secret_id,
+        secret_ref=f"{SECRET_REF_PREFIX}{bot_id}" if secret else "",
         bound_agent_id=bound_agent_id,
     )
 
@@ -94,6 +103,33 @@ def wecom_client(
     app.dependency_overrides[get_wecom_bot_store_dep] = lambda: store
     app.dependency_overrides[get_current_user] = lambda: {"user_id": "u1"}
     return TestClient(app), store
+
+
+@pytest.fixture(autouse=True)
+def stub_bot_secret_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """用替身顶掉 Vault：明文解析按 ``secret://wecom/bot/<bot_id>`` 合成。
+
+    密钥改造后明文只存在于 Vault（需要真实 DB），路由层经
+    ``WecomBotSecretService`` 取用；单测里以「引用 → 明文」的确定性映射替身，
+    既避免打 DB，又保持运行时契约（``/runtime`` 仍下发明文）可断言。
+    """
+    from src.channels import wecom_bot_secret_service as svc_mod
+
+    async def _resolve(self: object, bot_id: str) -> str:
+        record = self._try_get_record(bot_id)  # type: ignore[attr-defined]
+        if record is None or not record.secret_ref:
+            return ""
+        return f"plain-{bot_id}"
+
+    async def _set(self: object, bot_id: str, secret: str) -> None:
+        return None
+
+    async def _delete(self: object, bot_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(svc_mod.WecomBotSecretService, "resolve_secret", _resolve)
+    monkeypatch.setattr(svc_mod.WecomBotSecretService, "set_secret", _set)
+    monkeypatch.setattr(svc_mod.WecomBotSecretService, "delete_secret", _delete)
 
 
 def _assert_no_plaintext_secret(item: dict[str, Any]) -> None:
@@ -195,7 +231,7 @@ def test_create_wecom_bot_returns_wire_unknown_health(
 
     resp = client.post(
         "/api/v1/channels/wecom/bots",
-        json={"name": "新 Bot", "ws_url": "wss://qyapi.weixin.qq.com/ws/2", "secret": "s3"},
+        json={"name": "新 Bot", "bot_secret_id": "wxbot-2", "secret": "s3"},
     )
 
     assert resp.status_code == 200
@@ -215,7 +251,7 @@ def test_create_wecom_bot_conflict_409(
 
     resp = client.post(
         "/api/v1/channels/wecom/bots",
-        json={"name": "重复", "ws_url": "wss://qyapi.weixin.qq.com/ws/2"},
+        json={"name": "重复", "bot_secret_id": "wxbot-2"},
     )
 
     assert resp.status_code == 409
@@ -482,9 +518,10 @@ def test_runtime_endpoint_valid_token_returns_records(
     data = resp.json()["data"]
     assert isinstance(data, list) and len(data) == 2
     item = data[0]
-    # 运行时契约：bot_id / name / enabled / ws_url / secret / bound_agent_id
+    # 运行时契约：bot_id / name / enabled / bot_secret_id / secret / bound_agent_id
     assert item["bot_id"] == "wb-1"
-    assert item["secret"] == "s1"  # Gateway 启动需要明文
+    # 明文由 Vault 解析（替身按 bot_id 合成）；YAML 里只有 secret_ref。
+    assert item["secret"] == "plain-wb-1"  # Gateway 启动需要明文
     assert item["bound_agent_id"] == "a1"
     store.list_records.assert_called_once_with(enabled_only=True)
 

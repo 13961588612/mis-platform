@@ -1,0 +1,8 @@
+﻿memory_type: static
+fields:
+  - personality
+  - facts
+personality:
+  file: personality.md
+facts:
+  dir: facts/

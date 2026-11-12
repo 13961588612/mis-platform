@@ -25,7 +25,7 @@ public class OrgEmployeeClient {
 
     public OrgEmployeeClient(
             @Qualifier("plainRestClientBuilder") RestClient.Builder plainRestClientBuilder,
-            RestClient.Builder loadBalancedRestClientBuilder,
+            @Qualifier("loadBalancedRestClientBuilder") RestClient.Builder loadBalancedRestClientBuilder,
             IamProperties iamProperties) {
         this.iamProperties = iamProperties;
         RestClient.Builder builder = iamProperties.isOrgDiscoveryEnabled()

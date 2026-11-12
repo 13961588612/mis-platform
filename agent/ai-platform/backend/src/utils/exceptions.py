@@ -400,3 +400,10 @@ class FeedbackStatusIllegalError(AIPlatformError):
             f"Feedback status transition illegal: {current} -> {target}",
             code=4000,
         )
+
+
+class SpeechTranscribeError(AIPlatformError):
+    """语音转写失败（厂家错误或空识别）。"""
+
+    def __init__(self, message: str = "语音转写失败", code: int = 4008) -> None:
+        super().__init__(message, code=code)

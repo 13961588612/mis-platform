@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    participant OPS as 运营台
+    participant API as 任一 Core backend<br/>(/admin/control-plane/*)
+    participant EXEC as 执行者 Core<br/>(AdminExecutor)
+    participant R as Redis
+    participant C1 as Core-1(副本0)
+    participant C2 as Core-2(副本1)
+    participant CM as ConfigManager<br/>(各 Core 进程内)
+
+    OPS->>API: PUT /agents/{id}/config-files/... 或 POST /admin/skills
+    API->>EXEC: run_exclusive("config_update", payload)
+    EXEC->>R: SET aip:ctrl:admin-lock NX PX 30s
+    Note over EXEC: 抢锁失败 → 返回 409(已有执行者)
+    EXEC->>EXEC: 写真源(file_service / DB) + 校验
+    EXEC->>R: INCR aip:ctrl:config:ver:{agentId}
+    EXEC->>R: PUBLISH aip:ctrl:config:channel {agentId, change_type, version}
+    EXEC-->>PG: INSERT config_audit
+    EXEC-->>API: {code:0, data:{version, dispatched:true}}
+    API-->>OPS: 200 已下发(异步收敛)
+
+    R-->>C1: 广播通知
+    R-->>C2: 广播通知
+    C1->>CM: load_agent_config + validate + 更新缓存
+    C1->>C1: on_config_change 回调链(路由候选/WorkerCatalog)
+    C1->>C1: reload_config 热重载(新会话生效)
+    C2->>CM: load_agent_config + validate + 更新缓存
+    C2->>C2: on_config_change 回调链
+    C2->>C2: reload_config 热重载
+
+    Note over C1,C2: 兜底①: 漏收广播的 Core 由既有 watcher 轮询(5s)收敛<br/>兜底②: 重启 Core 启动时按 aip:ctrl:config:ver:{agentId} 对账拉取

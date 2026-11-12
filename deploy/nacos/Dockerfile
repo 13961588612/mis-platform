@@ -1,13 +1,18 @@
-# MIS Nacos Server — JDK 17 + Nacos 2.3.2
+# MIS Nacos Server — JDK 17 + 官方发行包（默认 2.3.2）
 #
-# 版本锁定 2.3.2：与 Spring Cloud Alibaba 2023.0.1.0 的 nacos-client 一致。
-# 运行时使用 JDK 17：可与 mis-auth 等业务进程共用本机 JAVA_HOME（手工同机部署）。
+# 生产机多半拉不下 GitHub：构建前把 zip 放到本目录（与 Dockerfile 同级），再 build。
 #
-# 构建：
-#   docker build -f deploy/nacos/Dockerfile -t mis-nacos:2.3.2-jdk17 deploy/nacos
+# 准备：
+#   1) 插件：bash scripts/ensure-nacos-pg-plugins.sh deploy/nacos/plugins java17
+#   2) 发行包（任选其一）：
+#      - 能上网机器下载后 scp：
+#          nacos-server-2.3.2.zip → deploy/nacos/
+#      - 或服务器用镜像代理：
+#          curl -fL -o nacos-server-2.3.2.zip \
+#            "https://ghfast.top/https://github.com/alibaba/nacos/releases/download/2.3.2/nacos-server-2.3.2.zip"
+#   3) docker build -f deploy/nacos/Dockerfile -t mis-nacos:2.3.2-jdk17 deploy/nacos
 #
-# 先准备 PG 插件（仅外置 PG 时需要）：
-#   .\scripts\ensure-nacos-pg-plugins.ps1
+# 换版本：把 zip 换成对应文件，并 --build-arg NACOS_VERSION=2.5.4
 
 ARG NACOS_VERSION=2.3.2
 
@@ -31,16 +36,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /home
 
-RUN curl -fsSL -o nacos-server.zip \
-      "https://github.com/alibaba/nacos/releases/download/${NACOS_VERSION}/nacos-server-${NACOS_VERSION}.zip" \
-    && unzip -q nacos-server.zip \
-    && rm nacos-server.zip \
-    && mv nacos /home/nacos \
+# 本地 zip（勿在 Dockerfile 里 curl GitHub）
+COPY nacos-server-${NACOS_VERSION}.zip /tmp/nacos-server.zip
+RUN unzip -q /tmp/nacos-server.zip -d /tmp \
+    && rm /tmp/nacos-server.zip \
+    && mv /tmp/nacos /home/nacos \
     && mkdir -p /home/nacos/plugins /home/nacos/logs \
     && chmod +x /home/nacos/bin/*.sh
 
-# PG 外置插件（构建前由 ensure-nacos-pg-plugins.ps1 下载到 plugins/）
-# 内嵌模式不依赖这些 JAR；缺失时仅影响 postgresql 模式。
+# PG 外置插件（构建前由 ensure 脚本下载到 plugins/）
 COPY plugins/ /home/nacos/plugins/
 COPY server/application.properties /home/nacos/conf/application-pg.properties
 COPY docker-entrypoint.sh /docker-entrypoint.sh

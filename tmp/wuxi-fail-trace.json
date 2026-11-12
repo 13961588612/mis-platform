@@ -1,0 +1,313 @@
+{
+  "fail_msgs": [
+    {
+      "id": "6932d5b0-2ffb-4d1b-b0be-24733abcaa86",
+      "role": "user",
+      "content": "无锡地区有哪些门店",
+      "timestamp": "2026-10-20T01:28:33.552941+00:00",
+      "metadata": {}
+    },
+    {
+      "id": "d176a6ad-3328-4921-ae34-6fa4f9d7fba3",
+      "role": "assistant",
+      "content": "本次查询**未执行成功**，因此我暂时无法给出无锡地区的门店清单。\n\n**失败原因：权限校验未通过。** 问数引擎在范围裁定阶段就返回错误码 `45204`，提示「当前角色无可问数据范围」，可问数据范围列表为空，所以查询根本没有执行，命中的门店主数据表没有返回任何数据行。\n\n**需要特别注意：这不等于“无锡没有门店”。** 本次命中家数与明细均不可得，请不要把结果理解为 0 家。\n\n几点说明：\n\n- 我另外复核了一次可问范围，返回结果同样是 `deny`，原因一致，说明问题出在账号/角色的数据授权上，不在查询语句写法。\n- 这与前几轮能正常查出宜兴、溧阳门店的情况**不一致**——之前同类查询是通的，本次却整体被拒，可能是角色权限或行级范围刚刚发生变更（例如授权回收、范围配置调整），建议向数据管理员核对一下变更记录。\n- 授权恢复后，我会按「门店名称模糊匹配『无锡』为主口径 + 城市/所属区域字段交叉校验」重跑，并一并报告命中家数与 city 等字段的空值情况，避免像溧阳那次一样因主数据登记缺失而漏店。\n\n建议下一步：\n\n1. 联系数据管理员，为该账号开通门店主数据表（`dim_mall_chl_store_df`）的查询权限与行级范围；\n2. 授权后告我一声，我立即重跑；\n3. 若急需清单，也可在 MIS 门店主数据页面直接按名称筛选「无锡」导出，我再帮你做汇总统计。\n\n需要我把这次的错误码和现象整理成一段可直接发给数据管理员的说明吗？",
+      "timestamp": "2026-10-20T01:28:46.397977+00:00",
+      "metadata": {}
+    }
+  ],
+  "all_meta": [
+    {
+      "id": "54ccca47-1a3b-46ce-98ff-6e43609b8634",
+      "role": "user",
+      "timestamp": "2026-10-19T08:11:02.578289+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "d6976ae2-90c9-4b00-9210-21e89dd1fdf6",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:11:23.664509+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "73b60b59-fd57-4ba8-a638-fdd0b54e6b90",
+      "role": "user",
+      "timestamp": "2026-10-19T08:18:46.424337+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "e9b1cc0e-fcfa-48c0-b411-f865c9007abf",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:19:04.141703+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "1bc6ed3d-70d0-4080-812e-922c5d670092",
+      "role": "user",
+      "timestamp": "2026-10-19T08:21:27.092918+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "704a5e72-0004-4cf4-8607-916e4bd27b6f",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:21:49.190395+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "8b6ff64e-3707-4b4d-90c7-443310d26b6f",
+      "role": "user",
+      "timestamp": "2026-10-19T08:22:06.607047+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "1bdff7f6-8ed5-45cc-a0fb-0b42f77d46b9",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:22:28.852576+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "b7916f7a-6868-42b4-ad13-e1fef4ef03eb",
+      "role": "user",
+      "timestamp": "2026-10-19T08:24:23.087416+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "43bafbcc-4d84-42a4-91e8-7e0bee902005",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:24:36.109287+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "65b4c04c-14a7-4a57-8d33-27f0d1b35797",
+      "role": "user",
+      "timestamp": "2026-10-19T08:38:25.871829+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "c10e6225-ff96-43a2-a89b-d300a0cc241a",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:38:40.836922+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "8f9ba522-ad1c-4a7e-98df-2b9fb41e661e",
+      "role": "user",
+      "timestamp": "2026-10-19T08:38:57.362152+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "ed89738a-6840-45c6-82aa-edf73069a4aa",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:39:14.523314+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "9cab34a9-7b95-4402-93ff-b0c3d106cc17",
+      "role": "user",
+      "timestamp": "2026-10-19T08:48:07.877276+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "a315c379-1853-4309-a3d6-d4b8ca56b946",
+      "role": "assistant",
+      "timestamp": "2026-10-19T08:48:48.613470+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "6932d5b0-2ffb-4d1b-b0be-24733abcaa86",
+      "role": "user",
+      "timestamp": "2026-10-20T01:28:33.552941+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    },
+    {
+      "id": "d176a6ad-3328-4921-ae34-6fa4f9d7fba3",
+      "role": "assistant",
+      "timestamp": "2026-10-20T01:28:46.397977+00:00",
+      "meta_keys": [],
+      "meta_small": {},
+      "meta_dump": "{}"
+    }
+  ],
+  "children": [
+    {
+      "session_id": "web-mvez72t4-q0peza2i",
+      "agent_id": "mis-copilot",
+      "channel": "web",
+      "title": "宜兴地区 有哪些门店",
+      "message_count": 18,
+      "updated_at": "2026-10-20T01:28:46.397983+00:00",
+      "metadata": {
+        "mis_user_id": 1,
+        "raw_channel": "h5"
+      }
+    }
+  ],
+  "near_workers": [
+    {
+      "session_id": "iqd-f5afae9a-5e2c-4274-b1c5-7b81c44d00c3",
+      "agent_id": "mis-iqd",
+      "channel": "iqd_test",
+      "title": "?????????",
+      "message_count": 2,
+      "created_at": "2026-10-20T01:31:51.887738+00:00",
+      "updated_at": "2026-10-20T01:31:56.539694+00:00",
+      "metadata": {
+        "mis_user_id": 1
+      }
+    },
+    {
+      "session_id": "iqd-c1c68091-b005-439e-a9f6-6b1255bbc93c",
+      "agent_id": "mis-iqd",
+      "channel": "iqd_test",
+      "title": "无锡地区有哪几家店",
+      "message_count": 2,
+      "created_at": "2026-10-20T01:32:18.945417+00:00",
+      "updated_at": "2026-10-20T01:33:37.097736+00:00",
+      "metadata": {
+        "mis_user_id": 1
+      }
+    },
+    {
+      "session_id": "iqd-8a58a4b7-e466-421a-8408-2f387e951a6d",
+      "agent_id": "mis-iqd",
+      "channel": "iqd_test",
+      "title": "无锡地区有哪几家店",
+      "message_count": 2,
+      "created_at": "2026-10-20T01:34:23.405999+00:00",
+      "updated_at": "2026-10-20T01:35:04.761700+00:00",
+      "metadata": {
+        "mis_user_id": 1
+      }
+    }
+  ],
+  "near_msgs": {
+    "iqd-f5afae9a-5e2c-4274-b1c5-7b81c44d00c3": [
+      {
+        "role": "user",
+        "content": "?????????",
+        "timestamp": "2026-10-20T01:31:56.520263+00:00",
+        "metadata": {
+          "iqd": {
+            "view": "admin",
+            "question": "?????????"
+          },
+          "source": "mis-bff",
+          "X-User-Id": "1",
+          "X-Mis-Orgs": "[{\"id\":\"1\"}]",
+          "capability": "iqd",
+          "X-Mis-Roles": "[{\"id\":\"1\",\"code\":\"TENANT_ADMIN\"}]"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "你的问题似乎没有发送成功（我只收到了一串问号），麻烦补充一下具体想问什么。\n\n我这边能查的范围是**商场/门店经营与会员消费类**数据，主要包括：\n\n| 主题 | 可问内容举例 |\n|---|---|\n| 门店维度 | 门店信息（城市、所属区域、业态、店型、店级、开业时间）、门店销售排行 |\n| 品牌/品类 | 品牌与品类消费标签、品牌进店/成交/流失分析、品类输入输出 |\n| 会员消费 | 会员来源销售、会员销售订单明细、门店会员分布/三年标签 |\n| 交易 | 渠道销售额（含去年同期）、线上消费订单汇总 |\n| 导购/企微 | 企微导购相关数据 |\n\n你可以这样问，例如：\n- 「上月各门店销售额排名」\n- 「本月各渠道销售额及同比」\n- 「某门店最近三个月的会员拉新和流失情况」\n\n金额、会员数等指标都会按平台口径说明；超出上述范围的数据我无法提供。你想查哪个方向？",
+        "timestamp": "2026-10-20T01:31:56.539685+00:00",
+        "metadata": {}
+      }
+    ],
+    "iqd-c1c68091-b005-439e-a9f6-6b1255bbc93c": [
+      {
+        "role": "user",
+        "content": "无锡地区有哪几家店",
+        "timestamp": "2026-10-20T01:33:37.089290+00:00",
+        "metadata": {
+          "iqd": {
+            "view": "admin",
+            "question": "无锡地区有哪几家店"
+          },
+          "source": "mis-bff",
+          "X-User-Id": "1",
+          "X-Mis-Orgs": "[{\"id\":\"1\"}]",
+          "capability": "iqd",
+          "X-Mis-Roles": "[{\"id\":\"1\",\"code\":\"TENANT_ADMIN\"}]"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "{\"query_id\": \"q-19ec239ac8dc\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"succeeded\", \"answer_summary\": \"查询返回 6 行结果。\", \"data\": {\"columns\": [{\"name\": \"store_id\", \"item_key\": \"store_id\", \"data_type\": \"\", \"display_name\": \"store_id\", \"masked\": false}, {\"name\": \"store_name\", \"item_key\": \"store_name\", \"data_type\": \"\", \"display_name\": \"store_name\", \"masked\": false}], \"rows\": [[\"20\", \"大统华无锡洛社店\"], [\"13\", \"大统华无锡硕放店\"], [\"35\", \"无锡藕塘店\"], [\"31\", \"无锡八方汇店\"], [\"6\", \"大统华无锡建筑店\"], [\"19\", \"大统华无锡北塘区店\"]], \"row_count\": 6, \"truncated\": false, \"preview_rows\": 6}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"detail\": \"命中 61 张授权表\", \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 2, \"code\": \"understanding\", \"label\": \"理解你的问题\", \"detail\": null, \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 3, \"code\": \"searching\", \"label\": \"检索相关语义模型\", \"detail\": \"语义模型\", \"status\": \"done\", \"duration_ms\": 457}, {\"seq\": 4, \"code\": \"generating\", \"label\": \"生成查询\", \"detail\": \"SQL 已生成\", \"status\": \"done\", \"duration_ms\": 4267}, {\"seq\": 5, \"code\": \"lineage_check\", \"label\": \"复核查询涉及的数据范围\", \"detail\": \"涉及 1 张表，全部在授权范围内\", \"status\": \"done\", \"duration_ms\": 2}, {\"seq\": 6, \"code\": \"executing\", \"label\": \"执行并汇总结果\", \"detail\": \"返回 6 行\", \"status\": \"done\", \"duration_ms\": 365}, {\"seq\": 7, \"code\": \"masking\", \"label\": \"敏感字段处理\", \"detail\": \"无命中\", \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 8, \"code\": \"finished\", \"label\": \"完成\", \"detail\": null, \"status\": \"done\", \"duration_ms\": 29}], \"scope\": {\"decision\": \"allow\", \"allowed_item_keys\": [\"mdl:model:ads_csmr_brand_category_input_df\", \"mdl:model:ads_csmr_brand_category_output_df\", \"mdl:model:ads_csmr_store_brand_attr_analysis_df\", \"mdl:model:ads_csmr_store_brand_drain_df\", \"mdl:model:ads_csmr_store_brand_drain_drc_df\", \"mdl:model:ads_csmr_store_brand_frq_analysis_df\", \"mdl:model:ads_csmr_store_brand_new_mbr_sale_df\", \"mdl:model:ads_csmr_store_brand_trd_analysis_df\", \"mdl:model:ads_csmr_store_brand_whole_sale_df\", \"mdl:model:ads_csmr_store_drain_df\", \"mdl:model:ads_mall_csmr_csmr_brand_tag_df\", \"mdl:model:ads_mall_csmr_csmr_category_tag_df\", \"mdl:model:ads_mall_csmr_csmr_tag_df\", \"mdl:model:ads_mall_csmr_store_csmr_3y_tag_df\", \"mdl:model:ads_mall_csmr_store_csmr_tag_df\", \"mdl:model:ads_mall_csmr_wechat_guide_df\", \"mdl:model:ads_mall_trd_chl_sale_h_last_y_df\", \"mdl:model:ads_mall_trd_mbr_sale_ord_d_df\", \"mdl:model:dim_mall_chl_brand_df\", \"mdl:model:dim_mall_chl_store_df\", \"mdl:model:dwd_mall_chl_store_item_zipper_df\", \"mdl:model:dws_mall_trd_mbr_src_sale_d_df\", \"mdl:model:dws_spm_online_csmr_sell_ord_sum_df\", \"mdl:model:ods_crm_arr_hall_ht_df\", \"pg_main.result.ads_csmr_brand_category_input_df\", \"pg_main.result.ads_csmr_brand_category_output_df\", \"pg_main.result.ads_csmr_store_brand_attr_analysis_df\", \"pg_main.result.ads_csmr_store_brand_drain_df\", \"pg_main.result.ads_csmr_store_brand_drain_drc_df\", \"pg_main.result.ads_csmr_store_brand_frq_analysis_df\", \"pg_main.result.ads_csmr_store_brand_new_mbr_sale_df\", \"pg_main.result.ads_csmr_store_brand_trd_analysis_df\", \"pg_main.result.ads_csmr_store_brand_whole_sale_df\", \"pg_main.result.ads_csmr_store_drain_df\", \"pg_main.result.ads_mall_csmr_csmr_brand_tag_df\", \"pg_main.result.ads_mall_csmr_csmr_category_tag_df\", \"pg_main.result.ads_mall_csmr_csmr_tag_df\", \"pg_main.result.ads_mall_csmr_store_csmr_3y_tag_df\", \"pg_main.result.ads_mall_csmr_store_csmr_tag_df\", \"pg_main.result.ads_mall_csmr_wechat_guide_df\", \"pg_main.result.ads_mall_trd_chl_sale_h_last_y_df\", \"pg_main.result.ads_mall_trd_mbr_sale_ord_d_df\", \"pg_main.result.dim_mall_chl_brand_df\", \"pg_main.result.dim_mall_chl_store_df\", \"pg_main.result.dim_mall_chl_store_df.belong_area\", \"pg_main.result.dim_mall_chl_store_df.busi_type\", \"pg_main.result.dim_mall_chl_store_df.business_name\", \"pg_main.result.dim_mall_chl_store_df.city\", \"pg_main.result.dim_mall_chl_store_df.cst_flow_store_sort\", \"pg_main.result.dim_mall_chl_store_df.cst_flow_type_sort\", \"pg_main.result.dim_mall_chl_store_df.sale_sort\", \"pg_main.result.dim_mall_chl_store_df.status\", \"pg_main.result.dim_mall_chl_store_df.store_id\", \"pg_main.result.dim_mall_chl_store_df.store_level\", \"pg_main.result.dim_mall_chl_store_df.store_name\", \"pg_main.result.dim_mall_chl_store_df.store_shotr_name\", \"pg_main.result.dim_mall_chl_store_df.store_type\", \"pg_main.result.dim_mall_chl_store_df.strt_time\", \"pg_main.result.dwd_mall_chl_store_item_zipper_df\", \"pg_main.result.dws_mall_trd_mbr_src_sale_d_df\", \"pg_main.result.dws_spm_online_csmr_sell_ord_sum_df\"], \"denied_item_keys\": [], \"reason\": null, \"subject_summary\": \"role:TENANT_ADMIN\"}, \"masked_columns\": [], \"latency_ms\": 5252, \"error_code\": null, \"error_message\": null}",
+        "timestamp": "2026-10-20T01:33:37.097734+00:00",
+        "metadata": {}
+      }
+    ],
+    "iqd-8a58a4b7-e466-421a-8408-2f387e951a6d": [
+      {
+        "role": "user",
+        "content": "无锡地区有哪几家店",
+        "timestamp": "2026-10-20T01:35:04.746281+00:00",
+        "metadata": {
+          "iqd": {
+            "view": "admin",
+            "question": "无锡地区有哪几家店"
+          },
+          "source": "mis-bff",
+          "X-User-Id": "1",
+          "X-Mis-Orgs": "[{\"id\":\"1\"}]",
+          "capability": "iqd",
+          "X-Mis-Roles": "[{\"id\":\"1\",\"code\":\"TENANT_ADMIN\"}]"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "{\"query_id\": \"q-8078bd8c9b25\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"succeeded\", \"answer_summary\": \"查询返回 24 行结果。（结果共 24 行，工具回传仅含前 20 行预览；请基于 answer_summary 与预览作答，勿要求全量 rows。）\", \"data\": {\"columns\": [{\"name\": \"store_id\", \"item_key\": \"store_id\", \"data_type\": \"\", \"display_name\": \"store_id\", \"masked\": false}, {\"name\": \"store_name\", \"item_key\": \"store_name\", \"data_type\": \"\", \"display_name\": \"store_name\", \"masked\": false}, {\"name\": \"busi_type\", \"item_key\": \"busi_type\", \"data_type\": \"\", \"display_name\": \"busi_type\", \"masked\": false}, {\"name\": \"status\", \"item_key\": \"status\", \"data_type\": \"\", \"display_name\": \"status\", \"masked\": false}], \"rows\": [[\"1065\", \"大统华无锡长江北路店\", null, \"1\"], [\"1073\", \"无锡大统华经贸店\", null, \"1\"], [\"1086\", \"无锡沁春园店\", null, \"1\"], [\"1078\", \"无锡大统华景丽苑店\", null, \"1\"], [\"20\", \"大统华无锡洛社店\", null, \"1\"], [\"1069\", \"无锡大统华五爱路店\", null, \"1\"], [\"1099\", \"无锡金科二店\", null, \"1\"], [\"1062\", \"大统华无锡梅村店\", null, \"1\"], [\"1071\", \"无锡大统华梅园店\", null, \"1\"], [\"1079\", \"无锡大统华周新苑店\", null, \"1\"], [\"1068\", \"无锡大统华金蠡路店\", null, \"1\"], [\"13\", \"大统华无锡硕放店\", null, \"1\"], [\"1087\", \"无锡夏家边店\", null, \"1\"], [\"35\", \"无锡藕塘店\", null, \"1\"], [\"1067\", \"无锡大统华清扬路店\", null, \"1\"], [\"1057\", \"无锡八佰伴城市超市\", null, \"1\"], [\"1085\", \"无锡金科店\", null, \"1\"], [\"6007\", \"八佰伴无锡店\", \"百货中大\", \"1\"], [\"1076\", \"无锡大统华新明路店\", null, \"1\"], [\"19\", \"大统华无锡北塘区店\", null, \"1\"]], \"row_count\": 24, \"truncated\": true, \"preview_rows\": 20}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"detail\": \"命中 61 张授权表\", \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 2, \"code\": \"understanding\", \"label\": \"理解你的问题\", \"detail\": null, \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 3, \"code\": \"searching\", \"label\": \"检索相关语义模型\", \"detail\": \"语义模型\", \"status\": \"done\", \"duration_ms\": 436}, {\"seq\": 4, \"code\": \"generating\", \"label\": \"生成查询\", \"detail\": \"SQL 已生成\", \"status\": \"done\", \"duration_ms\": 4404}, {\"seq\": 5, \"code\": \"lineage_check\", \"label\": \"复核查询涉及的数据范围\", \"detail\": \"涉及 1 张表，全部在授权范围内\", \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 6, \"code\": \"executing\", \"label\": \"执行并汇总结果\", \"detail\": \"返回 24 行\", \"status\": \"done\", \"duration_ms\": 429}, {\"seq\": 7, \"code\": \"masking\", \"label\": \"敏感字段处理\", \"detail\": \"无命中\", \"status\": \"done\", \"duration_ms\": 0}, {\"seq\": 8, \"code\": \"finished\", \"label\": \"完成\", \"detail\": null, \"status\": \"done\", \"duration_ms\": 22}], \"scope\": {\"decision\": \"allow\", \"allowed_item_keys\": [\"mdl:model:ads_csmr_brand_category_input_df\", \"mdl:model:ads_csmr_brand_category_output_df\", \"mdl:model:ads_csmr_store_brand_attr_analysis_df\", \"mdl:model:ads_csmr_store_brand_drain_df\", \"mdl:model:ads_csmr_store_brand_drain_drc_df\", \"mdl:model:ads_csmr_store_brand_frq_analysis_df\", \"mdl:model:ads_csmr_store_brand_new_mbr_sale_df\", \"mdl:model:ads_csmr_store_brand_trd_analysis_df\", \"mdl:model:ads_csmr_store_brand_whole_sale_df\", \"mdl:model:ads_csmr_store_drain_df\", \"mdl:model:ads_mall_csmr_csmr_brand_tag_df\", \"mdl:model:ads_mall_csmr_csmr_category_tag_df\", \"mdl:model:ads_mall_csmr_csmr_tag_df\", \"mdl:model:ads_mall_csmr_store_csmr_3y_tag_df\", \"mdl:model:ads_mall_csmr_store_csmr_tag_df\", \"mdl:model:ads_mall_csmr_wechat_guide_df\", \"mdl:model:ads_mall_trd_chl_sale_h_last_y_df\", \"mdl:model:ads_mall_trd_mbr_sale_ord_d_df\", \"mdl:model:dim_mall_chl_brand_df\", \"mdl:model:dim_mall_chl_store_df\", \"mdl:model:dwd_mall_chl_store_item_zipper_df\", \"mdl:model:dws_mall_trd_mbr_src_sale_d_df\", \"mdl:model:dws_spm_online_csmr_sell_ord_sum_df\", \"mdl:model:ods_crm_arr_hall_ht_df\", \"pg_main.result.ads_csmr_brand_category_input_df\", \"pg_main.result.ads_csmr_brand_category_output_df\", \"pg_main.result.ads_csmr_store_brand_attr_analysis_df\", \"pg_main.result.ads_csmr_store_brand_drain_df\", \"pg_main.result.ads_csmr_store_brand_drain_drc_df\", \"pg_main.result.ads_csmr_store_brand_frq_analysis_df\", \"pg_main.result.ads_csmr_store_brand_new_mbr_sale_df\", \"pg_main.result.ads_csmr_store_brand_trd_analysis_df\", \"pg_main.result.ads_csmr_store_brand_whole_sale_df\", \"pg_main.result.ads_csmr_store_drain_df\", \"pg_main.result.ads_mall_csmr_csmr_brand_tag_df\", \"pg_main.result.ads_mall_csmr_csmr_category_tag_df\", \"pg_main.result.ads_mall_csmr_csmr_tag_df\", \"pg_main.result.ads_mall_csmr_store_csmr_3y_tag_df\", \"pg_main.result.ads_mall_csmr_store_csmr_tag_df\", \"pg_main.result.ads_mall_csmr_wechat_guide_df\", \"pg_main.result.ads_mall_trd_chl_sale_h_last_y_df\", \"pg_main.result.ads_mall_trd_mbr_sale_ord_d_df\", \"pg_main.result.dim_mall_chl_brand_df\", \"pg_main.result.dim_mall_chl_store_df\", \"pg_main.result.dim_mall_chl_store_df.belong_area\", \"pg_main.result.dim_mall_chl_store_df.busi_type\", \"pg_main.result.dim_mall_chl_store_df.business_name\", \"pg_main.result.dim_mall_chl_store_df.city\", \"pg_main.result.dim_mall_chl_store_df.cst_flow_store_sort\", \"pg_main.result.dim_mall_chl_store_df.cst_flow_type_sort\", \"pg_main.result.dim_mall_chl_store_df.sale_sort\", \"pg_main.result.dim_mall_chl_store_df.status\", \"pg_main.result.dim_mall_chl_store_df.store_id\", \"pg_main.result.dim_mall_chl_store_df.store_level\", \"pg_main.result.dim_mall_chl_store_df.store_name\", \"pg_main.result.dim_mall_chl_store_df.store_shotr_name\", \"pg_main.result.dim_mall_chl_store_df.store_type\", \"pg_main.result.dim_mall_chl_store_df.strt_time\", \"pg_main.result.dwd_mall_chl_store_item_zipper_df\", \"pg_main.result.dws_mall_trd_mbr_src_sale_d_df\", \"pg_main.result.dws_spm_online_csmr_sell_ord_sum_df\"], \"denied_item_keys\": [], \"reason\": null, \"subject_summary\": \"role:TENANT_ADMIN\"}, \"masked_columns\": [], \"latency_ms\": 5431, \"error_code\": null, \"error_message\": null}",
+        "timestamp": "2026-10-20T01:35:04.761696+00:00",
+        "metadata": {}
+      }
+    ]
+  },
+  "parent_meta": {
+    "metadata": {
+      "mis_user_id": 1,
+      "raw_channel": "h5"
+    }
+  },
+  "tables": [
+    "agent_configs",
+    "agent_feedback",
+    "agent_memory",
+    "agent_session",
+    "agent_session_message",
+    "alembic_version",
+    "credential_mappings",
+    "departments",
+    "messages",
+    "roles",
+    "route_logs",
+    "sessions",
+    "token_usage",
+    "users",
+    "wecom_identity_bindings"
+  ]
+}

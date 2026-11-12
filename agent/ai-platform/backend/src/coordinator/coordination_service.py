@@ -60,10 +60,14 @@ class CoordinationDelegation(BaseModel):
     spawn_tools_enabled: bool = True
     enforce_task_brief: bool = True
     max_depth: int = Field(default=1, ge=1, le=5)
-    timeout_seconds: int = Field(default=120, ge=1)
+    timeout_seconds: int = Field(default=1680, ge=1)
     emit_dispatch_trace: bool = True
     forbid_self_invoke: bool = True
     worker_ids: list[str] = Field(default_factory=list)
+    #: invoke 成功且本轮仅此一次委派时，跳过 Coordinator 第二轮 LLM，Worker 正文直出
+    passthrough_workers: list[str] = Field(default_factory=list)
+    #: 意图预路由命中这些 Worker 时，跳过 Coordinator 首轮 LLM，直接 agent__invoke
+    hard_dispatch_workers: list[str] = Field(default_factory=list)
 
 
 class CoordinationCatalog(BaseModel):
@@ -75,7 +79,7 @@ class CoordinationCatalog(BaseModel):
     input_contract: list[str] = Field(default_factory=list)
     output_contract: str = "text"
     security_level: str = Field(default="read_only", description="read_only | needs_hitl")
-    timeout_seconds: int = Field(default=120, ge=1)
+    timeout_seconds: int = Field(default=1680, ge=1)
     degrade_message: str = ""
 
 
@@ -299,7 +303,13 @@ async def write_coordination(
 
     # ---- 触发 WorkerCatalog 重建 + 配置热更新链路 ----
     try:
-        await manager.reload_agent(agent_id)
+        _, runtime_error = await manager.reload_agent(agent_id)
+        if runtime_error:
+            logger.warning(
+                "write_coordination: reload_agent partial failure",
+                agent_id=agent_id,
+                error=runtime_error,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("write_coordination: reload_agent failed", agent_id=agent_id, error=str(exc))
     refresh_worker_catalog()

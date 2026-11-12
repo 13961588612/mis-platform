@@ -108,7 +108,7 @@ class AgentOpsWecomControllerTest {
 
             mockMvc.perform(post("/api/v1/agent-ops/channels/wecom/bots")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"name\":\"新助手\",\"ws_url\":\"wss://wecom.example/bot\",\"secret\":\"s3cret\",\"bound_agent_id\":\"ag-1\"}"))
+                            .content("{\"name\":\"新助手\",\"bot_secret_id\":\"wxbot-abc123\",\"secret\":\"s3cret\",\"bound_agent_id\":\"ag-1\"}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.code").value(0))
                     .andExpect(jsonPath("$.data.bot_id").value("wb-new"));
@@ -123,7 +123,7 @@ class AgentOpsWecomControllerTest {
 
             mockMvc.perform(put("/api/v1/agent-ops/channels/wecom/bots/wb-1")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"name\":\"改名\",\"ws_url\":\"wss://wecom.example/bot\",\"bound_agent_id\":\"ag-2\"}"))
+                            .content("{\"name\":\"改名\",\"bot_secret_id\":\"wxbot-abc123\",\"bound_agent_id\":\"ag-2\"}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.code").value(0));
 

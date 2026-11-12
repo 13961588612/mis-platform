@@ -32,11 +32,13 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
+    { name = "pymysql" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "redis", extra = ["hiredis"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "sqlglot" },
     { name = "structlog" },
     { name = "tenacity" },
     { name = "tiktoken" },
@@ -75,6 +77,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
+    { name = "pymysql", specifier = ">=1.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
@@ -84,6 +87,7 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
+    { name = "sqlglot", specifier = ">=25.0.0" },
     { name = "structlog", specifier = ">=24.1.0" },
     { name = "tenacity", specifier = ">=8.2.0" },
     { name = "tiktoken", specifier = ">=0.7.0" },
@@ -2396,6 +2400,15 @@ crypto = [
 ]
 
 [[package]]
+name = "pymysql"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b1/d4/c15b459e25a23767d2f4065ef40968920320f04e302889574310c21c96a3/pymysql-1.2.3.tar.gz", hash = "sha256:d5b288529782e536ae171866df3ca9dc4f6cbfb3cc2f18e6f837fbb90dbc262b", size = 50629, upload-time = "2026-09-17T12:22:49.146Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/4b/0a906d8184f011ff8dbd4722743783867589b33269d2c5fff238d636fdcb/pymysql-1.2.3-py3-none-any.whl", hash = "sha256:14f1c68e2ed859243ae5ca41ffbe677027fc46bc136a9f0be8a4e928e5e7415a", size = 46740, upload-time = "2026-09-17T12:22:47.826Z" },
+]
+
+[[package]]
 name = "pyperclip"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3037,6 +3050,15 @@ wheels = [
 [package.optional-dependencies]
 asyncio = [
     { name = "greenlet" },
+]
+
+[[package]]
+name = "sqlglot"
+version = "30.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/d4/da49abcc81beebbb25f29ddf87f2980c63c949569d7f2da40c06d95fa415/sqlglot-30.17.0.tar.gz", hash = "sha256:2d6b8def93304fa300f4d20f48e3909e7f436fda56ca1fafd8975f6c561ef62c", size = 5999019, upload-time = "2026-08-12T19:36:50.587Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/bc/2a07cef49046e6cf5d1a8b1de553aaef8491b4170dbfe254c8687c764408/sqlglot-30.17.0-py3-none-any.whl", hash = "sha256:84435ac283a60173da31b5fd7d11a725037a1c3fd6ed1e21fb065de74ddb579f", size = 741795, upload-time = "2026-08-12T19:36:48.699Z" },
 ]
 
 [[package]]

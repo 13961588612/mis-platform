@@ -58,6 +58,7 @@ def skills_client(
     s1 = _FakeSkill("s1", status=SkillStatus.ACTIVE)
     registry.get = MagicMock(side_effect=lambda sid: s1 if sid == "s1" else None)
     registry.list_active = MagicMock(return_value=[s1])
+    registry.list_all = MagicMock(return_value=[s1])
     monkeypatch.setattr(
         "src.bootstrap.skills_mcp.get_skill_registry", lambda: registry
     )
@@ -76,7 +77,7 @@ def skills_client(
     agent_mgr = MagicMock()
     agent_mgr.get_agent = _get_agent
     config_mgr = MagicMock()
-    config_mgr.reload_agent = AsyncMock()
+    config_mgr.reload_agent = AsyncMock(return_value=(MagicMock(), None))
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -109,7 +110,10 @@ def test_put_agent_skills_writes_enabled_skills(
     resp = client.put("/api/v1/agents/a1/skills", json={"skill_ids": ["s1"]})
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["enabled_skill_ids"] == ["s1"]
+    body = resp.json()["data"]
+    assert body["enabled_skill_ids"] == ["s1"]
+    assert body["reload_ok"] is True
+    assert body.get("reload_warning") is None
     config_mgr.reload_agent.assert_awaited_once_with("a1")
 
     written = (base / "agents" / "a1" / "skills" / "enabled-skills.yaml").read_text(
@@ -117,6 +121,49 @@ def test_put_agent_skills_writes_enabled_skills(
     )
     assert "enabled:" in written
     assert "s1" in written
+
+
+def test_put_agent_skills_reports_reload_warning(
+    skills_client: tuple[TestClient, Path, MagicMock, MagicMock]
+) -> None:
+    """热重载失败时仍落盘，并在响应中带 reload_ok=false + reload_warning。"""
+    client, base, _, config_mgr = skills_client
+    config_mgr.reload_agent = AsyncMock(return_value=(None, "运行时热重载失败：boom"))
+
+    # 需要 agent.yaml 存在，否则会被当成未知 Agent
+    agent_root = base / "agents" / "a1"
+    agent_root.mkdir(parents=True, exist_ok=True)
+    (agent_root / "agent.yaml").write_text("agent:\n  name: a1\n", encoding="utf-8")
+
+    resp = client.put("/api/v1/agents/a1/skills", json={"skill_ids": ["s1"]})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["enabled_skill_ids"] == ["s1"]
+    assert body["reload_ok"] is False
+    assert "热重载" in (body.get("reload_warning") or "")
+
+
+def test_get_agent_skills_reads_disk_not_stale_memory(
+    skills_client: tuple[TestClient, Path, MagicMock, MagicMock]
+) -> None:
+    """GET 必须以 enabled-skills.yaml 为准，不能只信运行中 instance.config。"""
+    client, base, agent_mgr, _ = skills_client
+
+    # 内存仍是空绑定（模拟热重载失败 / 未刷新）
+    cfg = agent_mgr.get_agent("a1").config
+    cfg.skills = []
+
+    skills_dir = base / "agents" / "a1" / "skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "enabled-skills.yaml").write_text(
+        "skills:\n  enabled:\n  - s1\n",
+        encoding="utf-8",
+    )
+
+    resp = client.get("/api/v1/agents/a1/skills")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["enabled_skill_ids"] == ["s1"]
 
 
 def test_put_agent_skills_rejects_unavailable_skill(

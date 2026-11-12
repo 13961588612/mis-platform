@@ -8,6 +8,7 @@ import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeePhoneMatchVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.UserDataSetScopeVO;
 import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
@@ -59,7 +60,12 @@ public class OrgWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<DeptTypeVO>> DEPT_TYPE =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<Void>> VOID =
+    private static final ParameterizedTypeReference<Result<UserDataSetScopeVO>> DATA_SCOPE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<Long>>> LONG_LIST =
+            new ParameterizedTypeReference<>() {};
+
+        private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Map<String, Long>>> COUNT =
             new ParameterizedTypeReference<>() {};
@@ -340,4 +346,41 @@ public class OrgWebClient extends AbstractDownstreamClient {
         body.put("phone", phone);
         return body;
     }
+    /** Query user data scope view from mis-org (for IQD header injection). */
+    public UserDataSetScopeVO getUserDataSetScope(Long userId) {
+        return block(client().get()
+                .uri("/internal/v1/orgs/users/{userId}/data-scope", userId)
+                .retrieve()
+                .bodyToMono(DATA_SCOPE));
+    }
+
+    /** 消息圈人：部门与岗位类型的组合（每条为交集，多条为并集）。 */
+    public List<Long> audienceEmployeeIds(Long tenantId, List<Map<String, Long>> scopes) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("scopes", scopes == null ? List.of() : scopes);
+        List<Long> data = block(client().post()
+                .uri("/internal/v1/audience/employees")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(LONG_LIST));
+        return data != null ? data : List.of();
+    }
+
+    /** 旧口径：部门与岗位类型各自圈人后取并集。 */
+    public List<Long> audienceEmployeeIdsLegacy(Long tenantId, List<Long> deptIds, List<Long> postTypeIds) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("deptIds", deptIds == null ? List.of() : deptIds);
+        body.put("postTypeIds", postTypeIds == null ? List.of() : postTypeIds);
+        List<Long> data = block(client().post()
+                .uri("/internal/v1/audience/employees")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(LONG_LIST));
+        return data != null ? data : List.of();
+    }
+
 }

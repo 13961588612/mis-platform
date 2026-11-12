@@ -29,6 +29,10 @@ public class BffProperties {
     private String kbServiceId = "mis-kb";
     private String kbBaseUrl = "http://localhost:8108";
 
+    private boolean taskflowDiscoveryEnabled = false;
+    private String taskflowServiceId = "mis-taskflow";
+    private String taskflowBaseUrl = "http://localhost:8104";
+
     private long aggregateTimeoutMs = 3000;
     private String defaultPassword = "Mis@123456";
 
@@ -154,6 +158,30 @@ public class BffProperties {
 
     public boolean isKbDiscoveryEnabled() {
         return kbDiscoveryEnabled;
+    }
+
+    public boolean isTaskflowDiscoveryEnabled() {
+        return taskflowDiscoveryEnabled;
+    }
+
+    public void setTaskflowDiscoveryEnabled(boolean taskflowDiscoveryEnabled) {
+        this.taskflowDiscoveryEnabled = taskflowDiscoveryEnabled;
+    }
+
+    public String getTaskflowServiceId() {
+        return taskflowServiceId;
+    }
+
+    public void setTaskflowServiceId(String taskflowServiceId) {
+        this.taskflowServiceId = taskflowServiceId;
+    }
+
+    public String getTaskflowBaseUrl() {
+        return taskflowBaseUrl;
+    }
+
+    public void setTaskflowBaseUrl(String taskflowBaseUrl) {
+        this.taskflowBaseUrl = taskflowBaseUrl;
     }
 
     public void setKbDiscoveryEnabled(boolean kbDiscoveryEnabled) {

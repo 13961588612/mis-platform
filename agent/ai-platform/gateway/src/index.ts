@@ -77,9 +77,9 @@ function loadMisJwtPublicKey(): string | undefined {
  * - WECOM_SECRET: 企业微信应用 Secret
  * - WECOM_API_BASE_URL: 企业微信 API 基础 URL
  * - WECOM_BOT_CALLBACK_TOKEN: 企业微信 Bot 回调 Token（URL 回调模式）
- * - WECOM_BOT_ID: 智能机器人 BotID（长连接鉴权）
+ * - WECOM_BOT_ID: 智能机器人官方 BotID（长连接鉴权）
  * - WECOM_BOT_SECRET: 智能机器人长连接 Secret
- * - WECOM_BOT_WS_URL: 可选，默认 wss://openws.work.weixin.qq.com
+ * - WECOM_BOT_WS_URL: 高级覆盖项，默认 wss://openws.work.weixin.qq.com
  * - AGENT_CORE_API_URL: Agent Core API URL
  * - CORS_ORIGINS: CORS 允许的源（逗号分隔）
  *
@@ -115,6 +115,11 @@ function loadConfig(): GatewayServerConfig {
     },
     agentCoreApiUrl: process.env['AGENT_CORE_API_URL'] ?? 'http://backend:8000',
     gatewayId: getGatewayId(),
+    bff: {
+      internalUrl: process.env['BFF_INTERNAL_URL'] ?? 'http://mis-admin-bff:8080',
+      platformToken: process.env['PLATFORM_TOKEN'] ?? '',
+      timeoutMs: parseInt(process.env['BFF_PERMISSIONS_TIMEOUT_MS'] ?? '3000', 10),
+    },
   };
 }
 
@@ -132,19 +137,21 @@ function createRedisConnection(redisUrl: string): Redis {
   const redis = new Redis(redisUrl, {
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
+    // 永不 return null：否则进程仍存活、WS ping 正常，但业务 Redis 停在 end，
+    // A2UI 路径立刻报「Connection is closed.」（长跑 Gateway 常见坑）。
     retryStrategy: (times: number) => {
+      const delay = Math.min(times * 500, 5000);
       if (times > 10) {
         logger.error(
-          { times },
-          'Redis connection retry limit exceeded',
+          { times, delayMs: delay },
+          'Redis connection still retrying after many attempts',
         );
-        return null;
+      } else {
+        logger.warn(
+          { times, delayMs: delay },
+          'Redis connection retrying',
+        );
       }
-      const delay = Math.min(times * 500, 5000);
-      logger.warn(
-        { times, delayMs: delay },
-        'Redis connection retrying',
-      );
       return delay;
     },
     reconnectOnError: (error: Error) => {
@@ -248,7 +255,8 @@ async function main(): Promise<void> {
     // aip:stream:gw:pending:events，各 Gateway 用自身消费组独立 drain，
     // 仅真正持有该 bot 的 Gateway 实际投递（其余无对应 adapter ⇒ 自然 no-op）。
     const XCLAIM_INTERVAL_MS = parseInt(process.env['XCLAIM_INTERVAL_MS'] ?? '5000', 10);
-    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '30000', 10);
+    // 与 Agent Core 对齐：须大于最长入站处理窗口，避免长任务 PEL 误重投。
+    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '1920000', 10);
 
     const eventConsumer = new StreamConsumer(
       redisConsumer,

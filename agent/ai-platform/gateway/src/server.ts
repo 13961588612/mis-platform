@@ -24,12 +24,16 @@ import { logger, registerLoggerMiddleware } from './middleware/logger.js';
 import { registerAuthMiddleware, type AuthConfig, type JwtClaims } from './middleware/auth.js';
 import { registerRateLimitMiddleware } from './middleware/rateLimit.js';
 import { WecomH5Adapter } from './adapters/wecom/WecomH5Adapter.js';
-import { H5Adapter } from './adapters/h5/H5Adapter.js';
+import { H5Adapter, getBoundClientId, getBoundHostId } from './adapters/h5/H5Adapter.js';
 import { BotRegistry } from './channels/BotRegistry.js';
 import { MessageRouter } from './router/MessageRouter.js';
 import { EventTransformer } from './router/EventTransformer.js';
 import { ChannelResolver } from './router/ChannelResolver.js';
 import { getCapabilityRegistry } from './channels/CapabilityRegistry.js';
+import { A2UIRuntime } from './a2ui/A2UIRuntime.js';
+import { SurfacePermissionFilter } from './a2ui/SurfacePermissionFilter.js';
+import { toMiddlewareSchema } from './a2ui/catalog.js';
+import type { A2uiClientAction } from './a2ui/types.js';
 
 // ============================================================================
 // 类型定义
@@ -56,6 +60,15 @@ export interface GatewayServerConfig {
   agentCoreApiUrl: string;
   /** 本 Gateway 稳定 ID（写 aip:session:{sid}:gateway 粘滞映射用，T7） */
   gatewayId: string;
+  /** BFF 配置（A2UI 渲染权限反查） */
+  bff: {
+    /** BFF 内网基址，如 http://mis-admin-bff:8080 */
+    internalUrl: string;
+    /** BFF 反向信任令牌（X-Platform-Token 共享密钥） */
+    platformToken: string;
+    /** BFF 请求超时（毫秒） */
+    timeoutMs: number;
+  };
 }
 
 // ============================================================================
@@ -79,6 +92,7 @@ export async function createServer(
   botRegistry: BotRegistry;
   messageRouter: MessageRouter;
   eventTransformer: EventTransformer;
+  a2uiRuntime: A2UIRuntime;
 }> {
   // 创建 Fastify 实例
   const app = Fastify({
@@ -133,6 +147,19 @@ export async function createServer(
   const messageRouter = new MessageRouter(redis);
   const eventTransformer = new EventTransformer();
 
+  // 创建 A2UI 运行时（A2UI 中间件 + RedisStreamAgent 编排 + 渲染权限过滤）
+  const a2uiRuntime = new A2UIRuntime({
+    redis,
+    schema: toMiddlewareSchema(),
+    permissionFilter: new SurfacePermissionFilter({
+      redis,
+      bffInternalUrl: config.bff.internalUrl,
+      platformToken: config.bff.platformToken,
+      timeoutMs: config.bff.timeoutMs,
+    }),
+    messageRouter,
+  });
+
   // ===== 注册路由 =====
 
   registerRoutes(
@@ -143,6 +170,7 @@ export async function createServer(
     h5Adapter,
     messageRouter,
     eventTransformer,
+    a2uiRuntime,
     config,
   );
 
@@ -158,6 +186,7 @@ export async function createServer(
     h5Adapter,
     messageRouter,
     eventTransformer,
+    a2uiRuntime,
   };
 }
 
@@ -176,6 +205,7 @@ function registerRoutes(
   h5Adapter: H5Adapter,
   messageRouter: MessageRouter,
   _eventTransformer: EventTransformer,
+  a2uiRuntime: A2UIRuntime,
   _config: GatewayServerConfig,
 ): void {
   // ===== 健康检查 =====
@@ -298,14 +328,29 @@ function registerRoutes(
       socket.close(4001, 'Authentication required');
       return;
     }
+    // 验签通过的原始 JWT（auth 中间件挂 rawToken），透传入站供 Core 调 BFF
+    const upstreamJwt =
+      typeof (req as unknown as { rawToken?: string }).rawToken === 'string'
+        ? (req as unknown as { rawToken?: string }).rawToken!.trim()
+        : '';
 
-    const query = req.query as { sessionId?: string };
+    const query = req.query as { sessionId?: string; hostId?: string; clientId?: string };
     const clientSessionId =
       typeof query.sessionId === 'string' && query.sessionId.length > 0
         ? query.sessionId
         : ChannelResolver.generateSessionId('web');
 
-    await h5Adapter.registerWsConnection(clientSessionId, socket, _config.gatewayId);
+    // R47 多宿主：hostId（端标识，缺省 mis-admin-web）+ clientId（连接端标识，缺省随机）
+    await h5Adapter.registerWsConnection(clientSessionId, socket, _config.gatewayId, {
+      hostId:
+        typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined,
+      clientId:
+        typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined,
+    });
 
     logger.info(
       { sessionId: clientSessionId, userId: user.userId },
@@ -320,7 +365,10 @@ function registerRoutes(
           sessionId?: string;
           agentId?: string;
           messageType?: string;
+          /** generation.cancel 可选 runId */
+          runId?: string;
           metadata?: Record<string, unknown>;
+          action?: A2uiClientAction;
           entitySelectResponse?: {
             resumeToken?: string;
             selectedCandidate?: Record<string, unknown>;
@@ -333,6 +381,32 @@ function registerRoutes(
         }
 
         if (message.type === 'session.create' || message.type === 'session.close') {
+          return;
+        }
+
+        // Copilot 主动停止当前生成：入站 messageType=generation.cancel → Core 取消 a2ui_run + Worker
+        if (message.type === 'generation.cancel') {
+          const cancelSessionId = message.sessionId ?? clientSessionId;
+          logger.info(
+            { sessionId: cancelSessionId, userId: user.userId },
+            'generation.cancel received from frontend',
+          );
+          const inbound = MessageRouter.createInboundMessage({
+            userId: user.userId,
+            channel: 'h5',
+            content: '',
+            sessionId: cancelSessionId,
+            agentId: message.agentId,
+            traceId: String(req.id),
+            messageType: 'generation.cancel',
+            metadata: {
+              source: 'h5-generation-cancel',
+              ...(typeof message.runId === 'string' && message.runId.length > 0
+                ? { runId: message.runId }
+                : {}),
+            },
+          });
+          await messageRouter.route(inbound);
           return;
         }
 
@@ -365,7 +439,80 @@ function registerRoutes(
           return;
         }
 
+        // A2UI 用户操作回传（前端 `{ type: 'a2ui_action', action }`）：
+        // 提取 surfaceId/componentId/action → A2UIRuntime.processUserAction →
+        // 新一轮 Agent 执行（结果经事件流回传前端）。
+        // 身份 userId 只取 JWT 验签结果（P4：消息体/工具内 userId 一律不可信）。
+        if (message.type === 'a2ui_action') {
+          const action = message.action;
+          if (action != null && typeof action.surfaceId === 'string' && typeof action.action === 'string') {
+            logger.info(
+              { sessionId: message.sessionId ?? clientSessionId, userId: user.userId, action: action.action },
+              'A2UI action received from frontend',
+            );
+            // 事件流下发与错误提示在 runAgent 内部处理，不阻塞 WS 消息循环。
+            void a2uiRuntime
+              .processUserAction({
+                user,
+                sessionId: message.sessionId ?? clientSessionId,
+                action,
+                h5Adapter,
+                ...(upstreamJwt.length > 0 ? { upstreamJwt } : {}),
+              })
+              .catch((error: unknown) => {
+                logger.error(
+                  {
+                    error: error instanceof Error ? error.message : String(error),
+                    sessionId: message.sessionId ?? clientSessionId,
+                    userId: user.userId,
+                  },
+                  'A2UI action processing failed',
+                );
+              });
+          } else {
+            socket.send(
+              JSON.stringify({
+                type: 'a2ui_action_result',
+                ok: false,
+                error: { code: 1001, message: 'invalid a2ui_action: action.surfaceId/action.action required' },
+              }),
+            );
+          }
+          return;
+        }
+
         if (message.type === 'chat' || message.content != null) {
+          // A2UI 启用的对话（显式 opt-in，默认走旧协议通道，双协议兼容）：
+          //   messageType === 'a2ui_chat' 或 metadata.a2ui === true
+          const a2uiOptIn =
+            message.messageType === 'a2ui_chat' || message.metadata?.['a2ui'] === true;
+          if (a2uiOptIn) {
+            logger.info(
+              { sessionId: message.sessionId ?? clientSessionId, userId: user.userId },
+              'A2UI chat message received',
+            );
+            void a2uiRuntime
+              .runChat({
+                content: message.content ?? '',
+                user,
+                sessionId: message.sessionId ?? clientSessionId,
+                h5Adapter,
+                metadata: message.metadata,
+                ...(upstreamJwt.length > 0 ? { upstreamJwt } : {}),
+              })
+              .catch((error: unknown) => {
+                logger.error(
+                  {
+                    error: error instanceof Error ? error.message : String(error),
+                    sessionId: message.sessionId ?? clientSessionId,
+                    userId: user.userId,
+                  },
+                  'A2UI chat run failed',
+                );
+              });
+            return;
+          }
+
           const inbound = MessageRouter.createInboundMessage({
             userId: user.userId,
             channel: 'h5',
@@ -393,8 +540,25 @@ function registerRoutes(
     });
 
     socket.on('close', () => {
-      void h5Adapter.unregisterWsConnection(clientSessionId);
-      logger.info({ sessionId: clientSessionId }, 'H5 WebSocket connection closed');
+      // BUG-1 修复：close 从连接对象取注册时绑定的 clientId/hostId（buildEndpoint 已解析：
+      // 显式 query.clientId 或随机 UUID），不再依赖 query.clientId——真实前端 ws-client
+      // 不传 clientId 时缺省为 undefined，旧逻辑会误删该 sessionId 全部端点（R47 广播中断）。
+      // 保留 query.clientId/hostId 显式传参兼容（T07' embed 宿主可传；绑定值与之等价）。
+      const closedClientId =
+        getBoundClientId(socket) ??
+        (typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined);
+      const closedHostId =
+        getBoundHostId(socket) ??
+        (typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined);
+      void h5Adapter.unregisterWsConnection(clientSessionId, closedClientId ?? '', closedHostId);
+      logger.info(
+        { sessionId: clientSessionId, clientId: closedClientId, hostId: closedHostId },
+        'H5 WebSocket connection closed',
+      );
     });
   });
 
@@ -513,7 +677,7 @@ function registerRoutes(
   // ===== 事件流 SSE 端点 =====
 
   app.get('/api/events/stream', async (req: FastifyRequest, reply: FastifyReply) => {
-    const query = req.query as { sessionId?: string };
+    const query = req.query as { sessionId?: string; hostId?: string; clientId?: string };
 
     if (query.sessionId == null) {
       return reply.code(400).send({
@@ -524,13 +688,38 @@ function registerRoutes(
       });
     }
 
-    // 注册 SSE 连接（写粘滞映射 aip:session:{sid}:gateway，T7）
-    h5Adapter.registerSseConnection(query.sessionId, reply, _config.gatewayId);
+    // 注册 SSE 连接（写粘滞映射 aip:session:{sid}:gateway，T7；R47 多宿主 hostId/clientId）
+    h5Adapter.registerSseConnection(query.sessionId, reply, _config.gatewayId, {
+      hostId:
+        typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined,
+      clientId:
+        typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined,
+    });
 
     // 设置超时清理
     req.raw.on('close', () => {
-      void h5Adapter.unregisterSseConnection(query.sessionId!);
-      logger.info({ sessionId: query.sessionId }, 'SSE connection closed');
+      // BUG-1 修复：SSE close 同样从连接对象（reply）取注册时绑定的 clientId/hostId，
+      // 不再依赖 query.clientId——真实前端 sse-client 不传 clientId，缺省会误删整会话端点。
+      // 保留 query.clientId/hostId 显式传参兼容（T07' embed 宿主可传）。
+      const closedClientId =
+        getBoundClientId(reply) ??
+        (typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined);
+      const closedHostId =
+        getBoundHostId(reply) ??
+        (typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined);
+      void h5Adapter.unregisterSseConnection(query.sessionId!, closedClientId ?? '', closedHostId);
+      logger.info(
+        { sessionId: query.sessionId, clientId: closedClientId, hostId: closedHostId },
+        'SSE connection closed',
+      );
     });
 
     // 保持连接

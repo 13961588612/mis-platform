@@ -1,0 +1,47 @@
+# ai-platform-gateway (Agent Message Gateway :3100) — systemd on S2
+#
+# 前置：
+#   1) Node.js 22+（node -v）
+#   2) 代码已落盘并 npm ci && npm run build
+#   3) .env 就绪（自 deploy/env/prod/ai-platform-gateway.env.example）
+#   4) JWT 公钥 /usr/local/app/keys/public.pem 可读
+#   5) S1 Agent Core :8000、S4 Redis DB2 可达
+#
+# 安装：
+#   sudo cp ai-platform-gateway.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ai-platform-gateway
+#   sudo systemctl status ai-platform-gateway
+#   journalctl -u ai-platform-gateway -f
+
+[Unit]
+Description=MIS ai-platform Gateway (Agent :3100)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/app/ai-platform-gateway/agent/ai-platform/gateway
+
+# 应用环境（密码等）；与仓库 gateway 目录下 .env 同内容亦可
+EnvironmentFile=-/usr/local/app/ai-platform-gateway/agent/ai-platform/gateway/.env
+
+# 官方二进制安装在 /usr/local/bin；勿写死 /usr/bin/node（RHEL 上常不存在）
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/root
+Environment=NODE_ENV=production
+
+ExecStart=/usr/local/bin/node dist/index.js
+
+Restart=always
+RestartSec=5
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-platform-gateway
+
+[Install]
+WantedBy=multi-user.target

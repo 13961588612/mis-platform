@@ -158,6 +158,18 @@ export interface StageTiming {
   post_process_ms: number | null;
 }
 
+/**
+ * 单步耗时（v3，与后端日志「对话步骤」同源）。
+ * 硬委派时 Worker 步骤会镜像进 Coordinator 本轮，可用 agent_id 区分。
+ */
+export interface TurnTimingStep {
+  name: string;
+  duration_ms: number;
+  detail?: string | null;
+  agent_id?: string | null;
+  session_id?: string | null;
+}
+
 export interface SessionTiming {
   /** 本轮对应的 assistant 消息 id（2.1 按轮存储的 turn_key）。 */
   turn_key?: string;
@@ -172,6 +184,11 @@ export interface SessionTiming {
    * 各子段为毫秒整数或 ``null``（不可得，前端显示「—」）。
    */
   sub_stages?: SubStages | null;
+  /**
+   * 逐步时间线（v3，schema_version >= 3；与运行时「对话步骤」日志对齐）。
+   * 缺测 / 旧采样为 null 或空。
+   */
+  steps?: TurnTimingStep[] | null;
 }
 
 /**
@@ -436,6 +453,8 @@ export interface CoordinationDelegation {
   emit_dispatch_trace: boolean;
   forbid_self_invoke: boolean;
   worker_ids: string[];
+  /** invoke 成功且本轮仅一次委派时跳过 Coordinator 收尾 LLM，Worker 正文直出 */
+  passthrough_workers?: string[];
 }
 
 /** Worker Catalog 段（真实 wire `catalog`）。 */
@@ -503,7 +522,8 @@ export interface WorkerCatalog {
 
 // ------------------------------------------------------------------ 会话（UI#4）
 
-export type SessionChannel = 'web' | 'wecom' | 'api' | 'unknown';
+/** 运营台会话渠道。`iqd_test`/`kb_test` 为 BFF 直调问数/问答旁路。 */
+export type SessionChannel = 'web' | 'wecom' | 'api' | 'iqd_test' | 'kb_test' | 'unknown';
 
 /**
  * 会话。
@@ -511,6 +531,12 @@ export type SessionChannel = 'web' | 'wecom' | 'api' | 'unknown';
  * <p>主理人决策 ①：会话列表的**存储与检索在 T04 落地**，但类型按"全量可查"定义 ——
  * 即列表不限于内存中的活跃会话，历史会话同样可检索，故这里带齐时间与统计字段。
  */
+/** 父会话绑定的 Worker 子会话（详情 Redis 补齐）。 */
+export interface SessionWorkerLink {
+  worker_id: string;
+  session_id: string;
+}
+
 export interface Session {
   /**
    * 会话主键。**wire 上是 `session_id`**（ai-platform `SessionResponse.session_id`，
@@ -526,6 +552,10 @@ export interface Session {
   message_count: number;
   created_at: string;
   updated_at: string;
+  /** 委派子会话的父会话 id；主会话为 null。 */
+  parent_session_id?: string | null;
+  /** 父会话当前绑定的 Worker 子会话列表（详情接口补齐）。 */
+  worker_sessions?: SessionWorkerLink[];
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
@@ -550,9 +580,17 @@ export interface SessionMessage {
 export interface SessionQuery extends AgentPageQuery {
   agent_id?: string;
   channel?: SessionChannel;
+  /** 按用户过滤（Copilot 侧栏收口本用户）。 */
+  user_id?: string;
   keyword?: string;
+  /** 更新时间下界（ISO UTC）。 */
   from?: string;
+  /** 更新时间上界（ISO UTC）。 */
   to?: string;
+  /** 为 true 时包含 message_count=0 的空会话（清理用）。 */
+  include_empty?: boolean;
+  /** 为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿；默认隐藏。 */
+  include_worker_sessions?: boolean;
 }
 
 // ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）
@@ -843,18 +881,107 @@ export interface WecomBot {
   bot_id: string;
   name: string;
   enabled: boolean;
-  ws_url: string;
+  bot_secret_id: string;
   secret_masked: string;
   bound_agent_id?: string;
   health: 'connected' | 'disconnected' | 'unknown';
+  /** 企微企业 ID（身份绑定的 corp 维度）；未配置时不返回。 */
+  corp_id?: string;
+  /** 对应 MIS 租户 ID；未配置时不返回。 */
+  tenant_id?: number;
 }
 
 export interface WecomBotPayload {
   name: string;
-  ws_url: string;
+  bot_secret_id: string;
   /** 留空表示不修改既有 secret（新建时必填）。 */
   secret?: string;
   bound_agent_id?: string;
+  /** 企微企业 ID（用于「企微 userid → MIS 用户」身份绑定）。 */
+  corp_id?: string;
+  /** 对应 MIS 租户 ID。 */
+  tenant_id?: number;
+}
+// ------------------------------------------------------------------ 企微企业配置（方案 B §64–#70）
+
+/** 密钥引用类型：vault（Vault）/ env（环境变量）/ inline（明文）/ global（回退全局）。 */
+export type WecomCorpSecretRefKind = 'vault' | 'env' | 'inline' | 'global';
+
+/** 一条企微企业配置（corpsecret 不回明文，只有配置状态）。 */
+export interface WecomCorp {
+  corp_id: string;
+  tenant_id: number;
+  name: string;
+  secret_ref: string;
+  secret_ref_kind: WecomCorpSecretRefKind;
+  secret_configured: boolean;
+  user_bind_mode: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpPayload {
+  corp_id: string;
+  tenant_id: number;
+  name?: string;
+  user_bind_mode?: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpUpdatePayload {
+  tenant_id?: number;
+  name?: string;
+  user_bind_mode?: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpTestResult {
+  corp_id: string;
+  ok: boolean;
+}
+
+// ------------------------------------------------------------------ 企微用户身份绑定（§11 #59–#62）
+
+/** 绑定来源：人工绑定 / 首次手机号自动匹配 / 组织架构同步回填。 */
+export type WecomBindSource = 'manual' | 'auto_phone' | 'sync';
+
+/** 绑定状态：生效 / 已停用（不自动重生）。 */
+export type WecomBindStatus = 'active' | 'disabled';
+
+/** 一条企微身份绑定记录（手机号只回掩码，明文永不返回）。 */
+export interface WecomUserBinding {
+  id: string;
+  corp_id: string;
+  wecom_user_id: string;
+  tenant_id: number;
+  mis_user_id: number;
+  bind_source: WecomBindSource;
+  status: WecomBindStatus;
+  phone_masked: string | null;
+  last_verified_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** #59 绑定列表响应。 */
+export interface WecomUserBindingPage {
+  items: WecomUserBinding[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** #59 绑定列表查询参数。 */
+export interface WecomUserBindingQuery {
+  corp_id?: string;
+  tenant_id?: number | string;
+  status?: string;
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** #60 人工绑定请求体。 */
+export interface WecomUserBindPayload {
+  tenant_id: number;
+  mis_user_id: number;
+  phone?: string;
 }
 
 // ------------------------------------------------------------------ 监控 / 审批

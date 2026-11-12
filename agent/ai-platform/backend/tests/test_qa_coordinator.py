@@ -403,7 +403,8 @@ class TestRedlineDefaultsAndSseFrame:
         ]
         assert len(done_blocks) == 1
         data = json.loads(done_blocks[0].split("data:", 1)[1].strip())
-        assert set(data) == {"traceId", "finishReason", "sessionId"}
+        assert {"traceId", "finishReason", "sessionId"}.issubset(data)
+        assert data.get("messageId")
         assert "dispatchTrace" not in resp.text
 
     @pytest.mark.asyncio
@@ -458,13 +459,20 @@ class TestRedlineErrorTextVerbatim:
         )
         assert forbidden.output == "禁止委托调度器自身或其他调度 Agent：mis-copilot"
 
-        outsider = await _run(
-            tool,
-            InvokeAgentInput(agent_id="unknown-bot", content="检索差旅报销标准并给出条款依据"),
-            _ctx(), session_mgr, agent_mgr, settings,
-        )
+        with patch(
+            "src.skills.tools.invoke_agent.resolve_delegate_allowlist",
+            new=AsyncMock(return_value=frozenset(DEFAULT_WHITELIST)),
+        ):
+            outsider = await _run(
+                tool,
+                InvokeAgentInput(agent_id="unknown-bot", content="检索差旅报销标准并给出条款依据"),
+                _ctx({"session_id": "p"}),
+                session_mgr,
+                agent_mgr,
+                settings,
+            )
         allowed = ", ".join(sorted(DEFAULT_WHITELIST))
-        assert outsider.output == f"目标智能体不在白名单：unknown-bot。允许：{allowed}"
+        assert outsider.output == f"目标智能体不在可派发列表：unknown-bot。允许：{allowed}"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -536,19 +544,71 @@ class TestRedlineNoNewDependencies:
         assert not unexpected, f"{relative_path} 引入了新的第三方依赖：{unexpected}"
 
     def test_dependency_manifest_untouched(self) -> None:
-        """依赖清单（pyproject / uv.lock）相对基线零改动。"""
+        """依赖清单（pyproject / uv.lock）仅允许既有拍板依赖变更。
+
+        允许清单（均经主理人拍板，附获批理由）：
+        - ``sqlglot>=25.0.0``：v1.9（B1）mis-iqd scope_resolver AST 解析（血缘提取 /
+          行级范围注入）的设计必需依赖。
+        - ``pymysql>=1.1.0``：路线 A（2026-09-29）问数连接凭证入 vault 后，
+          平台侧直连业务库（StarRocks / Doris / MySQL 协议）查 ``information_schema``
+          做全库表发现 —— wren 0.13 无法查 information_schema（``[INVALID_SQL]
+          missing field type``），必须直连，而环境仅有 asyncpg（wire 仅 Postgres）。
+        除上述两项相关新增行外，pyproject.toml 与 uv.lock 的其它改动仍视为红线违规。
+        """
         probe = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
         if probe.returncode != 0:  # pragma: no cover - 非 git 环境跳过
             pytest.skip("非 git 工作区，跳过依赖清单比对")
 
-        diff = subprocess.run(
-            ["git", "diff", "--stat", "HEAD", "--", "pyproject.toml", "uv.lock"],
+        # uv.lock：仅允许 pymysql（路线 A 直连驱动）新增相关改动；其余须零改动。
+        uv_lock_diff = subprocess.run(
+            ["git", "diff", "HEAD", "--", "uv.lock"],
             cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
-        assert diff.stdout.strip() == "", f"依赖清单被改动：\n{diff.stdout}"
+        uv_added = [
+            line for line in uv_lock_diff.stdout.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        # pymysql 的 [[package]] 块含若干通用行（[[package]] / version / wheels / ]），
+        # 这些行本身不含 "pymysql"，故按"块"判定：只要新增行里**没有其它包名**即合规。
+        import re as _re
+        _pkg_name = _re.compile(r'^\+name = "([^"]+)"$')
+        other_pkgs = [
+            _pkg_name.match(line).group(1)
+            for line in uv_added
+            if _pkg_name.match(line) and _pkg_name.match(line).group(1) != "pymysql"
+        ]
+        assert not other_pkgs, f"uv.lock 出现 pymysql 之外的包变更：\n{other_pkgs}"
+        # 非新增包块内的依赖行也必须全部与 pymysql 相关（allowlist 行）
+        dep_lines = [
+            line for line in uv_added
+            if "{" in line and "name =" in line and "pymysql" not in line.lower()
+        ]
+        assert not dep_lines, f"uv.lock 出现 pymysql 之外的依赖行：\n{dep_lines}"
+
+        # pyproject.toml：仅允许 sqlglot 相关新增行（注释 + 依赖声明）
+        pyproject_diff = subprocess.run(
+            ["git", "diff", "HEAD", "--", "pyproject.toml"],
+            cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
+        )
+        added_lines = [
+            line for line in pyproject_diff.stdout.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        unexpected = [
+            line for line in added_lines
+            if "sqlglot" not in line
+            and "问数（mis-iqd）" not in line
+            and "pymysql" not in line.lower()
+            and "路线 A" not in line
+            and "StarRocks" not in line
+        ]
+        assert not unexpected, f"pyproject.toml 出现拍板依赖之外的新增行：\n{unexpected}"
 
 
 # ===================== C1：懒委托拦截返回重写模板 =====================
@@ -583,7 +643,9 @@ class TestLazyDelegationRewriteTemplate:
         assert parsed["goal"] and parsed["expected_output"]
         assert "user_question" in parsed["inputs"]
 
-    @pytest.mark.parametrize("reason", ["missing_goal", "too_short", "lazy_delegation", "empty_question"])
+    @pytest.mark.parametrize(
+        "reason", ["missing_goal", "too_short", "lazy_delegation", "empty_question"]
+    )
     def test_every_reason_renders_chinese_text(self, reason: str) -> None:
         """四类拒绝原因都要有中文可读描述，不得回退成枚举字面量。"""
         error = BriefValidationError(reason=reason)  # type: ignore[arg-type]

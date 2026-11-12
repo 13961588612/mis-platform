@@ -1,5 +1,5 @@
 -- 创建应用用户与数据库（docker-entrypoint-initdb.d 仅首次启动执行）
-CREATE USER mis WITH PASSWORD 'mis123';
+CREATE USER mis WITH PASSWORD 'mis#1014';
 CREATE DATABASE mis_platform OWNER mis;
 GRANT ALL PRIVILEGES ON DATABASE mis_platform TO mis;
 

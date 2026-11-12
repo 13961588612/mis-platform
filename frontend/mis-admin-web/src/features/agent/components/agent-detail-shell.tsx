@@ -13,6 +13,9 @@
  *     刻意不为它们造路由：造了就要同步改 agent-nav / keep-alive-outlet / router / V19 种子
  *     四处（§10.1 约定 2），而这两个 Tab 没有独立的权限语义，不值这个成本。
  *
+ * <p>顶栏主 Tab 由 `resolveWorkspaceTabId` 把上述 URL 收成同一个
+ * `/agent/agents/:id`，切详情内 Tab 不会再连开多项（见 `lib/workspace-tab-id.ts`）。
+ *
  * <p>启停按钮调 #15–#18，统一包 `agent:agent:manage`（§5.3 92053），
  * 且一律走 `AgentConfirmDialog` —— 停止一个正在跑的 coordinator 会中断在途会话。
  */

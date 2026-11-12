@@ -12,10 +12,12 @@
 """
 
 from __future__ import annotations
-from typing import Any, AsyncIterator
 
+import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
@@ -32,14 +34,17 @@ from src.agent.mis_rag import (
     is_kb_qa_request,
 )
 from src.agent.session import Message, SessionManager, get_session_manager
+from src.agent.session_store import resolve_mis_ops_channel
 from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
+from src.cluster.session_lock import get_shared_redis_session_lock
 from src.config import get_settings
 from src.coordinator.trace import (
     QA_SUB_STAGES_CV,
     dispatch_trace_sse_enabled,
     take_last_turn_traces,
 )
+from src.identity.models import verified_mis_user_id, verified_role_header
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -50,6 +55,51 @@ router = APIRouter(tags=["mis-capability"])
 
 
 # ===== 请求模型 =====
+
+
+def _merge_identity_headers_into_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    current_user: dict[str, Any] | None = None,
+    x_mis_roles: str = "",
+    x_mis_depts: str = "",
+    x_mis_orgs: str = "",
+    x_mis_dept_scope: str = "",
+    x_mis_stores: str = "",
+    x_mis_data_scope: str = "",
+) -> dict[str, Any]:
+    """把 BFF 注入的 X-Mis-* 身份/范围头并入消息 metadata。
+
+    <p>``mis-admin-bff`` 经 ``AiPlatformClient.buildHeaders`` 透传
+    ``X-Mis-Roles/Depts/Orgs``（enrichment）与 ``X-Mis-Dept-Scope/Stores/Data-Scope``
+    （行级范围），但平台侧此前只把 ``X-Mis-Roles`` 读进 ``UserContext``，未回灌到
+    Worker 的工具上下文——导致问数的 ``AskIdentity`` 拿不到真实角色/部门/数据范围。
+
+    <p>本函数把这些头原样附到本轮消息 metadata（键名与 ``AskIdentity.from_headers``
+    对齐），再由 ``OpenHarnessRuntime.run`` 合并进 ``tool_metadata``，最终供
+    ``iqd__ask`` 的 ``_build_identity`` 消费。
+    """
+    merged: dict[str, Any] = dict(metadata or {})
+    for key, value in (
+        ("X-Mis-Roles", x_mis_roles),
+        ("X-Mis-Depts", x_mis_depts),
+        ("X-Mis-Orgs", x_mis_orgs),
+        ("X-Mis-Dept-Scope", x_mis_dept_scope),
+        ("X-Mis-Stores", x_mis_stores),
+        ("X-Mis-Data-Scope", x_mis_data_scope),
+    ):
+        if isinstance(value, str) and value.strip():
+            merged[key] = value
+    # 头缺失时用已验签 JWT 的角色。否则问数身份只有 userId，角色表授权对不上，测试台显示 0 张。
+    if not str(merged.get("X-Mis-Roles") or "").strip():
+        role_header = verified_role_header(current_user)
+        if role_header:
+            merged["X-Mis-Roles"] = role_header
+    if not str(merged.get("X-User-Id") or "").strip():
+        mis_user_id = verified_mis_user_id(current_user)
+        if mis_user_id is not None:
+            merged["X-User-Id"] = str(mis_user_id)
+    return merged
 
 
 class AgentChatRequest(BaseModel):
@@ -74,6 +124,67 @@ def _sse_frame(event: str, data: dict[str, Any]) -> str:
 # ===== Agent 运行辅助 =====
 
 
+def iqd_ask_wire_json(result: dict[str, Any]) -> str | None:
+    """把 ``iqd__ask`` 工具结果收成 BFF 可解析的 AskResponse JSON。
+
+    成功时 ``output`` 已是 AskResponse。范围拒绝等失败时工具 ``is_error=True``，
+    ``output`` 只有 ``{"code": 45204, "message": "..."}``。测试台按 AskResponse
+    解析；若丢掉这份 JSON、改用模型事后写的自然语言，BFF 会报「响应解析失败」。
+
+    Args:
+        result: ``tool.result`` 事件的 result（含 ``output``，失败时另有 ``error``）。
+
+    Returns:
+        AskResponse JSON 字符串；不是问数结构化结果时返回 ``None``。
+    """
+    raw: Any = result.get("output")
+    if raw is None:
+        raw = result.get("error")
+    payload: dict[str, Any] | None = None
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text.startswith("{"):
+            return None
+        try:
+            parsed: Any = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            payload = parsed
+    if not payload:
+        return None
+    if any(key in payload for key in ("status", "error_code", "answer_summary")):
+        return json.dumps(payload, ensure_ascii=False)
+
+    code = payload.get("code")
+    message = payload.get("message")
+    if code is None and not message:
+        return json.dumps(payload, ensure_ascii=False)
+
+    code_str = str(code) if code is not None else "45299"
+    msg = str(message or "问数失败")
+    normalized: dict[str, Any] = {
+        "status": "failed",
+        "answer_summary": msg,
+        "error_code": code_str,
+        "error_message": msg,
+        "scope": {
+            "decision": "deny" if code_str == "45204" else "allow",
+            "allowed_item_keys": [],
+            "denied_item_keys": [],
+            "reason": msg,
+            "subject_summary": "",
+        },
+        "plan": [],
+        "citations": [],
+        "masked_columns": [],
+        "data": {"columns": [], "rows": [], "row_count": 0, "truncated": False},
+    }
+    return json.dumps(normalized, ensure_ascii=False)
+
+
 async def _collect_agent_response(
     instance: Any,
     session: Any,
@@ -92,10 +203,14 @@ async def _collect_agent_response(
 
     Returns:
         ``(response_text, runtime_error, tool_errors)``。
+        若本轮调用了 ``iqd__ask``，**优先采用工具 JSON**（含 452xx 失败帧），
+        避免模型把拒绝说明改写成自然语言后，测试台无法解析
+        ``plan`` / ``data`` / ``sql`` / ``error_code``。
     """
     response_parts: list[str] = []
     runtime_error: str | None = None
     tool_errors: list[str] = []
+    last_iqd_ask_json: str | None = None
 
     async for event in instance.process_message(
         session=session, message=message, assistant_message_id=assistant_message_id
@@ -103,12 +218,18 @@ async def _collect_agent_response(
         if event.type == AgentEventType.TEXT_DELTA and event.content:
             response_parts.append(event.content)
         elif event.type == AgentEventType.TOOL_RESULT and event.result:
+            if event.tool_name == "iqd__ask":
+                wire = iqd_ask_wire_json(event.result)
+                if wire:
+                    last_iqd_ask_json = wire
             err: Any | None = event.result.get("error")
             if err:
                 tool_errors.append(f"{event.tool_name}: {err}")
         elif event.type == AgentEventType.ERROR:
             runtime_error = event.message or "Agent runtime error"
 
+    if last_iqd_ask_json:
+        return last_iqd_ask_json, runtime_error, tool_errors
     return "".join(response_parts), runtime_error, tool_errors
 
 
@@ -332,6 +453,12 @@ async def agent_chat(
     authorization: str = Header(default=""),
     x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
     x_app_id: str = Header(default="", alias="X-App-Id"),
+    x_mis_roles: str = Header(default="", alias="X-Mis-Roles"),
+    x_mis_depts: str = Header(default="", alias="X-Mis-Depts"),
+    x_mis_orgs: str = Header(default="", alias="X-Mis-Orgs"),
+    x_mis_dept_scope: str = Header(default="", alias="X-Mis-Dept-Scope"),
+    x_mis_stores: str = Header(default="", alias="X-Mis-Stores"),
+    x_mis_data_scope: str = Header(default="", alias="X-Mis-Data-Scope"),
 ) -> dict[str, Any]:
     """受 MIS RS256 保护的 Agent 非流式对话端点（供 BFF 适配层调用）。
 
@@ -339,10 +466,22 @@ async def agent_chat(
     走 :func:`_run_kb_qa` 的知识库增强管线；其余 Agent 保持原有通用流程零改动。
     """
     try:
+        req.metadata = _merge_identity_headers_into_metadata(
+            req.metadata,
+            current_user=current_user,
+            x_mis_roles=x_mis_roles,
+            x_mis_depts=x_mis_depts,
+            x_mis_orgs=x_mis_orgs,
+            x_mis_dept_scope=x_mis_dept_scope,
+            x_mis_stores=x_mis_stores,
+            x_mis_data_scope=x_mis_data_scope,
+        )
         session_manager: SessionManager = get_session_manager()
         agent_manager: AgentManager = get_agent_manager()
         user_id: str = current_user.get("user_id", "mis-user")
-        channel: str = current_user.get("channel", "mis_bff")
+        channel: str = resolve_mis_ops_channel(
+            agent_id, current_user.get("channel", "mis_bff")
+        )
 
         # T03 S9：MIS RS256 身份 → profile["mis_user_id"]（档 1），在创建点解析并落会话。
         session = await session_manager.create_session(
@@ -373,39 +512,72 @@ async def agent_chat(
             assistant_message_id=assistant_id,
         )
 
-        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
-        await session_manager.add_message(
-            session_id=session.session_id,
-            role="assistant",
-            content=response_text,
-            message_id=assistant_id,
-        )
-
+        # 先组响应再异步落库：落库 CancelledError/慢 PG 不得挡住已生成的回答，
+        # 否则 BFF/网关断连后只能看到 HTTP 500「下游调用失败」。
         if runtime_error and not response_text.strip():
-            return error_response(
+            payload = error_response(
                 code=9000,
                 message=runtime_error,
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 trace_id=trace_id,
             )
-        if runtime_error:
-            logger.warning(
-                "Agent completed with runtime warning",
-                agent_id=agent_id,
-                error=runtime_error,
-                tool_errors=tool_errors,
+        else:
+            if runtime_error:
+                logger.warning(
+                    "Agent completed with runtime warning",
+                    agent_id=agent_id,
+                    error=runtime_error,
+                    tool_errors=tool_errors,
+                )
+            payload = success(
+                data={
+                    "response": response_text,
+                    "session_id": session.session_id,
+                    "warnings": [runtime_error] if runtime_error else [],
+                    "tool_errors": tool_errors,
+                },
+                message="ok",
+                trace_id=trace_id,
             )
 
-        return success(
-            data={
-                "response": response_text,
-                "session_id": session.session_id,
-                "warnings": [runtime_error] if runtime_error else [],
-                "tool_errors": tool_errors,
-            },
-            message="ok",
-            trace_id=trace_id,
-        )
+        user_content = str(req.content or "")
+        user_meta = dict(req.metadata or {}) if isinstance(req.metadata, dict) else {}
+
+        async def _persist_turn() -> None:
+            try:
+                # 先落 user：会话标题取自首条用户问句，避免旁路「（无标题）」
+                if user_content.strip():
+                    await session_manager.add_message(
+                        session_id=session.session_id,
+                        role="user",
+                        content=user_content,
+                        metadata=user_meta or None,
+                    )
+                await session_manager.add_message(
+                    session_id=session.session_id,
+                    role="assistant",
+                    content=response_text,
+                    message_id=assistant_id,
+                )
+            except BaseException as save_exc:  # noqa: BLE001
+                if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.error(
+                    "Failed to persist chat turn; response already returned",
+                    error=str(save_exc),
+                    agent_id=agent_id,
+                    session_id=session.session_id,
+                )
+
+        try:
+            asyncio.create_task(_persist_turn())
+        except Exception as schedule_exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to schedule chat turn persist",
+                error=str(schedule_exc),
+            )
+
+        return payload
     except AgentNotFoundError as exc:
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND, trace_id)
     except Exception as exc:  # noqa: BLE001
@@ -427,6 +599,12 @@ async def agent_chat_stream(
     authorization: str = Header(default=""),
     x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
     x_app_id: str = Header(default="", alias="X-App-Id"),
+    x_mis_roles: str = Header(default="", alias="X-Mis-Roles"),
+    x_mis_depts: str = Header(default="", alias="X-Mis-Depts"),
+    x_mis_orgs: str = Header(default="", alias="X-Mis-Orgs"),
+    x_mis_dept_scope: str = Header(default="", alias="X-Mis-Dept-Scope"),
+    x_mis_stores: str = Header(default="", alias="X-Mis-Stores"),
+    x_mis_data_scope: str = Header(default="", alias="X-Mis-Data-Scope"),
 ) -> StreamingResponse:
     """受 MIS RS256 保护的 Agent SSE 流式对话端点（供 BFF 适配层调用）。
 
@@ -435,9 +613,10 @@ async def agent_chat_stream(
 
     事件契约（与 BFF / 前端 ``ai-sse-client.ts`` 一致）：
     - ``event: delta`` → 通用 ``{ traceId, delta }``；KB 分支额外带同值 ``text``
-    - ``event: done``  → 通用 ``{ traceId, finishReason, sessionId }``；
+    - ``event: done``  → 通用 ``{ traceId, finishReason, sessionId, messageId }``；
       KB 分支 ``sessionId`` 为 **mis-kb 业务会话 ID（数值）**，
       平台会话 UUID 另置于 ``platformSessionId``，并附 ``messageId`` / ``citations``
+      （``messageId`` = 本轮 assistant 消息 UUID，供前端评价锚点；设计 feedback-enhance §2.2）
     - ``event: error`` → ``{ traceId, message }``
     """
 
@@ -445,10 +624,22 @@ async def agent_chat_stream(
         session_id: str | None = None
         response_parts: list[str] = []
         try:
+            req.metadata = _merge_identity_headers_into_metadata(
+                req.metadata,
+                current_user=current_user,
+                x_mis_roles=x_mis_roles,
+                x_mis_depts=x_mis_depts,
+                x_mis_orgs=x_mis_orgs,
+                x_mis_dept_scope=x_mis_dept_scope,
+                x_mis_stores=x_mis_stores,
+                x_mis_data_scope=x_mis_data_scope,
+            )
             session_manager: SessionManager = get_session_manager()
             agent_manager: AgentManager = get_agent_manager()
             user_id: str = current_user.get("user_id", "mis-user")
-            channel: str = current_user.get("channel", "mis_bff")
+            channel: str = resolve_mis_ops_channel(
+                agent_id, current_user.get("channel", "mis_bff")
+            )
 
             # T03 S9：与非流式分支同源，创建点解析一次 MIS userId 后全链透传。
             session = await session_manager.create_session(
@@ -470,33 +661,67 @@ async def agent_chat_stream(
                 )
             # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
             assistant_id: str = str(uuid.uuid4())
-            async for event in instance.process_message(
-                session=session,
-                message=Message(role=req.role, content=req.content, metadata=req.metadata),
-                assistant_message_id=assistant_id,
-            ):
-                if event.type == AgentEventType.TEXT_DELTA and event.content:
-                    response_parts.append(event.content)
-                    yield _sse_frame(
-                        "delta", {"traceId": trace_id, "delta": event.content}
-                    )
-                elif event.type == AgentEventType.ERROR:
+            lock = await get_shared_redis_session_lock()
+            async with lock.acquire(session_id) as lock_result:
+                if not lock_result.locked:
                     yield _sse_frame(
                         "error",
-                        {"traceId": trace_id, "message": event.message or "Agent runtime error"},
+                        {"traceId": trace_id, "message": "Session is busy"},
                     )
                     return
 
-            await session_manager.add_message(
-                session_id=session_id,
-                role="assistant",
-                content="".join(response_parts),
-                message_id=assistant_id,
-            )
+                async for event in instance.process_message(
+                    session=session,
+                    message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                    assistant_message_id=assistant_id,
+                ):
+                    if event.type == AgentEventType.TEXT_DELTA and event.content:
+                        response_parts.append(event.content)
+                        yield _sse_frame(
+                            "delta", {"traceId": trace_id, "delta": event.content}
+                        )
+                    elif event.type == AgentEventType.ERROR:
+                        yield _sse_frame(
+                            "error",
+                            {"traceId": trace_id, "message": event.message or "Agent runtime error"},
+                        )
+                        return
+
+                try:
+                    user_content = str(req.content or "")
+                    if user_content.strip():
+                        await session_manager.add_message(
+                            session_id=session_id,
+                            role="user",
+                            content=user_content,
+                            metadata=(
+                                dict(req.metadata)
+                                if isinstance(req.metadata, dict)
+                                else None
+                            ),
+                        )
+                    await session_manager.add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content="".join(response_parts),
+                        message_id=assistant_id,
+                    )
+                except BaseException as save_exc:  # noqa: BLE001
+                    if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    logger.error(
+                        "Failed to persist streamed chat turn; still emitting done",
+                        error=str(save_exc),
+                        agent_id=agent_id,
+                        session_id=session_id,
+                    )
             done_payload: dict[str, Any] = {
                 "traceId": trace_id,
                 "finishReason": "stop",
                 "sessionId": session_id,
+                # 评价锚点（feedback-enhance §2.2 方案 C）：透传本轮 assistant 消息 UUID，
+                # 与 sessionId（平台会话 UUID）共同构成 agent_feedback 唯一约束定位键。
+                "messageId": assistant_id,
             }
             # 通道 B（DISPATCH_TRACE_SSE_ENABLED，默认关）：在 done 帧尾部追加
             # dispatchTrace。开关关闭时 payload 与改动前**逐字节一致**，

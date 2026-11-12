@@ -382,6 +382,32 @@ def cancel_running_task(parent_session_id: str, worker_id: str) -> bool:
     return True
 
 
+def cancel_all_running_tasks(parent_session_id: str) -> int:
+    """取消某父会话下全部 Worker 任务（generation.cancel 用）。
+
+    Args:
+        parent_session_id: 父会话 ID。
+
+    Returns:
+        发出取消信号的任务数。
+    """
+    sid = (parent_session_id or "").strip()
+    if not sid:
+        return 0
+    count = 0
+    for (pid, worker_id), task in list(_running_tasks.items()):
+        if pid != sid or task is None or task.done():
+            continue
+        task.cancel()
+        count += 1
+        logger.info(
+            "worker task cancelled (all)",
+            parent_session_id=sid,
+            worker_id=worker_id,
+        )
+    return count
+
+
 def _reset_for_test() -> None:
     """清空进程内并发/任务状态（仅供单测 fixture 调用）。"""
     _running_tasks.clear()

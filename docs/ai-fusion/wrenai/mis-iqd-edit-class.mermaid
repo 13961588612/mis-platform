@@ -1,0 +1,142 @@
+classDiagram
+    %% ============ 数据实体（mis-iqd） ============
+    class IqdConnection {
+        +Long id
+        +String name
+        +Integer current_edit_revision
+        +Integer built_edit_revision
+        +Integer mdlWritebackEnabled
+        +findPrimaryConnection()
+    }
+
+    class IqdCatalogItem {
+        +Long id
+        +Long connectionId
+        +String kind
+        +String itemKey
+        +String parentKey
+        +String expression
+        +Integer editable
+        +String source   %% db_meta | mdl | platform_edit
+        +Long edit_revision
+        +String wren_ref_id
+    }
+
+    class IqdSyncJob {
+        +Long id
+        +Long connectionId
+        +String buildStatus
+        +String buildMdlHash
+        +String indexStatus
+        +Integer edit_revision
+        +String edit_source   %% materials | model
+        +String buildError
+        +String indexError
+    }
+
+    %% ============ mis-iqd 服务 / 控制层 ============
+    class IqdAdminService {
+        +updateCatalogNode(itemKey, kind, patch, baseRevision, idempotencyKey) Map~String,Object~
+        +validateCatalogRefs(itemKey, op) void   %% S4/S5/S8 预校验
+        +backfillCatalogSync(connectionId, mdlHash, editRevision) int
+        +getCatalogSyncStatus(connectionId) Map~String,Object~
+        +reconcileCatalog(connectionId) void
+        +backfillEnhancementSync(...) int   %% 一期复用
+        +reportSyncJob(...) IqdSyncJobVO    %% 一期复用
+        +syncCatalogFromMdl(...) int        %% 一期复用(重导入)
+    }
+
+    class IqdController {
+        +PUT /api/v1/iqd/catalog/node  %% 501 -> 200
+        +GET /api/v1/iqd/catalog/sync-status
+        +POST /api/v1/iqd/catalog/reconcile
+    }
+
+    class IqdInternalController {
+        +GET /internal/v1/iqd/get-catalog-full   %% 二期新增: 组装 MDL 源
+        +POST /internal/v1/iqd/enhance/catalog-backfill
+        +POST /internal/v1/iqd/enhance/backfill  %% 一期复用
+        +POST /internal/v1/iqd/enhance/sync-job  %% 一期复用
+    }
+
+    %% ============ BFF ============
+    class IqdFacadeService {
+        +updateCatalogNode(dto, auth, traceId) Map   %% iqd:catalog:edit + 409 处理
+        +getCatalogSyncStatus(connectionId) Map
+        +reconcileCatalog(connectionId) Map
+        +triggerSyncBestEffort(...) void   %% 一期复用
+    }
+
+    class IqdClient {
+        +updateCatalogNode(connectionId, body) Map
+        +getCatalogSyncStatus(connectionId) Map
+        +reconcileCatalog(connectionId) Map
+    }
+
+    class AiPlatformClient {
+        +syncEnhancements(connectionId, wait, auth, traceId) Map   %% 一期复用(扩 scope)
+    }
+
+    class IqdAclController {
+        +PUT /iqd/catalog/node
+        +GET /iqd/catalog/sync-status
+        +POST /iqd/catalog/reconcile
+    }
+
+    class IqdReconcileJobService {
+        +scanDivergedConnections() void   %% S9 对账清扫
+    }
+
+    %% ============ ai-platform (Python) ============
+    class SyncCoordinator {
+        +trigger(connectionId, wait, scope) SyncResult   %% 一期复用 + model scope
+    }
+
+    class IqdAskService {
+        +trigger_model_build(connectionId, wait) SyncResult   %% 二期新增
+        +build_mdl_from_catalog(connectionId) dict           %% 二期新增: 派生完整 MDL
+        +trigger_build_index(...) SyncResult                 %% 一期复用(物料)
+        +_parse_mdl_hash(stdout) str                        %% 一期复用
+    }
+
+    class IqdCli {
+        +context_build(mdl_dir, sql_pairs, instructions, allow_write) dict   %% 二期传 mdl_dir
+        +memory_index() dict                                          %% 一期复用
+    }
+
+    class IqdConfigClient {
+        +get_catalog_full(connectionId) dict        %% 二期新增
+        +backfill_catalog_sync(payload) dict        %% 二期新增(按 revision 批量)
+        +backfill_enhancement_sync(payload) dict     %% 一期复用
+        +report_sync_job(payload) dict              %% 一期复用
+    }
+
+    %% ============ 前端 ============
+    class IqdCatalogPage {
+        +openEditModal(item)
+        +submitEdit(baseRevision, idempotencyKey)
+        +showDependents(itemKey)   %% S4/S5/S8 依赖提示
+    }
+
+    class CatalogSyncStatusBar {
+        +pollCatalogSyncStatus() void
+        +renderEditStatus(editStatus) void
+    }
+
+    %% ============ 关系 ============
+    IqdConnection "1" --> "0..*" IqdCatalogItem : contains
+    IqdConnection "1" --> "0..1" IqdSyncJob : latest job
+    IqdAdminService ..> IqdConnection : reads/writes revision
+    IqdAdminService ..> IqdCatalogItem : CRUD + stamp
+    IqdAdminService ..> IqdSyncJob : report
+    IqdController ..> IqdAdminService : calls
+    IqdInternalController ..> IqdAdminService : callbacks
+    IqdFacadeService ..> IqdClient : calls
+    IqdFacadeService ..> AiPlatformClient : trigger sync
+    IqdAclController ..> IqdFacadeService : routes
+    IqdFacadeService ..> IqdReconcileJobService : schedules
+    SyncCoordinator ..> IqdAskService : trigger_model_build
+    IqdAskService ..> IqdConfigClient : get_catalog_full / backfill
+    IqdAskService ..> IqdCli : context_build / memory_index
+    IqdConfigClient ..> IqdInternalController : HTTP callbacks
+    IqdCatalogPage ..> CatalogSyncStatusBar : embeds

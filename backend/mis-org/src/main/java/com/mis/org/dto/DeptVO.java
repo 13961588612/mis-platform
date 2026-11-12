@@ -12,6 +12,8 @@ public record DeptVO(
         String name,
         String categoryId,
         String ancestors,
+        /** W2（V70/V74）新增：部门路径（如 /0/1/100/），行级范围 PATH_PREFIX 注入用 */
+        String deptPath,
         Integer sort,
         Integer status,
         Integer isRoot,

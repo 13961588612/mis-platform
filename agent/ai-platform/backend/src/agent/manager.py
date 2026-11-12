@@ -5,12 +5,12 @@
 """
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 
 from src.agent.config import AgentConfig
 from src.agent.lifecycle import InstanceState, LifecycleEvent, LifecycleStateMachine
@@ -19,6 +19,7 @@ from src.agent.session import Message, Session
 from src.agent.session_timing import RedisTimingStore, SessionTimingRecorder
 from src.cluster.core_ownership import agent_registry_key
 from src.config import get_settings
+from src.memory.injector import AgentRunContext, get_memory_injector
 from src.runtime.base import AgentRuntime
 from src.runtime.events import AgentEvent, AgentEventType, HealthStatus
 from src.runtime.factory import create_runtime
@@ -27,6 +28,36 @@ from src.utils.exceptions import AgentNotFoundError, AgentNotRunningError
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.manager")
+
+#: 对话结束后异步 memory 写回任务集合（持有引用，避免 Task 被 GC）。
+_MEMORY_WRITEBACK_TASKS: set[asyncio.Task[Any]] = set()
+
+
+async def _memory_writeback_job(
+    injector: Any,
+    context: AgentRunContext,
+) -> None:
+    """后台执行 ``after_agent_run``；失败只打日志，不影响已返回的用户回复。"""
+    try:
+        await injector.after_agent_run(context)
+    except Exception:  # noqa: BLE001 — 记忆写回不得反噬主对话
+        logger.exception(
+            "async memory writeback failed",
+            agent_id=getattr(context, "agent_id", None),
+            agent_name=getattr(context, "agent_name", None),
+            session_id=getattr(context, "session_id", None),
+        )
+
+
+def _schedule_memory_writeback(injector: Any, context: AgentRunContext) -> asyncio.Task[Any]:
+    """将 memory 抽取/写回放到事件循环后台，立即让会话返回。"""
+    task = asyncio.create_task(
+        _memory_writeback_job(injector, context),
+        name=f"memory-writeback:{getattr(context, 'session_id', '') or '-'}",
+    )
+    _MEMORY_WRITEBACK_TASKS.add(task)
+    task.add_done_callback(_MEMORY_WRITEBACK_TASKS.discard)
+    return task
 
 
 class AgentInstance:
@@ -95,7 +126,25 @@ class AgentInstance:
             recorder = SessionTimingRecorder(session.session_id, assistant_message_id)
             store = RedisTimingStore(get_settings())
 
-            # 通过运行时执行
+            memory_injector = get_memory_injector()
+            memory_context: AgentRunContext = AgentRunContext(
+                agent_id=self.id,
+                agent_name=self.id,
+                user_id=session.user_id,
+                session_id=session.session_id,
+                query=message.content or "",
+                system_prompt=self.config.system_prompt,
+                messages=messages,
+                memory_config=self.config.memory,
+                metadata={
+                    "mis_user_id": session.mis_user_id,
+                    "channel": session.channel,
+                    "channel_user_id": session.channel_user_id,
+                },
+            )
+            await memory_injector.before_agent_run(memory_context)
+            response_parts: list[str] = []
+
             async for event in self.runtime.run(
                 messages=messages,
                 config=self.config,
@@ -104,11 +153,20 @@ class AgentInstance:
                 user_mobile=session.user_mobile,
                 channel=session.channel,
                 channel_user_id=session.channel_user_id or session.user_id,
-                # T03 S9 第 2 跳：MIS userId 全链透传（None 时下游 fail-closed）。
                 mis_user_id=session.mis_user_id,
+                memory_context=memory_context.memory_context,
             ):
+                if event.type == AgentEventType.TEXT_DELTA and event.content:
+                    response_parts.append(event.content)
                 recorder.observe(event)
                 yield event
+
+            memory_context.assistant_response = "".join(response_parts)
+            # Memory 抽取/写回改为后台任务：用户回复与委派 return 不再等待
+            # DashScope 抽取 LLM（曾出现 Worker 已答完仍阻塞 ~60s）。
+            # 所有走 process_message 的 Agent（含 Worker 委派）共用此行为；
+            # Agent 若 write_back=false 仍在 after_agent_run 内直接跳过。
+            _schedule_memory_writeback(memory_injector, memory_context)
             # 注：成功路径不再在此 complete() 钉死 _end_t；计时窗交由 finally 末
             # 的 recorder.close() 收口到 post_process 完成之后（Q5 / T05）。
         except Exception:
@@ -246,7 +304,7 @@ class AgentManager:
     async def start_agent(self, agent_id: str) -> InstanceState:
         """启动一个 Agent 实例（CREATED/STOPPED → RUNNING）。"""
         instance: AgentInstance = self._get_instance(agent_id)
-        instance.started_at = datetime.now(timezone.utc)
+        instance.started_at = datetime.now(UTC)
         state: InstanceState = instance.lifecycle.transition(LifecycleEvent.START)
         logger.info("Agent started", agent_id=agent_id, state=state.value)
         return state
@@ -369,7 +427,9 @@ class AgentManager:
             new_runtime=runtime_type,
         )
 
-    async def sync_from_configs(self, configs: list[AgentConfig]) -> int:
+    async def sync_from_configs(
+        self, configs: list[AgentConfig], *, quiet: bool = False
+    ) -> int:
         """根据 ConfigManager 的配置创建并启动 agent（幂等 + 多 Core 租约门控）。
 
         多 Core（T8 / 决策 1）：对每个 agent 先 ``claim`` 租约，仅当成为/保持 owner 时
@@ -379,6 +439,7 @@ class AgentManager:
 
         Args:
             configs: Agent 配置列表。
+            quiet: True 时仅 debug 记录成功汇总（周期 resync 用，避免刷屏）。
 
         Returns:
             本核心成功同步（拥有并运行）的 agent 数量。
@@ -423,7 +484,10 @@ class AgentManager:
                 await self._write_registry(agent_id, synced_instance)
                 synced += 1
 
-        logger.info("Agents synced from configs", count=synced)
+        if quiet:
+            logger.debug("Agents synced from configs", count=synced, quiet=True)
+        else:
+            logger.info("Agents synced from configs", count=synced)
         return synced
 
     async def _stop_local(self, agent_id: str) -> None:
@@ -455,7 +519,7 @@ class AgentManager:
                     "state": instance.lifecycle.current_state.value,
                     "config_version": getattr(instance.config, "version", None),
                     "core_id": self._core_id,
-                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                    "last_seen": datetime.now(UTC).isoformat(),
                 },
                 ensure_ascii=False,
             )

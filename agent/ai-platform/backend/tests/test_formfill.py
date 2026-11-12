@@ -29,8 +29,23 @@ from src.hitl.formfill_pending import (
     FormFillPendingStore,
     FormFillStatus,
     get_formfill_pending_store,
+    reset_formfill_pending_store,
 )
+from src.hitl._redis import set_hitl_redis, reset_hitl_redis
 from src.runtime.a2ui_pending import drain_a2ui_renders, push_a2ui_render
+from fakeredis.aioredis import FakeRedis as FakeRedisAsync
+
+
+# 所有本文件用例共用一个 fakeredis 后端（无需真实 Redis），并重置 HITL 单例，
+# 以模拟「共享 Redis」环境——与改造后的 Redis 后端 store 行为一致。
+@pytest.fixture(autouse=True)
+def _hitl_fake_redis():
+    r = FakeRedisAsync(decode_responses=True)
+    set_hitl_redis(r)
+    reset_formfill_pending_store()
+    yield
+    reset_hitl_redis()
+    reset_formfill_pending_store()
 
 
 # ============================================================================
@@ -213,10 +228,11 @@ async def test_formfill_pending_store_crud_and_expiry():
     fetched = await store.get("rt-crud")
     assert fetched is not None and fetched.field == "supplier"
 
-    # 过期检测：构造一个已超时的记录
+    # 过期检测：通过共享 Redis 直接植入一条已超时的记录（长 TTL 保证 key 仍在，
+    # 由 store.get 的就地过期标记逻辑返回 EXPIRED），等价于原内存实现的行为。
     old = FormFillPendingRecord_for_test()
-    async with store._lock:
-        store._records["rt-old"] = old
+    redis = await store._r()
+    await redis.set(store._key("rt-old"), old.model_dump_json(), ex=3600)
     got_old = await store.get("rt-old")
     assert got_old is not None and got_old.status == FormFillStatus.EXPIRED
 

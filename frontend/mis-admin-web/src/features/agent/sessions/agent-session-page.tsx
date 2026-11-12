@@ -65,9 +65,9 @@ function fmtMs(ms: number | null | undefined): string {
 }
 
 /** 列表「耗时」列单元格（2.1 按轮）：显示最近一轮（last）的端到端耗时；
- *  null（已过期/无采样）显示统一文案；无 turns 显示「—」。 */
+ *  null = Redis 无键（从未采样或已过 24h），文案用「暂无采样」避免误判为刚创建就过期。 */
 function formatTimingCell(t: SessionTimingPayload | null | undefined): string {
-  if (t === null) return '已过期/暂无';
+  if (t === null) return '暂无采样';
   if (!t || !t.turns) return '—';
   const keys = Object.keys(t.turns);
   if (keys.length === 0) return '—';
@@ -79,6 +79,8 @@ const CHANNEL_LABELS: Record<SessionChannel, string> = {
   web: '网页',
   wecom: '企业微信',
   api: 'API',
+  iqd_test: '问数测试',
+  kb_test: '问答测试',
   unknown: '未知',
 };
 
@@ -143,7 +145,11 @@ export function AgentSessionPage() {
    */
   const [applied, setApplied] = useState<SessionQuery>(() => {
     const today = todayLocalDate();
-    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+    return {
+      from: toIsoUtc(today, false),
+      to: toIsoUtc(today, true),
+      include_worker_sessions: false,
+    };
   });
 
   const load = useCallback(
@@ -199,6 +205,7 @@ export function AgentSessionPage() {
       keyword: sessionFilter.keyword.trim() || undefined,
       from: toIsoUtc(sessionFilter.from, false),
       to: toIsoUtc(sessionFilter.to, true),
+      include_worker_sessions: sessionFilter.includeWorkerSessions || undefined,
     });
     setPage(1);
   }
@@ -206,7 +213,11 @@ export function AgentSessionPage() {
   function onReset(): void {
     resetSessionFilter();
     const today = todayLocalDate();
-    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
+    setApplied({
+      from: toIsoUtc(today, false),
+      to: toIsoUtc(today, true),
+      include_worker_sessions: false,
+    });
     setPage(1);
   }
 
@@ -318,6 +329,8 @@ export function AgentSessionPage() {
               <option value="web">网页</option>
               <option value="wecom">企业微信</option>
               <option value="api">API</option>
+              <option value="iqd_test">问数测试</option>
+              <option value="kb_test">问答测试</option>
               <option value="unknown">未知</option>
             </select>
           </div>
@@ -333,7 +346,7 @@ export function AgentSessionPage() {
             />
           </div>
           <div className="w-40">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">起始日期</label>
+            <label className="mb-[0.4rem] block text-xs text-muted-foreground">更新起始</label>
             <Input
               type="date"
               value={sessionFilter.from}
@@ -341,13 +354,22 @@ export function AgentSessionPage() {
             />
           </div>
           <div className="w-40">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">结束日期</label>
+            <label className="mb-[0.4rem] block text-xs text-muted-foreground">更新结束</label>
             <Input
               type="date"
               value={sessionFilter.to}
               onChange={(e) => setSessionFilter({ to: e.target.value })}
             />
           </div>
+          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              className="size-3.5 rounded border-input"
+              checked={sessionFilter.includeWorkerSessions}
+              onChange={(e) => setSessionFilter({ includeWorkerSessions: e.target.checked })}
+            />
+            含 Worker/旁路
+          </label>
           <Button size="sm" onClick={applyFilter}>
             查询
           </Button>
@@ -364,7 +386,7 @@ export function AgentSessionPage() {
             onRetry={() => void load({ ...applied, page, page_size: pageSize })}
             empty={!loading && !error && rows.length === 0}
             emptyText="没有匹配的会话"
-            emptyHint="试试放宽筛选条件，或确认所选时间范围内确有会话产生。"
+            emptyHint="试试放宽筛选条件、勾选「含 Worker/旁路」，或确认所选更新时间范围内确有会话。"
           >
             <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
               {hasCustom ? (

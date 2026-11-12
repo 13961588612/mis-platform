@@ -42,7 +42,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-popover p-6 text-popover-foreground shadow-card-hover duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+        'fixed left-1/2 top-1/2 z-50 flex w-full max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border bg-popover p-6 text-popover-foreground shadow-card-hover duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         className,
       )}
       {...props}
@@ -70,12 +70,24 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('mb-4 flex flex-col gap-1.5 pr-6', className)} {...props} />
+  <div
+    className={cn(
+      '-mx-6 -mt-6 mb-4 flex flex-col gap-1.5 rounded-t-lg border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10',
+      className,
+    )}
+    {...props}
+  />
 );
 DialogHeader.displayName = 'DialogHeader';
 
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('mt-4 flex flex-row-reverse gap-2', className)} {...props} />
+  <div
+    className={cn(
+      '-mx-6 -mb-6 mt-4 flex flex-row-reverse gap-2 rounded-b-lg border-t border-border/60 px-4 py-3',
+      className,
+    )}
+    {...props}
+  />
 );
 DialogFooter.displayName = 'DialogFooter';
 

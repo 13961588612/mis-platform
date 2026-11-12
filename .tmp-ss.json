@@ -1,0 +1,103 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "items":  [
+                               {
+                                   "session_id":  "web-mvull3a0-21b4exgo",
+                                   "agent_id":  "mis-copilot",
+                                   "agent_name":  null,
+                                   "channel":  "web",
+                                   "user_id":  "1",
+                                   "user_name":  null,
+                                   "title":  "è¶\u0085å¸æåªäºé¨åº",
+                                   "status":  "active",
+                                   "runtime_type":  "openharness",
+                                   "message_count":  2,
+                                   "created_at":  "2026-10-30T06:32:55.201274+00:00",
+                                   "updated_at":  "2026-10-30T06:33:26.670833+00:00",
+                                   "parent_session_id":  null,
+                                   "worker_sessions":  [
+
+                                                       ]
+                               },
+                               {
+                                   "session_id":  "web-mvul7bz8-q9p0mns0",
+                                   "agent_id":  "mis-copilot",
+                                   "agent_name":  null,
+                                   "channel":  "web",
+                                   "user_id":  "1",
+                                   "user_name":  null,
+                                   "title":  "è¶\u0085å¸æåªäºé¨åº",
+                                   "status":  "active",
+                                   "runtime_type":  "openharness",
+                                   "message_count":  4,
+                                   "created_at":  "2026-10-30T06:22:13.218843+00:00",
+                                   "updated_at":  "2026-10-30T06:25:52.657302+00:00",
+                                   "parent_session_id":  null,
+                                   "worker_sessions":  [
+
+                                                       ]
+                               },
+                               {
+                                   "session_id":  "web-mvukobfu-t4xhg0if",
+                                   "agent_id":  "mis-copilot",
+                                   "agent_name":  null,
+                                   "channel":  "web",
+                                   "user_id":  "1",
+                                   "user_name":  null,
+                                   "title":  "è¶\u0085å¸æåªäºé¨åº",
+                                   "status":  "active",
+                                   "runtime_type":  "openharness",
+                                   "message_count":  4,
+                                   "created_at":  "2026-10-30T06:07:28.660759+00:00",
+                                   "updated_at":  "2026-10-30T06:15:03.546560+00:00",
+                                   "parent_session_id":  null,
+                                   "worker_sessions":  [
+
+                                                       ]
+                               },
+                               {
+                                   "session_id":  "web-mvpcenoh-h42s40j1",
+                                   "agent_id":  "mis-copilot",
+                                   "agent_name":  null,
+                                   "channel":  "web",
+                                   "user_id":  "1",
+                                   "user_name":  null,
+                                   "title":  "è¶\u0085å¸ æº§é³åä¸­åº è¿ä¸ªæ åå¤§ç±»éå®æ\u0085åµ ç§",
+                                   "status":  "active",
+                                   "runtime_type":  "openharness",
+                                   "message_count":  12,
+                                   "created_at":  "2026-10-26T14:17:49.282837+00:00",
+                                   "updated_at":  "2026-10-30T05:42:04.856995+00:00",
+                                   "parent_session_id":  null,
+                                   "worker_sessions":  [
+
+                                                       ]
+                               },
+                               {
+                                   "session_id":  "web-mvojrq9h-zv1r9i5q",
+                                   "agent_id":  "mis-copilot",
+                                   "agent_name":  null,
+                                   "channel":  "web",
+                                   "user_id":  "1",
+                                   "user_name":  null,
+                                   "title":  "è¶\u0085å¸ ä¸å¡ç³»ç»çæ°æ®é è¬è ä¸çº§åç±»æåªäº",
+                                   "status":  "active",
+                                   "runtime_type":  "openharness",
+                                   "message_count":  34,
+                                   "created_at":  "2026-10-26T00:55:57.512829+00:00",
+                                   "updated_at":  "2026-10-26T14:09:45.494519+00:00",
+                                   "parent_session_id":  null,
+                                   "worker_sessions":  [
+
+                                                       ]
+                               }
+                           ],
+                 "total":  26,
+                 "page":  1,
+                 "page_size":  5
+             },
+    "traceId":  null,
+    "success":  true
+}

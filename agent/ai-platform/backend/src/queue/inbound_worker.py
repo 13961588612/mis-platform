@@ -20,6 +20,8 @@ from src.agent.manager import AgentInstance, AgentManager, get_agent_manager
 from src.agent.session import Message, Session, SessionManager, get_session_manager
 from src.cluster.session_lock import LockAcquireResult, RedisSessionLock
 from src.config import Settings, get_settings
+from src.llm.gateway import get_llm_gateway
+from src.queue.a2ui_outbound import A2uiOutboundPublisher
 from src.queue.redis_stream import (
     BLOCK_MS,
     CONSUMER_GROUP,
@@ -32,10 +34,11 @@ from src.queue.redis_stream import (
     normalize_stream_fields,
     parse_inbound_fields,
 )
+from src.runtime.a2ui_run import A2uiRunLoop
 from src.runtime.events import AgentEvent, AgentEventType
 from src.skills.tools.formfill_execute import resume_formfill
 from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, set_log_bucket
 
 logger = get_logger("queue.inbound_worker")
 
@@ -56,13 +59,36 @@ class _RerouteToOwner(Exception):
 _worker: InboundStreamWorker | None = None
 
 
+#: Gateway MIS JWT（RS256）验签后写入的渠道：``userId`` = JWT ``sub`` = 真 MIS userId。
+#: 见 gateway ``verifyJwtRs256``（``sub → userId``）；**不是** employeeId。
+_MIS_JWT_INBOUND_CHANNELS: frozenset[str] = frozenset(
+    {"h5", "web", "api", "mis_bff"}
+)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    """把候选值规约为正整数；非法 / 非正 → ``None``（fail-closed）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 async def _resolve_inbound_mis_user_id(
     inbound: InboundStreamMessage,
 ) -> int | None:
-    """解析入站消息对应的 MIS userId（T03 S9 · 企微渠道档 2）。
+    """解析入站消息对应的 MIS userId（T03 S9）。
 
-    企微渠道的 ``user_id`` / ``channel_user_id`` 是企微 userid 字符串（F28），
-    需查 ``users.mis_user_id`` 换取 MIS 权限主体。
+    解析优先级：
+
+    1. ``metadata.mis_user_id`` / ``metadata.misUserId``（Gateway 显式透传）
+    2. **H5 / web / api / mis_bff**：Gateway 已把 MIS JWT ``sub`` 写入 ``user_id``，
+       正整数即可直取（**不得**再按企微 userid 查库，否则永远解析失败 → CRM 全拒）
+    3. 企微等其它渠道：``user_id`` / ``channel_user_id`` 是企微 userid（F28），
+       查 ``users.mis_user_id``（档 2）
 
     **fail-closed 契约**：未绑定 / DB 不可用 → 返回 ``None``（**不阻断消息处理**，
     但下游 E1–E5 会拒绝执行）。**绝不**把企微 userid 当 MIS userId 回退。
@@ -75,6 +101,19 @@ async def _resolve_inbound_mis_user_id(
     """
     from src.identity.mis_user_id import resolve_mis_user_id_async
 
+    meta: Any = inbound.metadata
+    if isinstance(meta, dict):
+        for key in ("mis_user_id", "misUserId"):
+            direct = _coerce_positive_int(meta.get(key))
+            if direct is not None:
+                return direct
+
+    channel = str(inbound.channel or "").strip().lower()
+    if channel in _MIS_JWT_INBOUND_CHANNELS:
+        from_jwt_sub = _coerce_positive_int(inbound.user_id)
+        if from_jwt_sub is not None:
+            return from_jwt_sub
+
     identity: dict[str, Any] = {
         "user_id": inbound.user_id or "",
         "channel_user_id": inbound.channel_user_id or "",
@@ -84,6 +123,12 @@ async def _resolve_inbound_mis_user_id(
         from src.db.session import db_session_context
 
         async with db_session_context() as db:
+            # 企微 Bot：先走多 corp 身份绑定；命中即返回。
+            from src.channels.wecom_binding_hook import resolve_wecom_bot_binding
+
+            bound = await resolve_wecom_bot_binding(db, inbound)
+            if bound is not None:
+                return bound
             return await resolve_mis_user_id_async(identity, db=db)
     except Exception as exc:  # noqa: BLE001 - DB 不可用不得阻断入站消息处理
         logger.warning(
@@ -156,6 +201,7 @@ class InboundStreamWorker:
             redis,
             lock_ttl_s=self._settings.SESSION_LOCK_TTL_S,
             extend_s=self._settings.SESSION_LOCK_EXTEND_S,
+            max_hold_s=self._settings.SESSION_LOCK_MAX_HOLD_S,
             core_id=core_id,
         )
         # 多 Core 下各实例消费名需唯一（同 group 内区分消费者），避免互相抢消息。
@@ -285,12 +331,22 @@ class InboundStreamWorker:
     async def refresh_streams(self, agent_ids: list[str]) -> None:
         """Agent 同步后更新订阅的 stream 列表。"""
         new_keys: list[str] = await self._resolve_stream_keys(agent_ids)
+        old_keys = list(self._stream_keys)
         redis: aioredis.Redis = await self._get_redis()
         for stream_key in new_keys:
             if stream_key not in self._stream_keys:
                 await ensure_consumer_group(redis, stream_key)
         self._stream_keys = new_keys
-        logger.info("Inbound stream subscriptions updated", streams=self._stream_keys)
+        if new_keys != old_keys:
+            logger.info(
+                "Inbound stream subscriptions updated",
+                streams=self._stream_keys,
+            )
+        else:
+            logger.debug(
+                "Inbound stream subscriptions unchanged",
+                streams=self._stream_keys,
+            )
 
     def _spawn_handler(
         self,
@@ -523,7 +579,12 @@ class InboundStreamWorker:
                     )
                     return
                 try:
-                    await self._process_inbound(inbound, stream_key)
+                    # H5 / 企微 / A2UI 入站均属对话链路，写入 *-chat.log
+                    set_log_bucket("chat")
+                    try:
+                        await self._process_inbound(inbound, stream_key)
+                    finally:
+                        set_log_bucket("sys")
                     await redis.xack(stream_key, CONSUMER_GROUP, message_id)
                 except _RerouteToOwner as reroute:
                     # 非本 core 拥有的 agent：重投到 owning core 的 agent 流并 ACK 原流。
@@ -563,9 +624,22 @@ class InboundStreamWorker:
             inbound: Gateway 写入的入站消息。
             stream_key: 消息来源 stream 键名（用于推断 ``agent_id``）。
         """
+        if inbound.message_type == "generation.cancel":
+            # Copilot 用户主动停止：取消当前 a2ui_run + 父会话下 Worker
+            await self._process_generation_cancel(inbound)
+            return
+
         if inbound.message_type == "entity_select":
             # HITL 实体选择回调（企微按钮 / H5 提交）→ 续跑表单填充（T05）
             await self._process_formfill_resume(inbound, stream_key)
+            return
+
+        if inbound.message_type == "a2ui_run":
+            # A2UI run（Gateway RedisStreamAgent 下发完整 RunAgentInput）：
+            # 直接驱动 A2UI run 循环并回包到 aip:outbound:{sessionId}（02 §6 时序图）。
+            # 放在空消息检查之前：a2ui_action 续跑等场景 content 可能为空，
+            # 但 RunAgentInput 已携带上下文（forwardedProps / 合成 tool 消息）。
+            await self._process_a2ui_run(inbound, stream_key)
             return
 
         has_attachments = False
@@ -755,11 +829,39 @@ class InboundStreamWorker:
                 "：" + "、".join(att_names) if att_names else ""
             )
 
+        from src.identity.ask_identity_context import (
+            AskIdentityUnavailable,
+            enrich_inbound_ask_identity,
+        )
+
+        try:
+            ask_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+                inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                mis_user_id=session.mis_user_id,
+                session_id=session.session_id,
+            )
+        except AskIdentityUnavailable as exc:
+            logger.error(
+                "Inbound ask-identity blocked; stop before agent",
+                event_code="ask_identity_blocked",
+                session_id=session.session_id,
+                user_id=session.mis_user_id,
+                reason=exc.reason,
+                detail=exc.detail or None,
+            )
+            await self._publish_error(
+                producer,
+                inbound,
+                resolved_agent_id,
+                "ASK_IDENTITY_UNAVAILABLE",
+                exc.user_message(),
+            )
+            return
         user_msg: Message = await session_manager.add_message(
             session_id=session.session_id,
             role="user",
             content=user_content or inbound.content,
-            metadata=inbound.metadata,
+            metadata=ask_metadata,
         )
 
         t_agent0: float = time.perf_counter()
@@ -820,10 +922,17 @@ class InboundStreamWorker:
                         if pending_fence is not None:
                             await session_manager.save_session(session)
                         assembled = "".join(response_parts)
-                        if pending_fence and "```kb-sources" not in assembled:
+                        from src.agent.mis_rag.qa_pipeline import (
+                            should_append_pending_kb_sources_fence,
+                        )
+
+                        # 模型瘦身围栏（无 chunk）时仍追加权威 pending；前端取最后一次围栏。
+                        if pending_fence and should_append_pending_kb_sources_fence(
+                            assembled, str(pending_fence)
+                        ):
                             fence_text = (
                                 pending_fence
-                                if pending_fence.startswith("\n")
+                                if str(pending_fence).startswith("\n")
                                 else f"\n\n{pending_fence}"
                             )
                             await producer.publish_agent_event(
@@ -985,6 +1094,207 @@ class InboundStreamWorker:
         if changed:
             await get_session_manager().save_session(session)
 
+    async def _process_a2ui_run(
+        self, inbound: InboundStreamMessage, stream_key: str
+    ) -> None:
+        """处理 ``a2ui_run`` 入站：解析 RunAgentInput → A2UI run 循环 → 回包。
+
+        Gateway ``RedisStreamAgent`` 将中间件处理后的完整 RunAgentInput 放入
+        ``metadata.a2ui.runAgentInput``；本方法解析后驱动 ``A2uiRunLoop`` 执行
+        LLM 循环（含 ``render_a2ui`` 工具执行），所有 AgentEvent 经
+        ``A2uiOutboundPublisher`` XADD 到 ``aip:outbound:{sessionId}``。
+
+        错误处理（02 §6 / Gateway RedisStreamAgent 契约）：LLM 失败 / 超时 →
+        ``error`` + ``done`` 事件回包，Gateway 靠它们 complete Observable。
+
+        Args:
+            inbound: Gateway 写入的 A2UI run 入站消息。
+            stream_key: 来源 stream 键名（保留参数，供日志 / 路由追踪）。
+        """
+        del stream_key
+        metadata: Any = inbound.metadata
+        run_agent_input: Any = None
+        if isinstance(metadata, dict):
+            a2ui_meta: Any = metadata.get("a2ui")
+            if isinstance(a2ui_meta, dict):
+                run_agent_input = a2ui_meta.get("runAgentInput")
+        if not isinstance(run_agent_input, dict):
+            logger.warning(
+                "a2ui_run 缺少 metadata.a2ui.runAgentInput，无法执行",
+                session_id=inbound.session_id,
+            )
+            return
+
+        redis: aioredis.Redis = await self._get_redis()
+        # 幂等：XAUTOCLAIM 可能在长任务 ACK 前重投同一 a2ui_run。
+        # 用 runId（缺省 metadata.a2ui.runId / trace_id）抢占键；已处理/处理中则跳过并仍由外层 ACK。
+        run_id: str = str(run_agent_input.get("runId") or "").strip()
+        if not run_id and isinstance(metadata, dict):
+            a2ui_meta_for_id: Any = metadata.get("a2ui")
+            if isinstance(a2ui_meta_for_id, dict):
+                run_id = str(a2ui_meta_for_id.get("runId") or "").strip()
+        if not run_id:
+            run_id = str(inbound.trace_id or "").strip()
+        claim_key: str | None = None
+        if run_id:
+            claim_key = f"{self._settings.REDIS_KEY_PREFIX}a2ui:run:{run_id}"
+            timeout_sec_cfg: int = int(self._settings.AGENT_MESSAGE_TIMEOUT)
+            claimed: Any = await redis.set(
+                claim_key,
+                "1",
+                nx=True,
+                ex=timeout_sec_cfg + 120,
+            )
+            if not claimed:
+                logger.info(
+                    "Skip duplicate a2ui_run (already claimed)",
+                    session_id=inbound.session_id,
+                    run_id=run_id,
+                )
+                return
+
+        publisher: A2uiOutboundPublisher = A2uiOutboundPublisher(redis)
+        loop: A2uiRunLoop = A2uiRunLoop(get_llm_gateway(), publisher)
+        # T03 S9：skill/mcp 工具 ACL fail-closed 判权的唯一身份来源。
+        # H5：Gateway JWT sub → userId / metadata.misUserId；企微：档 2 查库。
+        # 解析不出 → None → 工具执行按无身份拒绝（fail-closed），绝不回退企微 userid。
+        mis_user_id: int | None = await _resolve_inbound_mis_user_id(inbound)
+        # Copilot / embed 主路径是 a2ui_run（不是普通 text 入站）；问数身份必须在此补齐，
+        # 否则 agent__invoke → mis-iqd 的 tool_metadata 无 X-Mis-Roles → 45204。
+        # 回源失败且无 JWT 角色兜底 → 立刻提示用户并停住，禁止继续进 LLM。
+        from src.identity.ask_identity_context import (
+            AskIdentityUnavailable,
+            enrich_inbound_ask_identity,
+        )
+
+        try:
+            ask_tool_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+                inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                mis_user_id=mis_user_id,
+                redis=redis,
+                session_id=inbound.session_id,
+            )
+            # 模板报告硬派发：FE metadata 可能在 inbound.metadata 或 RunAgentInput.forwardedProps
+            report_run = None
+            if isinstance(inbound.metadata, dict):
+                cand = inbound.metadata.get("ai_report_run")
+                if isinstance(cand, dict) and cand.get("agent_id"):
+                    report_run = cand
+                a2ui_meta = inbound.metadata.get("a2ui")
+                if report_run is None and isinstance(a2ui_meta, dict):
+                    rai = a2ui_meta.get("runAgentInput")
+                    if isinstance(rai, dict):
+                        fwd = rai.get("forwardedProps")
+                        if isinstance(fwd, dict) and isinstance(fwd.get("ai_report_run"), dict):
+                            report_run = fwd.get("ai_report_run")
+            if isinstance(report_run, dict) and report_run.get("agent_id"):
+                ask_tool_metadata = {
+                    **ask_tool_metadata,
+                    "ai_report_run": report_run,
+                }
+        except AskIdentityUnavailable as exc:
+            logger.error(
+                "A2UI ask-identity blocked; stop before run",
+                event_code="ask_identity_blocked",
+                session_id=inbound.session_id,
+                user_id=mis_user_id,
+                reason=exc.reason,
+                detail=exc.detail or None,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "ASK_IDENTITY_UNAVAILABLE",
+                exc.user_message(),
+            )
+            return
+        timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
+        from src.runtime.a2ui_run_registry import register_a2ui_run, unregister_a2ui_run
+
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            register_a2ui_run(inbound.session_id, current_task)
+        try:
+            async with asyncio.timeout(timeout_sec):
+                await loop.run(
+                    session_id=inbound.session_id,
+                    user_id=inbound.user_id,
+                    trace_id=inbound.trace_id,
+                    agent_id=inbound.agent_id,
+                    mis_user_id=mis_user_id,
+                    run_agent_input=run_agent_input,
+                    ask_tool_metadata=ask_tool_metadata,
+                )
+        except TimeoutError:
+            logger.error(
+                "A2UI run timed out",
+                session_id=inbound.session_id,
+                timeout_sec=timeout_sec,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "A2UI_TIMEOUT",
+                f"处理超时（{timeout_sec}s），请稍后重试",
+            )
+        except asyncio.CancelledError:
+            # 用户 generation.cancel：吞掉取消，回 CANCELLED 后正常 ACK
+            logger.info("A2UI run cancelled by user", session_id=inbound.session_id)
+            try:
+                await publisher.publish_error(
+                    inbound.session_id,
+                    "CANCELLED",
+                    "已停止生成",
+                )
+            except Exception:  # noqa: BLE001 - 取消路径尽力回包
+                pass
+        except Exception as exc:  # noqa: BLE001 - run 失败必须回 error 终止 Gateway 订阅
+            logger.error(
+                "A2UI run failed",
+                session_id=inbound.session_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "A2UI_RUN_ERROR",
+                str(exc) or "A2UI run failed",
+            )
+        finally:
+            unregister_a2ui_run(inbound.session_id, current_task)
+            # 处理已终结（成功/超时/业务错误）：延长幂等键，避免短窗内重投再跑。
+            # kill -9 中途崩溃时本 finally 不执行，键按短 TTL 过期后可正当重试。
+            if claim_key is not None:
+                try:
+                    await redis.expire(claim_key, 86_400)
+                except Exception:  # noqa: BLE001 - 幂等键续期失败不阻断 ACK
+                    pass
+
+    async def _process_generation_cancel(self, inbound: InboundStreamMessage) -> None:
+        """处理 ``generation.cancel``：取消 A2UI run + 父会话下全部 Worker。"""
+        from src.coordinator.sessions import cancel_all_running_tasks
+        from src.runtime.a2ui_run_registry import cancel_a2ui_run
+
+        sid = inbound.session_id
+        workers = cancel_all_running_tasks(sid)
+        a2ui = cancel_a2ui_run(sid)
+        logger.info(
+            "generation.cancel processed",
+            session_id=sid,
+            a2ui_cancelled=a2ui,
+            workers_cancelled=workers,
+        )
+        # 若没有可取消的 run（已结束 / 异进程），仍回一条 CANCELLED 让前端解锁
+        if not a2ui:
+            try:
+                redis: aioredis.Redis = await self._get_redis()
+                publisher = A2uiOutboundPublisher(redis)
+                await publisher.publish_error(sid, "CANCELLED", "已停止生成")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "generation.cancel outbound failed",
+                    session_id=sid,
+                    error=str(exc),
+                )
+
     async def _process_formfill_resume(
         self, inbound: InboundStreamMessage, stream_key: str
     ) -> None:
@@ -1054,11 +1364,39 @@ class InboundStreamWorker:
 
         if outcome.kind == "continue":
             # 续跑：把 apply 结果作为用户消息，继续驱动 agent
+            from src.identity.ask_identity_context import (
+                AskIdentityUnavailable,
+                enrich_inbound_ask_identity,
+            )
+
+            try:
+                ff_meta: dict[str, Any] = await enrich_inbound_ask_identity(
+                    inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                    mis_user_id=session.mis_user_id,
+                    session_id=session.session_id,
+                )
+            except AskIdentityUnavailable as exc:
+                logger.error(
+                    "FormFill ask-identity blocked; stop before continue",
+                    event_code="ask_identity_blocked",
+                    session_id=session.session_id,
+                    user_id=session.mis_user_id,
+                    reason=exc.reason,
+                    detail=exc.detail or None,
+                )
+                await self._publish_error(
+                    producer,
+                    inbound,
+                    resolved_agent_id,
+                    "ASK_IDENTITY_UNAVAILABLE",
+                    exc.user_message(),
+                )
+                return
             user_msg = await session_manager.add_message(
                 session_id=session.session_id,
                 role="user",
                 content=outcome.content,
-                metadata={**(inbound.metadata or {}), "formfill_resume": True},
+                metadata={**ff_meta, "formfill_resume": True},
             )
             await self._run_formfill_and_publish(instance, session, user_msg, inbound, producer)
         elif outcome.kind == "error":

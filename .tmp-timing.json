@@ -1,0 +1,52 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "turns":  {
+                               "78a8bd07-7705-41ba-9d86-056b15f3e242":  {
+                                                                            "turn_key":  "78a8bd07-7705-41ba-9d86-056b15f3e242",
+                                                                            "total_ms":  31483,
+                                                                            "stages":  {
+                                                                                           "planning_ms":  17175,
+                                                                                           "retrieval_ms":  null,
+                                                                                           "tool_call_ms":  1,
+                                                                                           "generation_ms":  0,
+                                                                                           "post_process_ms":  14306
+                                                                                       },
+                                                                            "sub_stages":  {
+                                                                                               "planning":  {
+                                                                                                                "ttft_ms":  17175,
+                                                                                                                "decision_ms":  0
+                                                                                                            },
+                                                                                               "retrieval":  null,
+                                                                                               "tool_call":  {
+                                                                                                                 "calls":  [
+                                                                                                                               {
+                                                                                                                                   "tool_name":  "agent__invoke",
+                                                                                                                                   "kind":  "delegate",
+                                                                                                                                   "latency_ms":  1,
+                                                                                                                                   "sub_stages":  null
+                                                                                                                               }
+                                                                                                                           ],
+                                                                                                                 "delegate_round_trip_ms":  1
+                                                                                                             },
+                                                                                               "generation":  {
+                                                                                                                  "ttft_ms":  31464,
+                                                                                                                  "stream_ms":  0,
+                                                                                                                  "tail_ms":  17
+                                                                                                              },
+                                                                                               "post_process":  {
+                                                                                                                    "db_persist_ms":  0,
+                                                                                                                    "redis_write_ms":  0,
+                                                                                                                    "timing_save_ms":  null
+                                                                                                                }
+                                                                                           },
+                                                                            "sampled_at":  "2026-10-30T06:33:26.685566+00:00",
+                                                                            "schema_version":  2
+                                                                        }
+                           },
+                 "last":  "78a8bd07-7705-41ba-9d86-056b15f3e242"
+             },
+    "traceId":  null,
+    "success":  true
+}

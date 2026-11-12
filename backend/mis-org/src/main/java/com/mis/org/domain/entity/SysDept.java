@@ -37,6 +37,10 @@ public class SysDept {
     @Column(nullable = false)
     private String ancestors;
 
+    /** W2（V70/V74）新增：部门路径（如 /0/1/100/），行级范围 PATH_PREFIX 注入依赖。 */
+    @Column(name = "dept_path")
+    private String deptPath;
+
     @Column(nullable = false)
     private Integer sort;
 
@@ -92,6 +96,8 @@ public class SysDept {
     public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
     public String getAncestors() { return ancestors; }
     public void setAncestors(String ancestors) { this.ancestors = ancestors; }
+    public String getDeptPath() { return deptPath; }
+    public void setDeptPath(String deptPath) { this.deptPath = deptPath; }
     public Integer getSort() { return sort; }
     public void setSort(Integer sort) { this.sort = sort; }
     public Integer getStatus() { return status; }

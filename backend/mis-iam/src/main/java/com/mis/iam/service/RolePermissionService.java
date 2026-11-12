@@ -79,7 +79,10 @@ public class RolePermissionService {
         List<Long> deptIds = rolePermissionRepository.findByRoleIdAndPermType(roleId, PermType.dept).stream()
                 .map(SysRolePermission::getTargetId)
                 .toList();
-        return new RoleDataScopeVO(role.getDataScope(), orgIds, deptIds);
+        List<Long> storeIds = rolePermissionRepository.findByRoleIdAndPermType(roleId, PermType.store).stream()
+                .map(SysRolePermission::getTargetId)
+                .toList();
+        return new RoleDataScopeVO(role.getDataScope(), orgIds, deptIds, storeIds);
     }
 
     /**
@@ -94,8 +97,9 @@ public class RolePermissionService {
         }
         List<Long> orgIds = request.orgIds() != null ? request.orgIds() : List.of();
         List<Long> deptIds = request.deptIds() != null ? request.deptIds() : List.of();
-        if (scope == 5 && CollectionUtils.isEmpty(orgIds) && CollectionUtils.isEmpty(deptIds)) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "自定义数据范围需至少指定组织或部门");
+        List<Long> storeIds = request.storeIds() != null ? request.storeIds() : List.of();
+        if (scope == 5 && CollectionUtils.isEmpty(orgIds) && CollectionUtils.isEmpty(deptIds) && CollectionUtils.isEmpty(storeIds)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "自定义数据范围需至少指定组织、部门或门店");
         }
 
         role.setDataScope(scope);
@@ -104,6 +108,7 @@ public class RolePermissionService {
 
         rolePermissionRepository.deleteByRoleIdAndPermType(roleId, PermType.org);
         rolePermissionRepository.deleteByRoleIdAndPermType(roleId, PermType.dept);
+        rolePermissionRepository.deleteByRoleIdAndPermType(roleId, PermType.store);
         Instant now = Instant.now();
         if (scope == 5) {
             for (Long orgId : orgIds) {
@@ -124,6 +129,15 @@ public class RolePermissionService {
                 rp.setCreatedAt(now);
                 rolePermissionRepository.save(rp);
             }
+            for (Long storeId : storeIds) {
+                SysRolePermission rp = new SysRolePermission();
+                rp.setId(IdGenerator.nextId());
+                rp.setRoleId(roleId);
+                rp.setPermType(PermType.store);
+                rp.setTargetId(storeId);
+                rp.setCreatedAt(now);
+                rolePermissionRepository.save(rp);
+            }
         }
         bumpUsersOfRole(roleId);
         return getDataScope(roleId);
@@ -137,6 +151,12 @@ public class RolePermissionService {
     @Transactional(readOnly = true)
     public List<Long> listCustomDeptIdsByUser(Long userId) {
         return rolePermissionRepository.findTargetIdsByUserIdAndPermType(userId, PermType.dept);
+    }
+
+    /** CUSTOM 数据范围内：查询用户角色下的门店权限 target_id 并集。 */
+    @Transactional(readOnly = true)
+    public List<Long> listCustomStoreIdsByUser(Long userId) {
+        return rolePermissionRepository.findTargetIdsByUserIdAndPermType(userId, PermType.store);
     }
 
     private void bumpUsersOfRole(Long roleId) {

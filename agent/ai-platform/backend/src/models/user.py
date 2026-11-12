@@ -155,13 +155,19 @@ class CredentialMappingModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     __tablename__ = "credential_mappings"
 
-    user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.user_id"), nullable=False, index=True
+    # 可空：问数连接凭证没有平台用户主体（user_id 恒为 NULL）。
+    # 原为 ForeignKey("users.user_id") NOT NULL，但问数连接凭证由平台按 secret_ref
+    # 管理（路线 A），不属于任何 MIS 用户，故改为可空、去外键。
+    user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
     )
     system_type: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True
-    )  # finance | retail | department_store | hr | property | crm | valuecard
-    system_account: Mapped[str] = mapped_column(String(128), nullable=False)
+    )  # finance | retail | department_store | hr | property | crm | valuecard | iqd_db
+    # vault 引用（问数连接 secret_ref）；唯一，供 resolve_by_ref 单行解析。
+    system_account: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
     encrypted_credential: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

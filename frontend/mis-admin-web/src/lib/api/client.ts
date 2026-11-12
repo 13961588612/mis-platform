@@ -1,6 +1,8 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
-import type { ApiResult, TokenResponse } from '@/types/api';
+import type { ApiResult } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { recordAuthKick } from '@/lib/auth/auth-kick-log';
+import { getLastRefreshError, refreshAccessToken } from '@/lib/auth/refresh-token';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -16,31 +18,6 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
-let refreshPromise: Promise<string | null> | null = null;
-
-async function refreshAccessToken(): Promise<string | null> {
-  if (!refreshPromise) {
-    refreshPromise = api
-      .post<ApiResult<TokenResponse>>('/auth/refresh', {})
-      .then((res) => {
-        if (res.data.code !== 0 || !res.data.data) {
-          throw new Error(res.data.message || 'refresh failed');
-        }
-        const { accessToken, expiresIn } = res.data.data;
-        useAuthStore.getState().setAccessToken(accessToken, expiresIn);
-        return accessToken;
-      })
-      .catch(() => {
-        useAuthStore.getState().clearSession();
-        return null;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-  return refreshPromise;
-}
-
 api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError<ApiResult<unknown>>) => {
@@ -55,8 +32,24 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
     (original as InternalAxiosRequestConfig & { _retry?: boolean })._retry = true;
+    console.warn('[auth-kick] 收到 401/40101，尝试 refresh', {
+      url: original.url,
+      method: original.method,
+      status,
+      code,
+      message: error.response?.data?.message,
+    });
     const newToken = await refreshAccessToken();
     if (!newToken) {
+      recordAuthKick({
+        client: 'main',
+        triggerUrl: original.url,
+        triggerMethod: original.method?.toUpperCase(),
+        httpStatus: status,
+        bizCode: code,
+        bizMessage: error.response?.data?.message,
+        refreshError: getLastRefreshError() ?? undefined,
+      });
       window.location.href = '/login';
       return Promise.reject(error);
     }

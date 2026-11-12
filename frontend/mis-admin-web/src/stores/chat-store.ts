@@ -1,0 +1,206 @@
+/**
+ * chat-store（zustand）— chat-core 会话状态（T06'）。
+ *
+ * <p>从 旧版独立前端 `store/chatStore.ts` 迁入 mis-admin-web，裁剪为 T06' 需要的最小
+ * 状态集：会话 / 消息 / 连接状态 / 生成态 / 错误 / dispatch.trace。A2UI Surface 状态
+ * 独立存放于 `lib/a2ui/surface-store.ts`（渲染层自持，避免 chat-store 膨胀）。
+ */
+
+import { create } from 'zustand';
+import type {
+  ChatConnectionState,
+  ChatHistoryState,
+  ChatMessage,
+  DispatchTraceEntry,
+  MessageStatus,
+  ReportParamCardMeta,
+  TokenUsage,
+  ToolStep,
+} from '@/lib/chat/types';
+
+/** 会话创建/恢复状态。 */
+export type ChatSessionState = 'none' | 'creating' | 'ready' | 'error';
+
+interface ChatState {
+  sessionId: string | null;
+  agentId: string | null;
+  messages: ChatMessage[];
+  connectionState: ChatConnectionState;
+  isGenerating: boolean;
+  error: string | null;
+  dispatchTrace: DispatchTraceEntry[];
+  /** 本轮工具步骤（发送时清空；供 Copilot 折叠条）。 */
+  toolSteps: ToolStep[];
+  tokenUsage: TokenUsage;
+  sessionState: ChatSessionState;
+  /** 历史加载状态（P0-2：idle / loading / loaded / error）。 */
+  historyState: ChatHistoryState;
+  /** 当前可编辑的模板报告参数卡消息 id；无则 null。 */
+  activeReportCardId: string | null;
+
+  setSessionId: (sessionId: string | null) => void;
+  setAgentId: (agentId: string | null) => void;
+  setConnectionState: (state: ChatConnectionState) => void;
+  setSessionState: (state: ChatSessionState) => void;
+  addMessage: (message: ChatMessage) => void;
+  updateMessage: (id: string, updates: Partial<ChatMessage>) => void;
+  updateMessageStatus: (id: string, status: MessageStatus) => void;
+  /** 移除单条消息（切走/关闭时丢掉空气泡，勿标 error）。 */
+  removeMessage: (id: string) => void;
+  clearMessages: () => void;
+  setMessages: (messages: ChatMessage[]) => void;
+  setGenerating: (generating: boolean) => void;
+  setError: (error: string | null) => void;
+  setDispatchTrace: (entries: DispatchTraceEntry[]) => void;
+  setToolSteps: (steps: ToolStep[]) => void;
+  upsertToolStep: (step: ToolStep) => void;
+  addTokenUsage: (usage: TokenUsage) => void;
+  setHistoryState: (state: ChatHistoryState) => void;
+  setActiveReportCardId: (id: string | null) => void;
+  /** 将当前 active 参数卡标为 cancelled（灰显）；无卡则 noop。 */
+  cancelActiveReportCard: () => void;
+  /** 更新参数卡 values / state（仅当消息带 reportParamCard）。 */
+  patchReportParamCard: (
+    messageId: string,
+    patch: Partial<Pick<ReportParamCardMeta, 'values' | 'state'>>,
+  ) => void;
+  reset: () => void;
+}
+
+const INITIAL_TOKEN_USAGE: TokenUsage = { prompt: 0, completion: 0, total: 0 };
+
+export const useChatStore = create<ChatState>((set) => ({
+  sessionId: null,
+  agentId: null,
+  messages: [],
+  connectionState: 'idle',
+  isGenerating: false,
+  error: null,
+  dispatchTrace: [],
+  toolSteps: [],
+  tokenUsage: { ...INITIAL_TOKEN_USAGE },
+  sessionState: 'none',
+  historyState: 'idle',
+  activeReportCardId: null,
+
+  setSessionId: (sessionId) => set({ sessionId }),
+  setAgentId: (agentId) => set({ agentId }),
+  setConnectionState: (connectionState) => set({ connectionState }),
+  setSessionState: (sessionState) => set({ sessionState }),
+
+  addMessage: (message) =>
+    set((state) => ({ messages: [...state.messages, message] })),
+
+  updateMessage: (id, updates) =>
+    set((state) => ({
+      messages: state.messages.map((m) => (m.id === id ? { ...m, ...updates } : m)),
+    })),
+
+  updateMessageStatus: (id, status) =>
+    set((state) => ({
+      messages: state.messages.map((m) => (m.id === id ? { ...m, status } : m)),
+    })),
+
+  removeMessage: (id) =>
+    set((state) => ({
+      messages: state.messages.filter((m) => m.id !== id),
+      activeReportCardId: state.activeReportCardId === id ? null : state.activeReportCardId,
+    })),
+
+  clearMessages: () =>
+    set({
+      messages: [],
+      dispatchTrace: [],
+      toolSteps: [],
+      tokenUsage: { ...INITIAL_TOKEN_USAGE },
+      isGenerating: false,
+      activeReportCardId: null,
+    }),
+
+  // 不强制清 isGenerating：历史回填若与进行中的发送竞态，清生成态会导致
+  // 「正在思考」忽然消失、空气泡（由 loadHistory 调用方在安全时再解锁）。
+  setMessages: (messages) =>
+    set({
+      messages,
+      dispatchTrace: [],
+      toolSteps: [],
+      tokenUsage: { ...INITIAL_TOKEN_USAGE },
+      activeReportCardId: null,
+    }),
+
+  setGenerating: (isGenerating) => set({ isGenerating }),
+  setError: (error) => set({ error }),
+  setDispatchTrace: (dispatchTrace) => set({ dispatchTrace }),
+  setToolSteps: (toolSteps) => set({ toolSteps }),
+  upsertToolStep: (step) =>
+    set((state) => {
+      const idx = state.toolSteps.findIndex((s) => s.id === step.id);
+      if (idx < 0) return { toolSteps: [...state.toolSteps, step] };
+      const next = state.toolSteps.slice();
+      next[idx] = { ...next[idx], ...step };
+      return { toolSteps: next };
+    }),
+
+  addTokenUsage: (usage) =>
+    set((state) => ({
+      tokenUsage: {
+        prompt: state.tokenUsage.prompt + usage.prompt,
+        completion: state.tokenUsage.completion + usage.completion,
+        total: state.tokenUsage.total + usage.total,
+      },
+    })),
+
+  setHistoryState: (historyState) => set({ historyState }),
+
+  setActiveReportCardId: (activeReportCardId) => set({ activeReportCardId }),
+
+  cancelActiveReportCard: () =>
+    set((state) => {
+      const id = state.activeReportCardId;
+      if (!id) return state;
+      return {
+        activeReportCardId: null,
+        messages: state.messages.map((m) => {
+          if (m.id !== id || !m.reportParamCard) return m;
+          if (m.reportParamCard.state !== 'active') return m;
+          return {
+            ...m,
+            reportParamCard: { ...m.reportParamCard, state: 'cancelled' },
+          };
+        }),
+      };
+    }),
+
+  patchReportParamCard: (messageId, patch) =>
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId || !m.reportParamCard) return m;
+        return {
+          ...m,
+          reportParamCard: {
+            ...m.reportParamCard,
+            ...patch,
+            values: patch.values ?? m.reportParamCard.values,
+          },
+        };
+      }),
+    })),
+
+  reset: () =>
+    set({
+      sessionId: null,
+      agentId: null,
+      messages: [],
+      connectionState: 'idle',
+      isGenerating: false,
+      error: null,
+      dispatchTrace: [],
+      toolSteps: [],
+      tokenUsage: { ...INITIAL_TOKEN_USAGE },
+      sessionState: 'none',
+      historyState: 'idle',
+      activeReportCardId: null,
+    }),
+}));
+
+export default useChatStore;

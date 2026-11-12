@@ -9,3 +9,9 @@ skill_permissions:
     required: [crm:member:read]
   member.coupons-account:
     required: [crm:member:read]
+  orders.member-all:
+    required: [crm:member:read]
+  orders-detail.crm:
+    required: [crm:member:read]
+  orders-detail.ecommerce:
+    required: [crm:member:read]

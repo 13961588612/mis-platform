@@ -13,6 +13,7 @@
 | 4 | [spec.md](spec.md) | **技术规范**：TaskBrief、契约、接入清单、FAQ |
 | 5 | [dev.md](dev.md) | **开发设计**：影响面、C0–C5 任务清单、测试与风险 |
 | 6 | [design-impl.md](design-impl.md) | **实现级设计**：代码基线核实、文件清单、pydantic 模型与类图、调用时序、T01–T05 任务分解、共享约定、待明确事项 |
+| 7 | [perf-routing-notes.md](perf-routing-notes.md) | **调度加速落地**：硬委派/透传、JEV 近轮上文、配置项与三条上下文链路 |
 
 图源：[class-diagram.mermaid](class-diagram.mermaid)｜[sequence-diagram.mermaid](sequence-diagram.mermaid)｜[task-dependency.mermaid](task-dependency.mermaid)
 
@@ -32,6 +33,7 @@
 | 技术规范 Spec | ✅ 已发布 |
 | 开发设计 | ✅ 已发布（实现从 C1 起） |
 | 实现级设计 design-impl | ✅ 已发布（覆盖 C1+C2+C3+C5，待评审后实施） |
+| 调度加速落地说明 | ✅ 已发布（硬委派/透传/JEV 近轮上文，2026-10-31） |
 
 ## 关联代码（仓库内）
 

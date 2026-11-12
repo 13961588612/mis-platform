@@ -32,10 +32,13 @@ import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentWecomBotDialog } from './agent-wecom-bot-dialog';
+import { AgentWecomBindingPanel } from './agent-wecom-binding-panel';
+import { AgentWecomCorpPanel } from './agent-wecom-corp-panel';
 import {
   deleteWecomBot,
   disableWecomBot,
@@ -52,8 +55,8 @@ const selectClass =
 
 const BOT_COLS: ResizableColumn[] = [
   { key: 'name', label: '名称' },
-  { key: 'bot_id', label: 'Bot ID' },
-  { key: 'ws_url', label: 'WS 地址' },
+  { key: 'bot_id', label: '平台 Bot ID' },
+  { key: 'bot_secret_id', label: '企微 BotID' },
   { key: 'bound_agent_id', label: '绑定 Agent' },
   { key: 'health', label: '连接健康' },
   { key: 'enabled', label: '启用状态' },
@@ -192,7 +195,7 @@ export function AgentWecomPage() {
       return (
         b.name.toLowerCase().includes(kw) ||
         b.bot_id.toLowerCase().includes(kw) ||
-        b.ws_url.toLowerCase().includes(kw)
+        b.bot_secret_id.toLowerCase().includes(kw)
       );
     });
   }, [bots, keyword, enabledFilter]);
@@ -249,6 +252,13 @@ export function AgentWecomPage() {
       */
       loading={loading && bots.length === 0 && error === null}
     >
+      <Tabs defaultValue="bots" className="flex min-h-0 flex-1 flex-col">
+        <TabsList className="w-fit shrink-0">
+          <TabsTrigger value="bots">机器人接入</TabsTrigger>
+          <TabsTrigger value="bindings">用户绑定</TabsTrigger>
+          <TabsTrigger value="corps">企业配置</TabsTrigger>
+        </TabsList>
+        <TabsContent value="bots" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         {/* ---------------- 常驻策略提示：配置已热生效（O1f-2） ---------------- */}
         <div className="flex gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -273,7 +283,7 @@ export function AgentWecomPage() {
           <div className="min-w-[14rem] flex-1">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
             <Input
-              placeholder="搜索名称 / Bot ID / WS 地址"
+              placeholder="搜索名称 / 平台 Bot ID / 企微 BotID"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
             />
@@ -398,9 +408,9 @@ export function AgentWecomPage() {
                           </td>
                           <td
                             className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
-                            title={bot.ws_url}
+                            title={bot.bot_secret_id}
                           >
-                            {bot.ws_url}
+                            {bot.bot_secret_id}
                           </td>
                           <td className="truncate px-3 py-2 text-xs">
                             {bot.bound_agent_id
@@ -476,6 +486,14 @@ export function AgentWecomPage() {
           </AgentContentState>
         </div>
       </div>
+        </TabsContent>
+        <TabsContent value="bindings" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <AgentWecomBindingPanel />
+        </TabsContent>
+        <TabsContent value="corps" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <AgentWecomCorpPanel />
+        </TabsContent>
+      </Tabs>
 
       <AgentWecomBotDialog
         open={formOpen}

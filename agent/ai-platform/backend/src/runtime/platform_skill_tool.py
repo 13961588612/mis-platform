@@ -13,13 +13,14 @@ OpenHarness 原生 ``SkillTool`` 的入参描述是自由文本 ``name``，且
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence
+from typing import Annotated, Any, Literal, Sequence
 
 from openharness.skills import load_skill_registry
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from openharness.tools.skill_tool import SkillTool
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, BeforeValidator, Field, create_model, field_validator
 
+from src.skills.skill_id_aliases import canonicalize_skill_id
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.platform_skill_tool")
@@ -41,6 +42,11 @@ class PlatformSkillToolInput(BaseModel):
         ),
     )
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _canonicalize_name(cls, value: Any) -> Any:
+        return canonicalize_skill_id(value)
+
 
 def _build_input_model(allowed_ids: Sequence[str]) -> type[BaseModel]:
     """把 ``name`` 收窄为启用技能的 ``Literal`` 枚举。"""
@@ -50,12 +56,13 @@ def _build_input_model(allowed_ids: Sequence[str]) -> type[BaseModel]:
 
     literal_type: Any = Literal[tuple(ids)]  # type: ignore[valid-type]
     id_list = ", ".join(ids)
+    annotated = Annotated[literal_type, BeforeValidator(canonicalize_skill_id)]
     return create_model(  # type: ignore[call-overload]
         "PlatformSkillToolInput",
         __base__=PlatformSkillToolInput,
         __module__=PlatformSkillToolInput.__module__,
         name=(
-            literal_type,
+            annotated,
             Field(
                 ...,
                 description=(
@@ -75,22 +82,51 @@ class PlatformSkillTool(BaseTool):
     description = _STATIC_DESCRIPTION
     input_model = PlatformSkillToolInput
 
-    def __init__(self, allowed_skill_ids: Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        allowed_skill_ids: Sequence[str] | None = None,
+        prompt_skill_ids: Sequence[str] | None = None,
+    ) -> None:
         """按 Agent 启用技能收窄 schema。
 
         Args:
-            allowed_skill_ids: 本 Agent 启用的正式 skill_id 列表；
+            allowed_skill_ids: 本 Agent 可 ``skill()`` 加载的正式 skill_id（全集）；
                 空 / ``None`` 时保持自由字符串（但仍走注册表归一与拒识文案）。
+            prompt_skill_ids: 出现在 Available Skills / 工具说明中的子集；
+                ``None`` 时与 ``allowed_skill_ids`` 相同（兼容旧行为）。
         """
         self._allowed: frozenset[str] = frozenset(
             sid.strip() for sid in (allowed_skill_ids or []) if sid and str(sid).strip()
         )
+        prompt_ids: list[str] = sorted(
+            {
+                sid.strip()
+                for sid in (
+                    prompt_skill_ids
+                    if prompt_skill_ids is not None
+                    else (allowed_skill_ids or [])
+                )
+                if sid and str(sid).strip()
+            }
+        )
         self.name = type(self).name
         if self._allowed:
-            ids = ", ".join(sorted(self._allowed))
-            self.description = (
-                f"{_STATIC_DESCRIPTION} 本 Agent 允许：{ids}。"
-            )
+            # 工具 description 只列 prompt 暴露集，避免下游业务 skill 头刷屏；
+            # 入参枚举仍用可加载全集，保证 router 可 skill(下游 id)。
+            if prompt_ids:
+                shown = ", ".join(prompt_ids)
+                deferred = sorted(self._allowed - set(prompt_ids))
+                extra = (
+                    f" 其余正式 id（{', '.join(deferred)}）仅在总控路由指示后加载。"
+                    if deferred
+                    else ""
+                )
+                self.description = (
+                    f"{_STATIC_DESCRIPTION} 提示词优先：{shown}。{extra}"
+                ).strip()
+            else:
+                ids = ", ".join(sorted(self._allowed))
+                self.description = f"{_STATIC_DESCRIPTION} 本 Agent 允许：{ids}。"
             self.input_model = _build_input_model(sorted(self._allowed))
         else:
             self.description = _STATIC_DESCRIPTION
@@ -128,9 +164,11 @@ class PlatformSkillTool(BaseTool):
                 is_error=True,
             )
 
-        # 委托原生加载逻辑（按 OH registry 的 name=frontmatter name / skill_id）
+        # 委托原生加载逻辑（按 OH registry 的 name=frontmatter name / skill_id）。
+        # input_model 已是 Pydantic 模型类，直接实例化。
+        # 再套 type() 会拿到 ModelMetaclass，调用时缺少 name/bases/namespace。
         inner = SkillTool()
         return await inner.execute(
-            type(inner.input_model)(name=canonical),
+            inner.input_model(name=canonical),
             context,
         )

@@ -11,22 +11,33 @@
  * <p>#28 与 #29 用 `Promise.allSettled` 并行拉取：**消息拉不到才算失败**，
  * 元信息（标题 / 渠道 / 用户）失败只让头部少几个字段，不该把整个回放拦掉。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { AgentContentState } from '../components/agent-page-shell';
 import { AgentMessageStream } from '../components/agent-message-stream';
-import { getSession, getSessionTiming, listSessionMessages } from '../api/agent-ops-api';
+import {
+  batchSessionTiming,
+  getSession,
+  getSessionTiming,
+  listSessionMessages,
+} from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
 import type { Session, SessionMessage, SessionTimingMap } from '../types';
+import {
+  cleanupOpsSessionA2ui,
+  hydrateOpsSessionA2ui,
+} from './hydrate-session-a2ui';
 
 /** 渠道枚举 → 中文（与列表页共用同一份口径）。 */
 const CHANNEL_LABELS: Record<Session['channel'], string> = {
   web: '网页',
   wecom: '企业微信',
   api: 'API',
+  iqd_test: '问数测试',
+  kb_test: '问答测试',
   unknown: '未知',
 };
 
@@ -39,65 +50,204 @@ export interface AgentSessionDetailDialogProps {
   fallbackSession?: Session | null;
 }
 
+type TimingStatus = 'loaded' | 'expired' | 'never' | 'mismatch';
+
+/**
+ * Worker 旧采样常落在 `{sessionId}:latest`，与消息 id 对不齐。
+ * 若没有任何 key 命中 assistant 消息，把最近一轮挂到最后一条 assistant 上。
+ */
+function alignOrphanTimingTurns(
+  turns: SessionTimingMap,
+  messages: SessionMessage[],
+  sessionId: string,
+): SessionTimingMap {
+  const assistants = messages.filter((m) => m.role === 'assistant');
+  if (assistants.length === 0) return turns;
+  const assistantIds = new Set(assistants.map((m) => m.id));
+  if (Object.keys(turns).some((k) => assistantIds.has(k))) return turns;
+
+  const latestKey = `${sessionId}:latest`;
+  let orphan = turns[latestKey];
+  if (!orphan) {
+    const entries = Object.entries(turns);
+    if (entries.length === 0) return turns;
+    entries.sort((a, b) =>
+      String(b[1]?.sampled_at ?? '').localeCompare(String(a[1]?.sampled_at ?? '')),
+    );
+    orphan = entries[0]?.[1];
+  }
+  if (!orphan) return turns;
+  const lastId = assistants[assistants.length - 1]?.id;
+  if (!lastId) return turns;
+  return { ...turns, [lastId]: orphan };
+}
+
+function resolveTimingStatus(
+  timingResult: PromiseSettledResult<Awaited<ReturnType<typeof getSessionTiming>>>,
+  turns: SessionTimingMap | null,
+  messages: SessionMessage[],
+): TimingStatus {
+  if (timingResult.status === 'rejected') return 'never';
+  const payload = timingResult.value;
+  // API 契约：null = Redis 键不存在/已过期；空 turns = 从未写入有效轮次
+  if (payload === null) return 'expired';
+  if (!turns || Object.keys(turns).length === 0) return 'never';
+  const assistantIds = new Set(
+    messages.filter((m) => m.role === 'assistant').map((m) => m.id),
+  );
+  const hit = Object.keys(turns).some((k) => assistantIds.has(k));
+  return hit ? 'loaded' : 'mismatch';
+}
+
+const TIMING_STATUS_LABEL: Record<TimingStatus, string> = {
+  loaded: '按轮耗时已加载',
+  // Redis 无键：可能从未写入，也可能已过 24h；无法区分时用中性文案
+  expired: '暂无采样（未写入或已过 24h）',
+  never: '本会话暂无耗时采样',
+  mismatch: '有耗时采样，但与消息 id 未对齐',
+};
+
 export function AgentSessionDetailDialog({
   open,
   onOpenChange,
   sessionId,
   fallbackSession = null,
 }: AgentSessionDetailDialogProps) {
+  /** 抽屉内可跳到父/Worker 会话，不关 Sheet。 */
+  const [activeId, setActiveId] = useState(sessionId);
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [timing, setTiming] = useState<SessionTimingMap | null>(null);
+  const [timingStatus, setTimingStatus] = useState<TimingStatus>('never');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** assistant 消息 id → 运营回放私有 surfaceId（metadata.a2ui hydrate）。 */
+  const [a2uiByMsg, setA2uiByMsg] = useState<Record<string, string>>({});
+  /** 当前已 hydrate 的会话 id，关闭/切换时按此清理，不 clear 全局 SurfaceStore。 */
+  const hydratedSessionRef = useRef('');
+
+  useEffect(() => {
+    if (open) setActiveId(sessionId);
+  }, [open, sessionId]);
+
+  const releaseA2ui = useCallback((sid: string) => {
+    if (!sid) return;
+    cleanupOpsSessionA2ui(sid);
+    if (hydratedSessionRef.current === sid) {
+      hydratedSessionRef.current = '';
+    }
+  }, []);
 
   const load = useCallback(async () => {
-    if (!sessionId) return;
+    if (!activeId) return;
     setLoading(true);
     setError(null);
     try {
       const [metaResult, msgResult, timingResult] = await Promise.allSettled([
-        getSession(sessionId),
-        listSessionMessages(sessionId),
-        getSessionTiming(sessionId),
+        getSession(activeId),
+        listSessionMessages(activeId),
+        getSessionTiming(activeId),
       ]);
-      // 消息是主体：拿不到才算整体失败
       if (msgResult.status === 'rejected') throw msgResult.reason;
-      setMessages(msgResult.value);
-      setSession(metaResult.status === 'fulfilled' ? metaResult.value : null);
-      // 耗时为调试态（Redis，TTL 24h）：过期 / 未采样 = null，不影响回放。
-      // 2.1：返回的是按轮 map，前端按 message.id 逐条内联展示。
-      setTiming(timingResult.status === 'fulfilled' ? timingResult.value?.turns ?? null : null);
+      const msgs = msgResult.value;
+      setMessages(msgs);
+      const meta = metaResult.status === 'fulfilled' ? metaResult.value : null;
+      setSession(meta);
+
+      let turns: SessionTimingMap =
+        timingResult.status === 'fulfilled' ? { ...(timingResult.value?.turns ?? {}) } : {};
+
+      // 本会话（含点进 Worker 子会话）：`:latest` 等孤儿键对齐到最后一条助手消息
+      turns = alignOrphanTimingTurns(turns, msgs, activeId);
+
+      // 尽力合并绑定 Worker 子会话的按轮耗时（key 仍是各子会话 message.id；
+      // 父会话消息流用不上这些 key，点进 Worker 时再靠本会话对齐）。
+      const workerIds = (meta?.worker_sessions ?? [])
+        .map((w) => w.session_id)
+        .filter(Boolean);
+      if (workerIds.length > 0) {
+        try {
+          const batch = await batchSessionTiming(workerIds);
+          for (const payload of Object.values(batch)) {
+            if (!payload?.turns) continue;
+            Object.assign(turns, payload.turns);
+          }
+        } catch {
+          // Worker 耗时合并失败不影响主回放
+        }
+      }
+
+      const turnMap = Object.keys(turns).length > 0 ? turns : null;
+      setTiming(turnMap);
+      setTimingStatus(resolveTimingStatus(timingResult, turnMap, msgs));
+
+      // A2UI 表格回放：先清本会话旧副本，再按 metadata.a2ui 重建（与 Copilot 隔离）
+      const prevHydrated = hydratedSessionRef.current;
+      if (prevHydrated && prevHydrated !== activeId) {
+        releaseA2ui(prevHydrated);
+      } else {
+        cleanupOpsSessionA2ui(activeId);
+      }
+      const surfaceMap = hydrateOpsSessionA2ui(msgs, activeId);
+      setA2uiByMsg(surfaceMap);
+      hydratedSessionRef.current = activeId;
     } catch (e) {
       setMessages([]);
+      setA2uiByMsg({});
       setError(agentErrorMessage(e, '获取会话消息失败'));
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [activeId, releaseA2ui]);
 
-  // 每次打开都重新拉：会话内容可能在列表停留期间已变化
   useEffect(() => {
     if (!open) return;
     setSession(null);
     setMessages([]);
+    setA2uiByMsg({});
     setTiming(null);
+    setTimingStatus('never');
     void load();
   }, [open, load]);
 
-  const shown = session ?? fallbackSession;
-  // 是否有任意一轮耗时可用（用于头部提示）
-  const hasTiming = timing != null && Object.keys(timing).length > 0;
+  // 关抽屉：只清运营回放 surface，不动 Copilot
+  useEffect(() => {
+    if (open) return;
+    const sid = hydratedSessionRef.current;
+    if (sid) releaseA2ui(sid);
+    setA2uiByMsg({});
+  }, [open, releaseA2ui]);
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        const sid = hydratedSessionRef.current;
+        if (sid) releaseA2ui(sid);
+        setA2uiByMsg({});
+      }
+      onOpenChange(next);
+    },
+    [onOpenChange, releaseA2ui],
+  );
+
+  const shown = useMemo(() => {
+    if (session) return session;
+    if (fallbackSession && fallbackSession.session_id === activeId) return fallbackSession;
+    return null;
+  }, [session, fallbackSession, activeId]);
+
+  const parentId = shown?.parent_session_id?.trim() || '';
+  const workers = shown?.worker_sessions ?? [];
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <SheetHeader className="border-b p-4">
           <SheetTitle className="truncate pr-8">
             {shown?.title || '会话详情'}
           </SheetTitle>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span className="font-mono">{sessionId}</span>
+            <span className="font-mono">{activeId}</span>
             {shown ? (
               <>
                 <span>渠道：{CHANNEL_LABELS[shown.channel] ?? shown.channel}</span>
@@ -110,11 +260,9 @@ export function AgentSessionDetailDialog({
               </>
             ) : null}
             <span>共 {messages.length} 条消息</span>
-            {hasTiming ? (
-              <span className="text-success">按轮耗时已加载</span>
-            ) : (
-              <span>耗时已过期（调试窗口 24h）</span>
-            )}
+            <span className={timingStatus === 'loaded' ? 'text-success' : undefined}>
+              {TIMING_STATUS_LABEL[timingStatus]}
+            </span>
             <Button
               size="sm"
               variant="ghost"
@@ -126,6 +274,45 @@ export function AgentSessionDetailDialog({
               刷新
             </Button>
           </div>
+          {parentId || workers.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {parentId ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7"
+                  onClick={() => setActiveId(parentId)}
+                >
+                  打开父会话
+                  <span className="ml-1 font-mono text-[0.65rem] opacity-80">
+                    {parentId.length > 18 ? `${parentId.slice(0, 18)}…` : parentId}
+                  </span>
+                </Button>
+              ) : null}
+              {workers.map((w) => (
+                <Button
+                  key={w.session_id}
+                  size="sm"
+                  variant="outline"
+                  className="h-7"
+                  onClick={() => setActiveId(w.session_id)}
+                  title={w.session_id}
+                >
+                  Worker {w.worker_id}
+                </Button>
+              ))}
+              {activeId !== sessionId ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7"
+                  onClick={() => setActiveId(sessionId)}
+                >
+                  回到列表所选
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </SheetHeader>
 
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
@@ -141,6 +328,7 @@ export function AgentSessionDetailDialog({
               className="min-w-0"
               messages={messages}
               timingByMessageId={timing ?? undefined}
+              a2uiSurfaceByMessageId={a2uiByMsg}
               showTurnIndex
             />
           </AgentContentState>

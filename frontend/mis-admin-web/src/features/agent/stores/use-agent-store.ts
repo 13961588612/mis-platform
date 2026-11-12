@@ -17,8 +17,12 @@ export interface SessionFilter {
   agentId: string;
   channel: SessionChannel | 'all';
   keyword: string;
+  /** 更新起始日期（本地 yyyy-MM-dd）。 */
   from: string;
+  /** 更新结束日期（本地 yyyy-MM-dd）。 */
   to: string;
+  /** 含 Worker/旁路会话（默认 false）。 */
+  includeWorkerSessions: boolean;
 }
 
 /** 技能池列表筛选条件（对应 UI#1 的筛选区）。 */
@@ -37,6 +41,7 @@ function defaultSessionFilter(): SessionFilter {
     keyword: '',
     from: today,
     to: today,
+    includeWorkerSessions: false,
   };
 }
 

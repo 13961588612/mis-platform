@@ -18,11 +18,12 @@ TTL 一过历史就没了。本次把双写真正接上，并保证：
 """
 
 from __future__ import annotations
-from typing import Any, Sequence
 
 import json
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -38,6 +39,7 @@ from src.agent.session_store import (
 from src.config import get_settings
 from src.utils.exceptions import SessionNotFoundError
 from src.utils.logging import get_logger
+from src.utils.redis_reconnect import aclose_redis_quietly, is_broken_redis_connection
 
 logger = get_logger("agent.session")
 
@@ -46,6 +48,10 @@ CHANNEL_PREFIXES: dict[str, str] = {
     "web": "web-",
     "wecom_h5": "wecom-h5-",
     "wecom_bot": "wecom-bot-",
+    "iqd_test": "iqd-",
+    "kb_test": "kb-",
+    "api": "api-",
+    "mis_bff": "mis_bff-",
 }
 
 
@@ -93,7 +99,7 @@ class Message:
         self.role = role
         self.content = content
         self.metadata = metadata or {}
-        self.timestamp = datetime.now(timezone.utc)
+        self.timestamp = datetime.now(UTC)
 
     def to_dict(self) -> dict[str, Any]:
         """将消息序列化为字典。"""
@@ -160,8 +166,8 @@ class Session:
         self.user_name = user_name or ""
         self.messages: list[Message] = []
         self.state: dict[str, Any] = {}
-        self.created_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
+        self.created_at = datetime.now(UTC)
+        self.updated_at = datetime.now(UTC)
 
     def add_message(
         self,
@@ -181,7 +187,7 @@ class Session:
         """
         msg: Message = Message(role=role, content=content, metadata=metadata, message_id=message_id)
         self.messages.append(msg)
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
         return msg
 
     def get_messages(self) -> list[dict[str, Any]]:
@@ -225,9 +231,9 @@ class Session:
 
     def set_pending_formfill(self, resume_token: str, ttl_seconds: int = 1800) -> None:
         """记录当前会话挂起的表单填充任务令牌（TTL 默认 30 分钟）。"""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
         self.state["pending_formfill"] = {
             "resume_token": resume_token,
             "expires_at": expires_at.isoformat(),
@@ -235,7 +241,7 @@ class Session:
 
     def get_pending_formfill(self) -> str | None:
         """返回有效的挂起表单填充令牌；已过期或不存在则返回 None。"""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         pending = self.state.get("pending_formfill")
         if not isinstance(pending, dict):
@@ -243,7 +249,7 @@ class Session:
         expires_at = pending.get("expires_at")
         if expires_at:
             try:
-                if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                if datetime.fromisoformat(expires_at) < datetime.now(UTC):
                     self.state.pop("pending_formfill", None)
                     return None
             except (ValueError, TypeError):
@@ -306,12 +312,22 @@ class SessionManager:
     async def _dual_write(self, session: Session) -> None:
         """把会话投影到 PG。失败只降级，不抛异常（热路径保护）。
 
+        无消息的会话不落 PG：WS / ``ensure_session`` 会频繁创建空壳，若立刻投影，
+        运营台「会话管理」会被大量「未命名」空会话刷屏。首条 ``add_message`` →
+        ``save_session`` 时再投影即可。
+
         Args:
             session: 刚写入 Redis 的会话对象。
         """
+        if not session.messages:
+            return
         try:
             await self._pg_store.upsert_session(session)
-        except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
+        except BaseException as exc:  # noqa: BLE001 - CancelledError/ExceptionGroup 也要降级
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            # anyio/SQLAlchemy 在请求取消或跨 task 退出 cancel scope 时会抛
+            # CancelledError / ExceptionGroup（非 Exception 子类），不得冒泡成 HTTP 500
             logger.warning(
                 "Session dual-write raised unexpectedly (degraded)",
                 session_id=session.session_id,
@@ -325,8 +341,34 @@ class SessionManager:
                 self._settings.redis_url,
                 max_connections=self._settings.REDIS_MAX_CONNECTIONS,
                 decode_responses=True,
+                health_check_interval=30,
+                socket_keepalive=True,
+                retry_on_timeout=True,
             )
         return self._redis
+
+    async def _reset_redis(self) -> None:
+        """丢弃可能已死的 Redis 客户端。"""
+        client = self._redis
+        self._redis = None
+        await aclose_redis_quietly(client)
+
+    async def _redis_op(self, op_name: str, *args: Any, **kwargs: Any) -> Any:
+        """执行 Redis 命令；遇死连接则重建后重试一次。"""
+        redis = await self._get_redis()
+        try:
+            return await getattr(redis, op_name)(*args, **kwargs)
+        except Exception as exc:
+            if not is_broken_redis_connection(exc):
+                raise
+            logger.warning(
+                "SessionManager Redis connection broken; reconnecting",
+                op=op_name,
+                error=str(exc),
+            )
+            await self._reset_redis()
+            redis = await self._get_redis()
+            return await getattr(redis, op_name)(*args, **kwargs)
 
     def _session_key(self, session_id: str) -> str:
         """会话数据的 Redis key。"""
@@ -382,22 +424,22 @@ class SessionManager:
         )
 
         # 存储到 Redis
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._session_key(session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
         )
 
         # 设置 agent 绑定
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
         )
 
-        # PG 冷备：创建即落库，保证运营后台能立刻看到「进行中」的空会话，
-        # 而不是等第一条消息到达才出现。
+        # 空会话不投影 PG（见 ``_dual_write``）；热数据仅在 Redis。
         await self._dual_write(session)
 
         logger.info(
@@ -479,13 +521,14 @@ class SessionManager:
             mis_user_id=mis_user_id,
             user_name=user_name,
         )
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._session_key(session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
         )
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
@@ -502,8 +545,7 @@ class SessionManager:
 
     async def get_session(self, session_id: str) -> Session:
         """按 ID 从 Redis 中获取会话。"""
-        redis: aioredis.Redis = await self._get_redis()
-        data: str | None = await redis.get(self._session_key(session_id))
+        data: str | None = await self._redis_op("get", self._session_key(session_id))
 
         if data is None:
             raise SessionNotFoundError(session_id)
@@ -538,9 +580,9 @@ class SessionManager:
         Args:
             session: 待持久化的会话对象。
         """
-        redis: aioredis.Redis = await self._get_redis()
-        session.updated_at = datetime.now(timezone.utc)
-        await redis.set(
+        session.updated_at = datetime.now(UTC)
+        await self._redis_op(
+            "set",
             self._session_key(session.session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
@@ -549,13 +591,12 @@ class SessionManager:
 
     async def get_agent_binding(self, session_id: str) -> str | None:
         """获取会话绑定的 agent ID（用于会话亲和路由）。"""
-        redis: aioredis.Redis = await self._get_redis()
-        return await redis.get(self._agent_binding_key(session_id))
+        return await self._redis_op("get", self._agent_binding_key(session_id))
 
     async def set_agent_binding(self, session_id: str, agent_id: str) -> None:
         """将会话绑定到一个 agent（用于会话亲和路由）。"""
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
@@ -570,9 +611,8 @@ class SessionManager:
         Args:
             session_id: 会话 ID。
         """
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.delete(self._session_key(session_id))
-        await redis.delete(self._agent_binding_key(session_id))
+        await self._redis_op("delete", self._session_key(session_id))
+        await self._redis_op("delete", self._agent_binding_key(session_id))
         try:
             await self._pg_store.mark_closed(session_id)
         except Exception as exc:  # noqa: BLE001 - 关闭失败不应让接口报错
@@ -640,12 +680,12 @@ class SessionManager:
         payload: dict[str, Any] = {
             "rating": rating,
             "comment": (comment or "").strip() or None,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         meta = dict(target.metadata or {})
         meta["feedback"] = payload
         target.metadata = meta
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = datetime.now(UTC)
         await self.save_session(session)
         try:
             await self._pg_store.update_message_metadata(target.id, meta)
@@ -716,13 +756,16 @@ class SessionManager:
                 error=str(exc),
             )
         if record is not None:
+            await self._enrich_session_links(record)
             return record
 
         try:
             session: Session = await self.get_session(session_id)
         except SessionNotFoundError:
             return None
-        return self._session_to_wire(session)
+        wire = self._session_to_wire(session)
+        await self._enrich_session_links(wire, runtime=session)
+        return wire
 
     async def list_session_messages(
         self,
@@ -790,10 +833,19 @@ class SessionManager:
         if not session_ids:
             return 0
 
-        redis: aioredis.Redis = await self._get_redis()
         for session_id in session_ids:
-            await redis.delete(self._session_key(session_id))
-            await redis.delete(self._agent_binding_key(session_id))
+            await self._redis_op("delete", self._session_key(session_id))
+            await self._redis_op("delete", self._agent_binding_key(session_id))
+            try:
+                from src.memory.manager import get_memory_manager
+
+                await get_memory_manager().cleanup_session(session_id)
+            except Exception as exc:  # noqa: BLE001 - memory cleanup must not block deletion
+                logger.warning(
+                    "Session memory cleanup failed (degraded)",
+                    session_id=session_id,
+                    error=str(exc),
+                )
 
         deleted: int = await self._pg_store.soft_delete(list(session_ids))
         logger.info(
@@ -896,6 +948,45 @@ class SessionManager:
             feedback_ids, status, handler_id, handler_name, note
         )
 
+    async def _enrich_session_links(
+        self,
+        record: dict[str, Any],
+        *,
+        runtime: Session | None = None,
+    ) -> None:
+        """补齐父会话 / Worker 子会话链接（详情抽屉串联用）。
+
+        Args:
+            record: 待原地补齐的 wire dict。
+            runtime: 可选已加载的 Redis 会话，避免重复读。
+        """
+        if not record.get("parent_session_id") and runtime is not None:
+            state = getattr(runtime, "state", None) or {}
+            if isinstance(state, dict):
+                parent_raw = state.get("parent_session_id") or state.get("parent_hint")
+                if isinstance(parent_raw, str) and parent_raw.strip():
+                    record["parent_session_id"] = parent_raw.strip()
+        record.setdefault("parent_session_id", None)
+        record.setdefault("worker_sessions", [])
+        sid = str(record.get("session_id") or "").strip()
+        if not sid:
+            return
+        try:
+            from src.coordinator.sessions import get_worker_session_registry
+
+            workers = await get_worker_session_registry().list_active(sid)
+            record["worker_sessions"] = [
+                {"worker_id": wid, "session_id": child_id}
+                for wid, child_id in workers.items()
+                if child_id
+            ]
+        except Exception as exc:  # noqa: BLE001 - 链接补齐失败不影响详情主体
+            logger.debug(
+                "Enrich worker_sessions skipped",
+                session_id=sid,
+                error=str(exc),
+            )
+
     @staticmethod
     def _session_to_wire(session: Session) -> dict[str, Any]:
         """把 Redis 里的运行时会话拼成前端 ``Session`` 契约（兜底路径用）。
@@ -916,6 +1007,13 @@ class SessionManager:
                 title = flattened[:60] + ("…" if len(flattened) > 60 else "")
                 break
 
+        state = getattr(session, "state", None) or {}
+        parent_sid: str | None = None
+        if isinstance(state, dict):
+            parent_raw = state.get("parent_session_id") or state.get("parent_hint")
+            if isinstance(parent_raw, str) and parent_raw.strip():
+                parent_sid = parent_raw.strip()
+
         return {
             "session_id": session.session_id,
             "agent_id": session.agent_id,
@@ -930,6 +1028,8 @@ class SessionManager:
             "message_count": len(session.messages),
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
+            "parent_session_id": parent_sid,
+            "worker_sessions": [],
         }
 
 

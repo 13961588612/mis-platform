@@ -1,0 +1,199 @@
+/**
+ * chat-core 事件适配器（T06'）。
+ *
+ * <p>将 SSE/WS 原始载荷归一化为 {@link ChatStreamEvent}，兼容两类协议：
+ * 1. 最终协议（02 文档 §4）：`stream` / `a2ui_surface` / `dispatch.trace` / `done` / `error`
+ * 2. 旧协议（旧版独立前端存量）：`agent_event` envelope 内嵌 `text.delta` / `tool.call`
+ *    / `tool.result` / `ui.render` / `approval.request` / `dispatch.trace` / `error` / `done`
+ *
+ * <p>dispatch.trace 支持两种 Gateway 下发风格（F3 对齐）：
+ * - `{ type: 'dispatch.trace', trace }`（旧风格 / 直出）
+ * - `{ type: 'custom', eventType: 'dispatch.trace', data }`（EventConverter CUSTOM 分支）
+ * 二者统一归一为内部 `{ type: 'dispatch.trace', trace }` 事件。
+ */
+
+import { camelizeKeys } from './camelize';
+import type { ChatStreamEvent, DispatchTracePayload, RawStreamLine, TokenUsage } from './types';
+
+/**
+ * 解析一条原始载荷（可能是 envelope 或直接事件）。
+ * 无法识别时返回 null（调用方忽略，绝不中断流）。
+ */
+export function parseStreamLine(raw: RawStreamLine): ChatStreamEvent | null {
+  // 1) agent_event envelope：{ type: 'agent_event', event: {...} }
+  const envelopeEvent = raw.event;
+  if (raw.type === 'agent_event' && envelopeEvent != null && typeof envelopeEvent === 'object') {
+    return adaptLegacyEvent(envelopeEvent as Record<string, unknown>);
+  }
+
+  // 2) 最终协议事件（type 直出）
+  const type = raw.type;
+  if (typeof type !== 'string') return null;
+
+  switch (type) {
+    case 'stream': {
+      const content = typeof raw.content === 'string' ? raw.content : '';
+      return { type: 'stream', content };
+    }
+    case 'a2ui_surface': {
+      const operations = Array.isArray(raw.operations)
+        ? (raw.operations as import('../a2ui/types').A2uiOperation[])
+        : [];
+      return { type: 'a2ui_surface', operations, surfaceId: asString(raw.surfaceId) };
+    }
+    case 'dispatch.trace': {
+      return { type: 'dispatch.trace', trace: adaptTrace(raw.trace) };
+    }
+    case 'custom': {
+      // F3：Gateway EventConverter CUSTOM 分支 → { type:'custom', eventType, data }。
+      // dispatch.trace → 调度提示；tool.step → Copilot 工具步骤折叠条；
+      // ai.report.open_card → 打开模板报告参数卡；其它忽略。
+      if (raw.eventType === 'dispatch.trace') {
+        return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
+      }
+      if (raw.eventType === 'tool.step') {
+        return adaptToolStep(raw.data);
+      }
+      if (raw.eventType === 'ai.report.open_card') {
+        return adaptReportOpenCard(raw.data);
+      }
+      return null;
+    }
+    case 'tool.step': {
+      return adaptToolStep(raw);
+    }
+    case 'ai.report.open_card': {
+      return adaptReportOpenCard(raw);
+    }
+    case 'done': {
+      return {
+        type: 'done',
+        tokenUsage: adaptTokenUsage(raw.token_usage ?? raw.tokenUsage),
+        // 评价锚点（feedback-enhance §2.2 方案 C）：平台 done 帧透传 messageId（assistant 消息
+        // UUID）与 sessionId（平台会话 UUID）；缺失时保持 undefined（评价按钮降级禁用）。
+        messageId: asString(raw.messageId ?? raw.message_id),
+        sessionId: asString(raw.sessionId ?? raw.session_id),
+      };
+    }
+    case 'error': {
+      return {
+        type: 'error',
+        errorCode: asString(raw.error_code ?? raw.errorCode),
+        message: asString(raw.message ?? raw.errorMessage) ?? '未知错误',
+      };
+    }
+    case 'text.delta': {
+      return { type: 'text.delta', content: asString(raw.content) };
+    }
+    case 'tool.call': {
+      return {
+        type: 'tool.call',
+        toolName: asString(raw.tool_name ?? raw.toolName),
+        args: asRecord(raw.args),
+      };
+    }
+    case 'tool.result': {
+      return {
+        type: 'tool.result',
+        toolName: asString(raw.tool_name ?? raw.toolName),
+        result: asRecord(raw.result),
+      };
+    }
+    case 'ui.render': {
+      return {
+        type: 'ui.render',
+        component: asString(raw.component),
+        props: asRecord(raw.props),
+      };
+    }
+    case 'approval.request': {
+      return {
+        type: 'approval.request',
+        skillId: asString(raw.skill_id ?? raw.skillId),
+        detail: asRecord(raw.detail),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/** 旧协议 AgentEvent（snake_case）→ 前端事件。 */
+function adaptLegacyEvent(event: Record<string, unknown>): ChatStreamEvent | null {
+  const type = asString(event.type);
+  if (!type) return null;
+  return parseStreamLine({ ...event, type });
+}
+
+/** dispatch.trace 载荷归一化（防御：entries 非数组时返回空）。 */
+function adaptTrace(raw: unknown): DispatchTracePayload {
+  if (raw == null || typeof raw !== 'object') return { entries: [] };
+  const entries = (raw as { entries?: unknown }).entries;
+  if (!Array.isArray(entries)) return { entries: [] };
+  return {
+    entries: entries.filter((e): e is NonNullable<typeof entries>[number] => e != null && typeof e === 'object'),
+  };
+}
+
+/** Gateway CUSTOM tool.step / 直出 tool.step → 内部事件。 */
+function adaptToolStep(raw: unknown): ChatStreamEvent | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const phaseRaw = String(data.phase ?? '').trim();
+  const phase = phaseRaw === 'result' ? 'result' : phaseRaw === 'start' ? 'start' : null;
+  if (!phase) return null;
+  return {
+    type: 'tool.step',
+    phase,
+    toolName: asString(data.toolName ?? data.tool_name),
+    toolCallId: asString(data.toolCallId ?? data.tool_call_id),
+    args: asRecord(data.args),
+    result: asRecord(data.result),
+  };
+}
+
+/** Gateway CUSTOM ai.report.open_card → 内部事件。 */
+function adaptReportOpenCard(raw: unknown): ChatStreamEvent | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const reportCode = asString(data.reportCode ?? data.report_code);
+  if (!reportCode) return null;
+  const title = asString(data.title);
+  const values = asStringRecord(data.values);
+  const base = { type: 'ai.report.open_card' as const, reportCode };
+  return {
+    ...base,
+    ...(title ? { title } : {}),
+    ...(values ? { values } : {}),
+  };
+}
+
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const key = String(k || '').trim();
+    const val = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+    if (key && val) out[key] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function adaptTokenUsage(raw: unknown): TokenUsage | undefined {
+  if (raw == null || typeof raw !== 'object') return undefined;
+  const r = raw as { prompt?: unknown; completion?: unknown; total?: unknown };
+  const prompt = Number(r.prompt ?? 0);
+  const completion = Number(r.completion ?? 0);
+  const total = Number(r.total ?? 0);
+  if (Number.isNaN(prompt) || Number.isNaN(completion) || Number.isNaN(total)) return undefined;
+  return { prompt, completion, total };
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return camelizeKeys(value) as Record<string, unknown>;
+}

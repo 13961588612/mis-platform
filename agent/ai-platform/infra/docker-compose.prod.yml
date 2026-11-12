@@ -132,21 +132,6 @@ services:
       - ../configs:/app/configs:ro
     ports: []
 
-  frontend:
-    build:
-      target: production
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-        reservations:
-          cpus: "0.1"
-          memory: 64M
-    volumes: []
-    ports: []
-
   nginx:
     restart: always
     deploy:

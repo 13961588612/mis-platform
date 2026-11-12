@@ -1,0 +1,704 @@
+/**
+ * EventConverter.ts — AgentEvent ↔ BaseEvent 双向转换
+ *
+ * MIS 私有事件类型（dispatch.trace、approval.request 兼容、ui.render 迁移期映射）
+ * 与字段命名（snake_case → camelCase）是存量协议；开源无此转换器，自研并保持
+ * 8 种事件映射的显式维护（02-task-breakdown.md §2.2 / 01-architecture.md §2.2）。
+ *
+ * ## 事件映射表（权威，与 01 §2.2 一致）
+ *
+ * | AgentEvent        | BaseEvent                              | 方向        |
+ * |-------------------|----------------------------------------|-------------|
+ * | text.delta        | TEXT_MESSAGE_CHUNK                     | Python→前端 |
+ * | tool.call         | TOOL_CALL_* + CUSTOM(tool.step)        | Python→中间件/前端 |
+ * | tool.result       | TOOL_CALL_RESULT + CUSTOM(tool.step)   | Python→中间件/前端 |
+ * | ui.render         | ACTIVITY_SNAPSHOT（兼容 @deprecated）  | Python→前端 |
+ * | approval.request  | ACTIVITY_SNAPSHOT                      | Python→前端 |
+ * | dispatch.trace    | CUSTOM（type=dispatch.trace）          | Python→前端 |
+ * | tool.step         | CUSTOM（type=tool.step）               | Python→前端 |
+ * | ai.report.open_card | CUSTOM（type=ai.report.open_card）   | Python→前端 |
+ * | error             | RUN_ERROR                              | Python→前端 |
+ * | done              | RUN_FINISHED                           | Python→中间件 |
+ *
+ * 说明（与文档差异，均有依据）：
+ * - 文档写 tool.call → TOOL_CALL_START + TOOL_CALL_CHUNK；实测 @ag-ui 协议
+ *   流式参数事件为 `TOOL_CALL_ARGS`（delta 字段），中间件 processStream 只消费
+ *   TOOL_CALL_START/TOOL_CALL_ARGS，故按实际协议发出 START + ARGS + END。
+ * - 文档写 text.delta content → deltaText；实测字段名为 `delta`。
+ * - 文档签名 `agentEventToBaseEvent(event, runId): BaseEvent`；因 tool.call 映射
+ *   为多个事件，本实现返回 `AGUIEvent[]`（更精确的可构造类型，可赋给 BaseEvent）。
+ * - @ag-ui 事件 `type` 字段为枚举成员类型（zod ZodLiteral<EventType.X> 推断），
+ *   字面量字符串不可直接赋值，统一使用 `EventType.X` 枚举值构造。
+ *
+ * @module a2ui/EventConverter
+ */
+
+import { randomUUID } from 'node:crypto';
+import {
+  EventType,
+  type ActivitySnapshotEvent,
+  type AGUIEvent,
+  type CustomEvent,
+  type RunErrorEvent,
+  type RunFinishedEvent,
+  type TextMessageChunkEvent,
+  type ToolCallArgsEvent,
+  type ToolCallEndEvent,
+  type ToolCallResultEvent,
+  type ToolCallStartEvent,
+} from '@ag-ui/client';
+import type { AgentEvent } from '../channels/ChannelCapability.js';
+import {
+  A2UI_CATALOG_ID,
+  type A2UICustomMessage,
+  type A2UIDoneMessage,
+  type A2UIErrorMessage,
+  type A2UIFrontendMessage,
+  type A2UIStreamMessage,
+  type A2UISurfaceMessage,
+  A2UI_PROTOCOL_VERSION,
+} from './types.js';
+
+// ============================================================================
+// 常量
+// ============================================================================
+
+/** A2UI activityType（与中间件 A2UIActivityType 一致） */
+const A2UI_ACTIVITY_TYPE = 'a2ui-surface';
+
+/** A2UI operations 容器键（与中间件 A2UI_OPERATIONS_KEY 一致） */
+const A2UI_OPERATIONS_KEY = 'a2ui_operations';
+
+/** Gateway 侧识别的 A2UI 渲染工具名（与 @ag-ui/a2ui-middleware RENDER_A2UI_TOOL_NAME / Python 常量一致）。
+ * 此处自持常量，避免对 a2ui-middleware 包 exports 的硬依赖（包为 CJS，类型解析路径差异）。 */
+const RENDER_A2UI_TOOL_NAME = 'render_a2ui';
+
+/**
+ * Coordinator 委派工具。执行期间会实时转发 Worker ``text.delta``；
+ * 若走 TOOL_CALL_*，中间件在 TOOL_CALL_RESULT 前可能吞掉 TEXT_MESSAGE_CHUNK，
+ * 导致前端空气泡。故仅下发 CUSTOM(tool.step)。
+ */
+const INVOKE_AGENT_TOOL_NAME = 'agent__invoke';
+
+/** render_a2ui tool.call 转换出的 ACTIVITY_SNAPSHOT surfaceId 前缀（与 run 隔离）。 */
+const A2UI_RENDER_SURFACE_PREFIX = 'a2ui';
+
+/**
+ * 工具步骤透传 CUSTOM 名。
+ * A2UI 前端协议不直接下发 TOOL_CALL_*（中间件内部事件）；另发 CUSTOM 供 Copilot 折叠条消费。
+ */
+const TOOL_STEP_EVENT_NAME = 'tool.step';
+
+/** 模板报告参数卡打开事件（CUSTOM 透传）。 */
+const REPORT_OPEN_CARD_EVENT_NAME = 'ai.report.open_card';
+
+// ============================================================================
+// 工具函数
+// ============================================================================
+
+/** 生成工具调用 ID（tool.call → tool.result 关联用） */
+function newToolCallId(): string {
+  return `tc-${randomUUID().slice(0, 8)}`;
+}
+
+/** 生成消息 ID */
+function newMessageId(prefix: string): string {
+  return `${prefix}-${randomUUID().slice(0, 8)}`;
+}
+
+/** 将未知值规整为 Record（dispatch.trace / CUSTOM 透传用） */
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
+/** 从 ACTIVITY_SNAPSHOT content 中提取 a2ui_operations（无则返回 null） */
+function extractOperations(content: Record<string, unknown>): A2UISurfaceMessage['operations'] | null {
+  const ops = content[A2UI_OPERATIONS_KEY];
+  if (Array.isArray(ops)) {
+    return ops.filter(
+      (op): op is Record<string, unknown> => op != null && typeof op === 'object' && !Array.isArray(op),
+    );
+  }
+  return null;
+}
+
+// ============================================================================
+// EventConverter
+// ============================================================================
+
+/**
+ * AgentEvent ↔ BaseEvent 双向转换器。
+ *
+ * 职责：
+ * 1. `agentEventToBaseEvent`：Python/Gateway AgentEvent → AG-UI BaseEvent 数组
+ *    （方向 A，供 RedisStreamAgent 推入 Observable）。
+ * 2. `baseEventToFrontendMessage`：BaseEvent → 前端 SSE/WS 消息（方向 B，
+ *    A2UIRuntime 过滤后下发）。
+ * 3. `toAgentEvent`：BaseEvent → AgentEvent（H5Adapter.send 兼容，供旧协议消费）。
+ */
+export class EventConverter {
+  /** runId → toolCallId FIFO（tool.call 按序入队，tool.result 按序出队关联） */
+  private readonly toolCallIdQueues = new Map<string, string[]>();
+
+  /**
+   * AgentEvent → BaseEvent（方向 A）。
+   *
+   * @param event - Agent 事件（Gateway 统一 camelCase）
+   * @param runId - 当前 run 标识（AG-UI 协议锚点）
+   * @param threadId - 会话线程标识（RUN_FINISHED 用；缺省取 runId）
+   * @returns BaseEvent 数组（tool.call 展开为 START+ARGS+END）
+   */
+  agentEventToBaseEvent(event: AgentEvent, runId: string, threadId = runId): AGUIEvent[] {
+    switch (event.type) {
+      case 'text.delta':
+        return [this.toTextMessageChunk(event, runId)];
+      case 'tool.call': {
+        // agent__invoke：仅 CUSTOM(tool.step)，避免 TOOL_CALL 栈挡住委派中的 text.delta。
+        if (event.toolName === INVOKE_AGENT_TOOL_NAME) {
+          const toolCallId = newToolCallId();
+          const queue = this.toolCallIdQueues.get(runId) ?? [];
+          queue.push(toolCallId);
+          this.toolCallIdQueues.set(runId, queue);
+          return [
+            this.toToolStepCustom('start', INVOKE_AGENT_TOOL_NAME, toolCallId, event.args),
+          ];
+        }
+        // 协议契约补齐：Python 按原始 tool.call(render_a2ui) 下发（非 ACTIVITY_SNAPSHOT）。
+        // Gateway 侧拦截该工具调用，复用 ui.render/approval.request 同款 ACTIVITY_SNAPSHOT
+        // 封装，使 baseEventToFrontendMessage 命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface。
+        // 同时保留 TOOL_CALL_START/ARGS/END 三件套（供中间件流式拦截兼容，不破坏现有行为）。
+        // 另附 CUSTOM(tool.step)：A2UI 前端不下发 TOOL_CALL_*，靠此事件驱动步骤折叠条。
+        const callEvents =
+          event.toolName === RENDER_A2UI_TOOL_NAME
+            ? this.renderA2uiToolCallToEvents(event, runId)
+            : this.toToolCallEvents(event, runId);
+        const start = callEvents.find((e) => e.type === EventType.TOOL_CALL_START) as
+          | ToolCallStartEvent
+          | undefined;
+        const toolCallId = start?.toolCallId ?? newToolCallId();
+        return [
+          ...callEvents,
+          this.toToolStepCustom('start', event.toolName ?? '', toolCallId, event.args),
+        ];
+      }
+      case 'tool.result': {
+        // agent__invoke：与 tool.call 对称，仅 CUSTOM（已在 call 时入队 toolCallId）。
+        if (event.toolName === INVOKE_AGENT_TOOL_NAME) {
+          const queue = this.toolCallIdQueues.get(runId) ?? [];
+          const toolCallId = queue.shift() ?? newToolCallId();
+          if (queue.length === 0) {
+            this.toolCallIdQueues.delete(runId);
+          }
+          return [
+            this.toToolStepCustom(
+              'result',
+              INVOKE_AGENT_TOOL_NAME,
+              toolCallId,
+              asRecord(event.result),
+            ),
+          ];
+        }
+        // render_a2ui 的 result 为执行回执（{ok, status, surfaceId, ...}），不含界面描述，
+        // 无需生成 surface；但 surfaceId 仍透传给中间件做关联。保持 TOOL_CALL_RESULT 语义。
+        const resultEvent = this.toToolCallResult(event, runId);
+        return [
+          resultEvent,
+          this.toToolStepCustom(
+            'result',
+            event.toolName ?? '',
+            resultEvent.toolCallId,
+            asRecord(event.result),
+          ),
+        ];
+      }
+      case 'ui.render':
+        return [this.uiRenderToActivitySnapshot(event, runId)];
+      case 'approval.request':
+        return [this.approvalRequestToActivitySnapshot(event, runId)];
+      case 'dispatch.trace':
+        return [this.toCustomDispatchTrace(event)];
+      case 'tool.step':
+        // 仅 CUSTOM：勿再走 TOOL_CALL_*，否则嵌在父会话 agent__invoke 未闭合栈中会被中间件吞掉。
+        return [this.toCustomToolStep(event)];
+      case 'ai.report.open_card':
+        return [this.toCustomReportOpenCard(event)];
+      case 'error':
+        return [this.toRunError(event)];
+      case 'done':
+        return [this.toRunFinished(event, runId, threadId)];
+      default: {
+        // 未知事件类型：安全忽略（不中断流），仅降级为 RUN_ERROR 提示。
+        const err: RunErrorEvent = {
+          type: EventType.RUN_ERROR,
+          message: `Unknown AgentEvent type: ${String(event.type)}`,
+          code: 'UNKNOWN_AGENT_EVENT',
+        };
+        return [err];
+      }
+    }
+  }
+
+  /**
+   * BaseEvent → 前端 SSE/WS 消息（方向 B）。
+   *
+   * 仅下发前端可消费的事件：stream / a2ui_surface / done / error / custom。
+   * 中间件内部事件（TOOL_CALL_* / RUN_STARTED / STATE_* / REASONING_*）与
+   * 无 operations 的 lifecycle 骨架事件返回 null（不下发，由下发方跳过）。
+   *
+   * @param event - AG-UI BaseEvent
+   * @returns 前端消息；无需下发时返回 null
+   */
+  baseEventToFrontendMessage(event: AGUIEvent): A2UIFrontendMessage | null {
+    switch (event.type) {
+      case EventType.TEXT_MESSAGE_CHUNK: {
+        const chunk = event as TextMessageChunkEvent;
+        const message: A2UIStreamMessage = {
+          type: 'stream',
+          content: chunk.delta ?? '',
+        };
+        return message;
+      }
+
+      case EventType.ACTIVITY_SNAPSHOT: {
+        const snapshot = event as ActivitySnapshotEvent;
+        const operations = extractOperations(snapshot.content);
+        if (operations == null) {
+          // lifecycle 骨架（status: building/retrying/failed，无 operations）不下发，
+          // 最终 painted surface 由带 operations 的 ACTIVITY_SNAPSHOT 承载。
+          return null;
+        }
+        const message: A2UISurfaceMessage = {
+          type: 'a2ui_surface',
+          operations,
+          runId: undefined,
+          sessionId: undefined,
+        };
+        return message;
+      }
+
+      case EventType.RUN_FINISHED: {
+        const finished = event as RunFinishedEvent;
+        // 评价锚点（feedback-enhance §2.2 方案 C）：AG-UI RunFinishedEvent 无
+        // messageId/sessionId 标准字段，Backend done 事件经 rawEvent 透传，此处
+        // 读取并附到前端 done 消息；缺失时保持 undefined（前端评价按钮降级禁用）。
+        const raw = (finished.rawEvent ?? {}) as {
+          messageId?: unknown;
+          sessionId?: unknown;
+        };
+        const done: A2UIDoneMessage = {
+          type: 'done',
+          ...(typeof raw.messageId === 'string' && raw.messageId.length > 0
+            ? { messageId: raw.messageId }
+            : {}),
+          ...(typeof raw.sessionId === 'string' && raw.sessionId.length > 0
+            ? { sessionId: raw.sessionId }
+            : {}),
+        };
+        return done;
+      }
+
+      case EventType.RUN_ERROR: {
+        const errEvent = event as RunErrorEvent;
+        const message: A2UIErrorMessage = {
+          type: 'error',
+          errorCode: errEvent.code ?? 'RUN_ERROR',
+          message: errEvent.message,
+        };
+        return message;
+      }
+
+      case EventType.CUSTOM: {
+        const custom = event as CustomEvent;
+        const message: A2UICustomMessage = {
+          type: 'custom',
+          eventType: custom.name,
+          data: asRecord(custom.value),
+        };
+        return message;
+      }
+
+      default:
+        // RUN_STARTED / TOOL_CALL_* / STATE_* / REASONING_* / ACTIVITY_DELTA 等
+        // 为中间件内部或旧协议事件，不下发（新前端协议不含这些消息）。
+        return null;
+    }
+  }
+
+  /**
+   * BaseEvent → AgentEvent（H5Adapter.send 兼容，旧协议消费方用）。
+   *
+   * 注意：A2UI 新前端走 `baseEventToFrontendMessage` + `H5Adapter.sendRaw`，
+   * 本方法仅用于需要回退到旧 `agent_event` 封装协议的场景（如旧 H5 客户端）。
+   *
+   * @param event - AG-UI BaseEvent
+   * @returns AgentEvent
+   */
+  toAgentEvent(event: AGUIEvent): AgentEvent {
+    switch (event.type) {
+      case EventType.TEXT_MESSAGE_CHUNK: {
+        const chunk = event as TextMessageChunkEvent;
+        return { type: 'text.delta', content: chunk.delta ?? '' };
+      }
+
+      case EventType.ACTIVITY_SNAPSHOT: {
+        const snapshot = event as ActivitySnapshotEvent;
+        const operations = extractOperations(snapshot.content);
+        return {
+          type: 'ui.render',
+          component: A2UI_ACTIVITY_TYPE,
+          props: operations != null ? { [A2UI_OPERATIONS_KEY]: operations } : {},
+        };
+      }
+
+      case EventType.RUN_FINISHED:
+        return { type: 'done' };
+
+      case EventType.RUN_ERROR: {
+        const errEvent = event as RunErrorEvent;
+        return {
+          type: 'error',
+          errorCode: errEvent.code ?? 'RUN_ERROR',
+          errorMessage: errEvent.message,
+        };
+      }
+
+      case EventType.CUSTOM: {
+        const custom = event as CustomEvent;
+        return { type: 'dispatch.trace', trace: asRecord(custom.value) };
+      }
+
+      case EventType.TOOL_CALL_START: {
+        const start = event as ToolCallStartEvent;
+        return { type: 'tool.call', toolName: start.toolCallName, args: {} };
+      }
+
+      case EventType.TOOL_CALL_RESULT:
+        return { type: 'tool.result', toolName: '', result: {} };
+
+      default:
+        // RUN_STARTED / TOOL_CALL_ARGS / TOOL_CALL_END / STATE_* / REASONING_*
+        // 无直接 AgentEvent 对应物，降级为 done（保持流可终止）。
+        return { type: 'done' };
+    }
+  }
+
+  // ============================================================================
+  // 方向 A：AgentEvent → BaseEvent
+  // ============================================================================
+
+  /** text.delta → TEXT_MESSAGE_CHUNK */
+  private toTextMessageChunk(event: AgentEvent, runId: string): TextMessageChunkEvent {
+    return {
+      type: EventType.TEXT_MESSAGE_CHUNK,
+      // 同一 run 内稳定 messageId，保证前端将多个 chunk 追加到同一条消息。
+      messageId: `msg-${runId}`,
+      delta: event.content ?? '',
+    };
+  }
+
+  /** tool.call → TOOL_CALL_START + TOOL_CALL_ARGS + TOOL_CALL_END */
+  private toToolCallEvents(event: AgentEvent, runId: string): AGUIEvent[] {
+    const toolName = event.toolName ?? '';
+    const toolCallId = newToolCallId();
+    // FIFO 入队：tool.result 按调用顺序出队关联（同名工具多次调用也可正确匹配）
+    const queue = this.toolCallIdQueues.get(runId) ?? [];
+    queue.push(toolCallId);
+    this.toolCallIdQueues.set(runId, queue);
+
+    const start: ToolCallStartEvent = {
+      type: EventType.TOOL_CALL_START,
+      toolCallId,
+      toolCallName: toolName,
+    };
+
+    const args: ToolCallArgsEvent = {
+      type: EventType.TOOL_CALL_ARGS,
+      toolCallId,
+      // Python 产出的是完整 args 对象；一次性作为完整 delta 发出，
+      // 中间件 extractCompleteItems 可从完整 JSON 中渐进提取组件。
+      delta: JSON.stringify(event.args ?? {}),
+    };
+
+    const end: ToolCallEndEvent = {
+      type: EventType.TOOL_CALL_END,
+      toolCallId,
+    };
+
+    return [start, args, end];
+  }
+
+  /**
+   * render_a2ui 工具调用 → [TOOL_CALL_START, ACTIVITY_SNAPSHOT, TOOL_CALL_ARGS, TOOL_CALL_END]。
+   *
+   * 设计（方案 A，与架构对齐）：Gateway 侧补齐「tool.call(render_a2ui) → ACTIVITY_SNAPSHOT」
+   * 缺失环节。ACTIVITY_SNAPSHOT 携带 a2ui_operations（[createSurface, updateComponents]），
+   * 经 baseEventToFrontendMessage 命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface 下发前端。
+   *
+   * 字段来源（Python execute_render_a2ui 真实 JSON 结构）：
+   * - args.surfaceId：surface 标识（Python 强制必填）；
+   * - args.components：组件数组（每个含 id / component / props / children?）；
+   * - args.data：可选数据模型（映射为 updateDataModel 操作，无则省略）。
+   *
+   * 顺序：ACTIVITY_SNAPSHOT 插在 START 与 ARGS 之间，前端消费顺序为「先建 surface 再流式
+   * 补 args」（与 ui.render/approval.request 的 ACTIVITY_SNAPSHOT 语义一致），中间件仍能
+   * 收到完整的 TOOL_CALL_START/ARGS/END 三件套做工具拦截。
+   *
+   * @param event - render_a2ui 的 tool.call AgentEvent
+   * @param runId - 当前 run 标识
+   * @returns BaseEvent 数组（含 1 个 ACTIVITY_SNAPSHOT）
+   */
+  private renderA2uiToolCallToEvents(event: AgentEvent, runId: string): AGUIEvent[] {
+    const baseEvents = this.toToolCallEvents(event, runId);
+    const snapshot = this.renderA2uiToActivitySnapshot(event, runId);
+    // 在 START 之后、ARGS 之前插入 ACTIVITY_SNAPSHOT（下标 1）。
+    const start = baseEvents[0];
+    const rest = baseEvents.slice(1);
+    return [start, snapshot, ...rest].filter((e): e is AGUIEvent => e != null);
+  }
+
+  /**
+   * 将 render_a2ui 的 tool.call args 组装为 ACTIVITY_SNAPSHOT（带 a2ui_operations）。
+   *
+   * @param event - render_a2ui 的 tool.call AgentEvent
+   * @param runId - 当前 run 标识
+   * @returns ACTIVITY_SNAPSHOT 事件
+   */
+  private renderA2uiToActivitySnapshot(event: AgentEvent, runId: string): ActivitySnapshotEvent {
+    const args = (event.args ?? {}) as Record<string, unknown>;
+    const surfaceId =
+      typeof args['surfaceId'] === 'string' && args['surfaceId'].length > 0
+        ? (args['surfaceId'] as string)
+        : `${A2UI_RENDER_SURFACE_PREFIX}-${runId}`;
+
+    // components：Python 下发的组件数组（已 snake/camel 混合，前端 MessageProcessor 兼容）；
+    // 非数组时降级为空数组（骨架 surface，不渲染组件，防御式不中断流）。
+    const components = Array.isArray(args['components'])
+      ? (args['components'] as Array<Record<string, unknown>>)
+      : [];
+
+    const operations: Array<Record<string, unknown>> = [
+      {
+        version: A2UI_PROTOCOL_VERSION,
+        createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID },
+      },
+      {
+        version: A2UI_PROTOCOL_VERSION,
+        updateComponents: { surfaceId, components },
+      },
+    ];
+
+    // data 可选：映射为 updateDataModel（整树 data 模型，path='' 表示根）。
+    if (args['data'] != null && typeof args['data'] === 'object' && !Array.isArray(args['data'])) {
+      operations.push({
+        version: A2UI_PROTOCOL_VERSION,
+        updateDataModel: { surfaceId, path: '', value: args['data'] },
+      });
+    }
+
+    return {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `a2ui-surface-${runId}-render`,
+      activityType: A2UI_ACTIVITY_TYPE,
+      content: {
+        [A2UI_OPERATIONS_KEY]: operations,
+      },
+      replace: true,
+    };
+  }
+
+  /** tool.result → TOOL_CALL_RESULT（与 tool.call 的 toolCallId 关联） */
+  private toToolCallResult(event: AgentEvent, runId: string): ToolCallResultEvent {
+    const queue = this.toolCallIdQueues.get(runId) ?? [];
+    const toolCallId = queue.shift() ?? newToolCallId();
+    if (queue.length === 0) {
+      this.toolCallIdQueues.delete(runId);
+    }
+    return {
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: newMessageId(`msg-${runId}`),
+      toolCallId,
+      content: JSON.stringify(event.result ?? {}),
+    };
+  }
+
+  /** ui.render → ACTIVITY_SNAPSHOT（迁移期兼容，@deprecated） */
+  private uiRenderToActivitySnapshot(event: AgentEvent, runId: string): ActivitySnapshotEvent {
+    const surfaceId = `legacy-${runId}`;
+    const componentName = event.component ?? 'Text';
+    const component: Record<string, unknown> = {
+      id: 'root',
+      component: componentName,
+      ...(event.props ?? {}),
+    };
+    return {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `a2ui-surface-${runId}-legacy`,
+      activityType: A2UI_ACTIVITY_TYPE,
+      content: {
+        [A2UI_OPERATIONS_KEY]: [
+          {
+            version: A2UI_PROTOCOL_VERSION,
+            createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID },
+          },
+          {
+            version: A2UI_PROTOCOL_VERSION,
+            updateComponents: { surfaceId, components: [component] },
+          },
+        ],
+      },
+      replace: true,
+    };
+  }
+
+  /** approval.request → ACTIVITY_SNAPSHOT（审批卡片作为 A2UI Surface 渲染） */
+  private approvalRequestToActivitySnapshot(
+    event: AgentEvent,
+    runId: string,
+  ): ActivitySnapshotEvent {
+    const surfaceId = `approval-${runId}`;
+    const detail = event.detail ?? {};
+    const component: Record<string, unknown> = {
+      id: 'root',
+      component: 'approval-card',
+      approvalId: String(detail['approvalId'] ?? ''),
+      title: String(detail['title'] ?? '审批请求'),
+      description: String(detail['description'] ?? ''),
+      status: String(detail['status'] ?? 'pending'),
+      ...(event.skillId != null ? { skillId: event.skillId } : {}),
+      detail,
+    };
+    return {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `a2ui-surface-${runId}-approval`,
+      activityType: A2UI_ACTIVITY_TYPE,
+      content: {
+        [A2UI_OPERATIONS_KEY]: [
+          {
+            version: A2UI_PROTOCOL_VERSION,
+            createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID },
+          },
+          {
+            version: A2UI_PROTOCOL_VERSION,
+            updateComponents: { surfaceId, components: [component] },
+          },
+        ],
+      },
+      replace: true,
+    };
+  }
+
+  /** dispatch.trace → CUSTOM（技能分发/调试追踪透传） */
+  private toCustomDispatchTrace(event: AgentEvent): CustomEvent {
+    return {
+      type: EventType.CUSTOM,
+      name: 'dispatch.trace',
+      value: event.trace ?? {},
+    };
+  }
+
+  /** tool.step → CUSTOM（Worker 回灌父会话步骤条；不经 TOOL_CALL_*） */
+  private toCustomToolStep(event: AgentEvent): CustomEvent {
+    const payload = asRecord(event.trace);
+    const toolName =
+      (typeof event.toolName === 'string' && event.toolName) ||
+      (typeof payload['toolName'] === 'string' ? (payload['toolName'] as string) : '') ||
+      '';
+    return {
+      type: EventType.CUSTOM,
+      name: TOOL_STEP_EVENT_NAME,
+      value: {
+        phase: payload['phase'] === 'result' ? 'result' : 'start',
+        toolName,
+        toolCallId:
+          typeof payload['toolCallId'] === 'string' ? payload['toolCallId'] : '',
+        args: asRecord(payload['args']),
+        result: asRecord(payload['result']),
+      },
+    };
+  }
+
+  /** ai.report.open_card → CUSTOM（前端打开模板报告参数卡） */
+  private toCustomReportOpenCard(event: AgentEvent): CustomEvent {
+    const payload = asRecord(event.trace);
+    const reportCode =
+      (typeof payload['reportCode'] === 'string' && payload['reportCode']) ||
+      (typeof payload['report_code'] === 'string' && payload['report_code']) ||
+      '';
+    const title =
+      typeof payload['title'] === 'string' ? payload['title'] : undefined;
+    const rawValues = payload['values'];
+    const values: Record<string, string> = {};
+    if (rawValues != null && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+      for (const [k, v] of Object.entries(rawValues as Record<string, unknown>)) {
+        const key = String(k || '').trim();
+        const val = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+        if (key && val) values[key] = val;
+      }
+    }
+    return {
+      type: EventType.CUSTOM,
+      name: REPORT_OPEN_CARD_EVENT_NAME,
+      value: {
+        reportCode,
+        ...(title ? { title } : {}),
+        ...(Object.keys(values).length > 0 ? { values } : {}),
+      },
+    };
+  }
+
+  /**
+   * tool.call / tool.result → CUSTOM(tool.step)，供前端步骤条消费。
+   * args/result 原样放入 value；前端只取摘要展示，避免把大结果塞进气泡。
+   */
+  private toToolStepCustom(
+    phase: 'start' | 'result',
+    toolName: string,
+    toolCallId: string,
+    payload?: Record<string, unknown>,
+  ): CustomEvent {
+    return {
+      type: EventType.CUSTOM,
+      name: TOOL_STEP_EVENT_NAME,
+      value: {
+        phase,
+        toolName,
+        toolCallId,
+        ...(phase === 'start'
+          ? { args: payload ?? {} }
+          : { result: payload ?? {} }),
+      },
+    };
+  }
+
+  /** error → RUN_ERROR（错误终止当前 run） */
+  private toRunError(event: AgentEvent): RunErrorEvent {
+    return {
+      type: EventType.RUN_ERROR,
+      message: event.errorMessage ?? event.errorCode ?? 'Agent error',
+      ...(event.errorCode != null ? { code: event.errorCode } : {}),
+    };
+  }
+
+  /** done → RUN_FINISHED（触发中间件 flush pending A2UI） */
+  private toRunFinished(event: AgentEvent, runId: string, threadId: string): RunFinishedEvent {
+    // 评价锚点透传：AG-UI 协议无 messageId/sessionId 标准字段，经 rawEvent
+    // 携带（zod schema 预留 rawEvent: ZodAny），baseEventToFrontendMessage
+    // RUN_FINISHED 分支读取（feedback-enhance §2.2 方案 C）。
+    const rawEvent: { messageId?: string; sessionId?: string } =
+      event.messageId != null || event.sessionId != null
+        ? {
+            ...(event.messageId != null ? { messageId: event.messageId } : {}),
+            ...(event.sessionId != null ? { sessionId: event.sessionId } : {}),
+          }
+        : {};
+    return {
+      type: EventType.RUN_FINISHED,
+      threadId,
+      runId,
+      ...(Object.keys(rawEvent).length > 0 ? { rawEvent } : {}),
+    };
+  }
+}

@@ -13,7 +13,7 @@
 
 ## 身份字段默认约定
 
-- 用户只提供 **11 位数字**且未说明字段类型时，**默认按手机号**调用 `getMemberProfileByMobile`
+- 用户只给一串数字且未说明字段类型时，优先这样理解（查不到可换一种再试）：11 位且以 1 开头（如 139）按手机号调用 `getMemberProfileByMobile`；以 8 开头按会员卡号调用 `getMemberProfileByMemberCardNo`
 - 用户明确为会员编号/卡号/车牌时，改用对应 Skill
 
 ## 档案返回字段（1.1）

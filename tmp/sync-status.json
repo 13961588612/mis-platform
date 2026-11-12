@@ -1,0 +1,16 @@
+{
+  "id": 1792061562817,
+  "connection_id": 1792061562063,
+  "build_status": "failed",
+  "build_mdl_hash": "wqd-20261017085938-23e7a2df",
+  "index_status": "skipped",
+  "build_at": "2026-10-19T04:18:45.612577Z",
+  "index_at": "2026-10-19T01:45:30.271573Z",
+  "synced_sql_pair_count": 0,
+  "synced_knowledge_count": 0,
+  "build_error": "WrenMcpAgent 调用超时: /cli",
+  "index_error": null,
+  "updated_at": "2026-10-19T04:18:45.612577Z",
+  "action": "reindex",
+  "publish_warnings": null
+}

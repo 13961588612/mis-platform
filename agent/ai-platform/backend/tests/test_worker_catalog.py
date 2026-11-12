@@ -104,23 +104,12 @@ def _patch_sources(
     configs: list[AgentConfig],
     whitelist: list[str] | None = None,
 ) -> None:
-    """把 ConfigManager 与 Settings 替换为测试替身。
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture。
-        configs: `list_configs()` 的返回值。
-        whitelist: `INVOKE_AGENT_WHITELIST` 配置值（None 表示未配置）。
-    """
+    """把 ConfigManager 替换为测试替身（环境白名单已取消，``whitelist`` 参数忽略）。"""
+    del whitelist  # 保留形参以免改遍调用方
     fake_manager = SimpleNamespace(list_configs=lambda: list(configs))
     monkeypatch.setattr(
         "src.config_manager.manager.get_config_manager",
         lambda: fake_manager,
-        raising=True,
-    )
-    monkeypatch.setattr(
-        catalog_module,
-        "get_settings",
-        lambda: SimpleNamespace(INVOKE_AGENT_WHITELIST=whitelist),
         raising=True,
     )
 
@@ -164,22 +153,29 @@ def test_worker_spec_non_read_only_blocks_parallel() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_catalog_filters_role_and_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
-    """只有 role=worker ∩ 白名单内的 Agent 进入目录。"""
+def test_build_catalog_filters_role_includes_all_enabled_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """role=worker 且 enabled 的 Agent 全部进入目录（不再按环境白名单过滤）。"""
     configs = [
         _make_config("mis-copilot", role=AgentRole.COORDINATOR),
         _make_config("mis-rag", when_to_use="制度检索"),
         _make_config("crm-assistant", when_to_use="CRM 查询"),
-        _make_config("some-other", when_to_use="不在白名单"),
+        _make_config("some-other", when_to_use="其它 worker"),
     ]
-    _patch_sources(monkeypatch, configs, whitelist=["mis-rag", "crm-assistant"])
+    _patch_sources(monkeypatch, configs, whitelist=["mis-rag"])  # 白名单应被忽略
 
     catalog = build_worker_catalog()
 
-    assert catalog.worker_ids() == ["crm-assistant", "mis-rag"]
+    assert set(catalog.worker_ids()) == {
+        "crm-assistant",
+        "mis-admin-helper",
+        "mis-rag",
+        "some-other",
+    }
     assert catalog.fallback is False
     assert catalog.get("mis-rag") is not None
-    assert catalog.get("some-other") is None
+    assert catalog.get("some-other") is not None
     assert catalog.get("mis-copilot") is None
 
 
@@ -210,7 +206,7 @@ def test_build_catalog_skips_disabled_worker(monkeypatch: pytest.MonkeyPatch) ->
 
     catalog = build_worker_catalog()
 
-    assert catalog.worker_ids() == ["mis-rag"]
+    assert set(catalog.worker_ids()) == {"mis-admin-helper", "mis-rag"}
 
 
 def test_build_catalog_uses_description_when_hint_missing(
@@ -267,34 +263,22 @@ def test_build_catalog_survives_config_manager_failure(
     monkeypatch.setattr(
         "src.config_manager.manager.get_config_manager", _boom, raising=True
     )
-    monkeypatch.setattr(
-        catalog_module,
-        "get_settings",
-        lambda: SimpleNamespace(INVOKE_AGENT_WHITELIST=None),
-        raising=True,
-    )
 
     catalog = build_worker_catalog()
 
     assert catalog.fallback is True
-    # 1.3/1.4：静态兜底目录与全局目录都特例收录 ADMIN_HELPER_AGENT_IDS（mis-admin-helper）
-    # 作为真实 worker（管理台可见），但其不在 INVOKE_AGENT_WHITELIST，运行时恒定拒绝。
     assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST) | set(ADMIN_HELPER_AGENT_IDS)
 
 
-def test_build_catalog_ignores_mock_like_whitelist(
+def test_build_catalog_empty_configs_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """settings 为 Mock 时（非 list）按未配置处理，避免污染白名单。"""
-    from unittest.mock import MagicMock
-
+    """无任何 Agent 配置时回退静态兜底目录。"""
     _patch_sources(monkeypatch, [], whitelist=None)
-    monkeypatch.setattr(catalog_module, "get_settings", MagicMock(), raising=True)
 
     catalog = build_worker_catalog()
 
-    # 1.3/1.4：静态兜底目录与全局目录都特例收录 ADMIN_HELPER_AGENT_IDS（mis-admin-helper）
-    # 作为真实 worker（管理台可见），但其不在 INVOKE_AGENT_WHITELIST，运行时恒定拒绝。
+    assert catalog.fallback is True
     assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST) | set(ADMIN_HELPER_AGENT_IDS)
 
 
@@ -303,7 +287,7 @@ def test_singleton_and_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, [_make_config("mis-rag")], whitelist=["mis-rag"])
     first = get_worker_catalog()
     assert get_worker_catalog() is first
-    assert first.worker_ids() == ["mis-rag"]
+    assert set(first.worker_ids()) == {"mis-admin-helper", "mis-rag"}
 
     _patch_sources(
         monkeypatch,
@@ -313,7 +297,7 @@ def test_singleton_and_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     second = refresh_worker_catalog()
 
     assert second is not first
-    assert second.worker_ids() == ["mis-rag", "mis-summary"]
+    assert set(second.worker_ids()) == {"mis-admin-helper", "mis-rag", "mis-summary"}
     assert get_worker_catalog() is second
 
 

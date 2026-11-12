@@ -468,7 +468,13 @@ export class BotRegistry {
       entry.started = true;
       delete entry.lastError;
       logger.info(
-        { botId, name: entry.config.name, wsUrl: entry.config.wsUrl },
+        {
+          botId,
+          // 鉴权主体是官方 BotID，与平台 botId 不同——排障时必须能看到二者。
+          subscribeBotId: entry.config.subscribeBotId,
+          name: entry.config.name,
+          wsUrl: entry.config.wsUrl,
+        },
         'Wecom bot adapter started',
       );
       return true;

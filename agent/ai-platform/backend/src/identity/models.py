@@ -326,6 +326,44 @@ def build_user_context_from_mis(p: "MisTokenPayload") -> "UserContext":
     return build_user_context(p, None, None)
 
 
+def verified_role_header(current_user: dict[str, Any] | None) -> str:
+    """把已验签身份里的角色码收成 ``X-Mis-Roles`` JSON。
+
+    BFF 没把角色头送到 Worker 时，问数会把用户当成零角色，表授权全部落空。
+    这里只用验签后的 ``roles``（头优先、否则 JWT ``roles``），不读客户端自填字段。
+
+    Returns:
+        ``[{"code":"TENANT_ADMIN"}]`` 形态的 JSON；没有角色时返回空串。
+    """
+    if not isinstance(current_user, dict):
+        return ""
+    codes: list[str] = []
+    for role in current_user.get("roles") or []:
+        if isinstance(role, str) and role.strip():
+            codes.append(role.strip())
+        elif isinstance(role, dict):
+            code = role.get("code") or role.get("id")
+            if code is not None and str(code).strip():
+                codes.append(str(code).strip())
+    if not codes:
+        return ""
+    return json.dumps([{"code": code} for code in codes], ensure_ascii=False)
+
+
+def verified_mis_user_id(current_user: dict[str, Any] | None) -> int | None:
+    """从已验签 profile 取 MIS userId；没有则返回 ``None``。"""
+    if not isinstance(current_user, dict):
+        return None
+    profile = current_user.get("profile")
+    raw: Any = profile.get("mis_user_id") if isinstance(profile, dict) else None
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class DepartmentInfo(BaseModel):
     """部门数据的 Pydantic schema。"""
 

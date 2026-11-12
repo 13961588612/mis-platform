@@ -1,0 +1,168 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "queryId":  null,
+                 "threadId":  null,
+                 "agentId":  null,
+                 "status":  "succeeded",
+                 "answerSummary":  "æ¥è¯¢è¿å 2 è¡ç»æã",
+                 "sql":  null,
+                 "sqlDialect":  null,
+                 "data":  {
+                              "row_count":  2,
+                              "columns":  [
+                                              {
+                                                  "item_key":  "categoryid",
+                                                  "data_type":  "",
+                                                  "display_name":  "categoryid",
+                                                  "name":  "categoryid",
+                                                  "masked":  false
+                                              },
+                                              {
+                                                  "item_key":  "categoryname",
+                                                  "data_type":  "",
+                                                  "display_name":  "categoryname",
+                                                  "name":  "categoryname",
+                                                  "masked":  false
+                                              },
+                                              {
+                                                  "item_key":  "deptlevelid",
+                                                  "data_type":  "",
+                                                  "display_name":  "deptlevelid",
+                                                  "name":  "deptlevelid",
+                                                  "masked":  false
+                                              }
+                                          ],
+                              "rows":  [
+                                           [
+                                               "701",
+                                               "ITèæåé\u0085ä»¶ç»",
+                                               "1"
+                                           ],
+                                           [
+                                               "702",
+                                               "ç©ç®¡èµäº§",
+                                               "1"
+                                           ]
+                                       ],
+                              "truncated":  false
+                          },
+                 "citations":  [
+
+                               ],
+                 "plan":  [
+                              {
+                                  "duration_ms":  0,
+                                  "seq":  1,
+                                  "code":  "scope_check",
+                                  "label":  "æ ¡éªå¯é®æ°æ®èå´",
+                                  "detail":  "å½ä¸­ 12 å¼ ææè¡¨",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  0,
+                                  "seq":  2,
+                                  "code":  "understanding",
+                                  "label":  "çè§£ä½ çé®é¢",
+                                  "detail":  null,
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  258,
+                                  "seq":  3,
+                                  "code":  "searching",
+                                  "label":  "æ£ç´¢ç¸å\u0085³è¯­ä¹æ¨¡å",
+                                  "detail":  "è¯­ä¹æ¨¡å",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  3166,
+                                  "seq":  4,
+                                  "code":  "generating",
+                                  "label":  "çææ¥è¯¢",
+                                  "detail":  "SQL å·²çæ",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  9,
+                                  "seq":  5,
+                                  "code":  "lineage_check",
+                                  "label":  "å¤æ ¸æ¥è¯¢æ¶åçæ°æ®èå´",
+                                  "detail":  "æ¶å 1 å¼ è¡¨ï¼å\u0085¨é¨å¨ææèå´å\u0085",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  442,
+                                  "seq":  6,
+                                  "code":  "executing",
+                                  "label":  "æ§è¡å¹¶æ±æ»ç»æ",
+                                  "detail":  "è¿å 2 è¡",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  0,
+                                  "seq":  7,
+                                  "code":  "masking",
+                                  "label":  "ææå­æ®µå¤ç",
+                                  "detail":  "æ å½ä¸­",
+                                  "sql":  null,
+                                  "status":  "done"
+                              },
+                              {
+                                  "duration_ms":  15,
+                                  "seq":  8,
+                                  "code":  "finished",
+                                  "label":  "å®æ",
+                                  "detail":  null,
+                                  "sql":  null,
+                                  "status":  "done"
+                              }
+                          ],
+                 "scope":  {
+                               "allowed_item_keys":  [
+                                                         "mdl:model:ads_spm_trd_cpi_category_day_df",
+                                                         "mdl:model:ads_spm_trd_cpi_category_month_df",
+                                                         "mdl:model:ads_spm_trd_cpi_category_week_df",
+                                                         "mdl:model:dim_spmrkt_chl_category_df",
+                                                         "mdl:model:dim_sprmrkt_chl_store_df",
+                                                         "mdl:model:dim_sprmrkt_itm_item_df",
+                                                         "pg_main.spm_result.ads_spm_trd_cpi_category_day_df",
+                                                         "pg_main.spm_result.ads_spm_trd_cpi_category_month_df",
+                                                         "pg_main.spm_result.ads_spm_trd_cpi_category_week_df",
+                                                         "pg_main.spm_result.dim_spmrkt_chl_category_df",
+                                                         "pg_main.spm_result.dim_sprmrkt_chl_store_df",
+                                                         "pg_main.spm_result.dim_sprmrkt_itm_item_df"
+                                                     ],
+                               "denied_item_keys":  [
+
+                                                    ],
+                               "subject_summary":  "role:TENANT_ADMIN",
+                               "decision":  "allow",
+                               "reason":  null
+                           },
+                 "latencyMs":  null,
+                 "errorCode":  null,
+                 "errorMessage":  null,
+                 "masked_columns":  [
+
+                                    ],
+                 "nl2sql_debug":  null,
+                 "query_id":  null,
+                 "agent_id":  null,
+                 "answer_summary":  "æ¥è¯¢è¿å 2 è¡ç»æã",
+                 "sql_dialect":  null,
+                 "latency_ms":  null,
+                 "error_code":  null,
+                 "error_message":  null,
+                 "thread_id":  null
+             },
+    "traceId":  null,
+    "success":  true
+}

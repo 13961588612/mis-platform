@@ -1,0 +1,91 @@
+classDiagram
+    %% ---------- 前端类型层 ----------
+    class Attachment {
+        +string fileId
+        +string name
+        +string mimeType
+        +number size
+        +string url
+        +'uploading'|'done'|'error' status
+    }
+
+    class ChatMessage {
+        +string id
+        +string sessionId
+        +ChatRole role
+        +string content
+        +MessageStatus status
+        +string timestamp
+        +string agentId
+        +string backendMessageId
+        +string backendSessionId
+        +object a2ui
+        +string surfaceId
+        +Attachment[] attachments
+    }
+
+    class InboundMessage {
+        +string type
+        +string sessionId
+        +string userId
+        +string agentId
+        +string content
+        +string messageType
+        +object metadata
+        +string timestamp
+    }
+
+    class SessionMessage {
+        +string id
+        +string session_id
+        +string role
+        +string content
+        +string timestamp
+        +object metadata
+    }
+
+    class UseChatReturn {
+        +string sessionId
+        +ChatMessage[] messages
+        +string historyState
+        +sendMessage(content, attachments?) void
+        +loadHistory() Promise~void~
+        +ensureSession() Promise~string~
+        +closeSession() void
+    }
+
+    class UseChatHistory {
+        +loadHistory(sid) Promise~ChatMessage[]~
+        +mapSessionMessage(raw) ChatMessage
+    }
+
+    class AttachmentUpload {
+        +uploadAttachment(file) Promise~Attachment~
+        +validateFiles(files) FileValidationResult
+        +buildFormData(file) FormData
+    }
+
+    InboundMessage ..> Attachment : metadata.attachments[]
+    ChatMessage ..> Attachment : attachments[]
+    SessionMessage ..> Attachment : metadata.attachments[]
+    UseChatReturn ..> ChatMessage : produces
+    UseChatReturn ..> UseChatHistory : delegates
+    UseChatHistory ..> SessionMessage : reads(#29)
+    UseChatHistory ..> ChatMessage : maps to
+    UseChatReturn ..> AttachmentUpload : uses on send
+
+    %% ---------- 后端 BFF 层 ----------
+    class AgentOpsController {
+        +Result~JsonNode~ uploadFile(MultipartFile)
+        +Result~JsonNode~ sessionMessages(id, query)
+    }
+    class AgentOpsFacadeService {
+        +JsonNode uploadFile(MultipartFile)
+        +JsonNode sessionMessages(id, query)
+    }
+    class AgentOpsClient {
+        +JsonNode uploadFile(MultipartFile)
+        +JsonNode sessionMessages(id, query)
+    }
+    AgentOpsController --> AgentOpsFacadeService
+    AgentOpsFacadeService --> AgentOpsClient

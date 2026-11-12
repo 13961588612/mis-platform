@@ -907,8 +907,8 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * 实际可用」。若未来引擎升级破坏契约，把下方 {@code graph} 参数翻成 {@code false}
      * 即可走「前端置灰 + 保存强制关 + 检索期降级」三道防线，代码分支不动（共享知识 §10-1）。
      *
-     * <p><b>切片参数对齐（T3 → ext 修正）：</b>overlap / toc / imageTable 经
-     * {@code parser_config.ext} 下发；能力位由 {@code parser-toc-supported} /
+     * <p><b>切片参数：</b>overlap / toc / imageTable 写在 {@code parser_config} 顶层
+     * （禁止 {@code ext}）；能力位由 {@code parser-toc-supported} /
      * {@code parser-image-table-context-supported} 控制（默认 true）。
      *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，

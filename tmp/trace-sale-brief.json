@@ -1,0 +1,85 @@
+{
+  "id": 1792061563791,
+  "question": "大统华溧阳城东店 4月销售情况",
+  "latency_ms": 8560,
+  "error_code": "45205",
+  "error_message": "未能生成有效查询",
+  "summary": "未能生成有效查询",
+  "sql_text": null,
+  "plan_steps": [
+    {
+      "seq": 1,
+      "sql": null,
+      "code": "scope_check",
+      "label": "校验可问数据范围",
+      "detail": "命中 61 张授权表",
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 2,
+      "sql": null,
+      "code": "understanding",
+      "label": "理解你的问题",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 3,
+      "sql": null,
+      "code": "searching",
+      "label": "检索相关语义模型",
+      "detail": "语义模型",
+      "status": "done",
+      "duration_ms": 477
+    },
+    {
+      "seq": 4,
+      "sql": null,
+      "code": "generating",
+      "label": "生成查询",
+      "detail": "未能生成有效查询",
+      "status": "failed",
+      "duration_ms": 7943
+    },
+    {
+      "seq": 5,
+      "sql": null,
+      "code": "lineage_check",
+      "label": "复核查询涉及的数据范围",
+      "detail": null,
+      "status": "running",
+      "duration_ms": 0
+    },
+    {
+      "seq": 6,
+      "sql": null,
+      "code": "executing",
+      "label": "执行并汇总结果",
+      "detail": null,
+      "status": "running",
+      "duration_ms": 0
+    },
+    {
+      "seq": 7,
+      "sql": null,
+      "code": "masking",
+      "label": "敏感字段处理",
+      "detail": null,
+      "status": "running",
+      "duration_ms": 0
+    },
+    {
+      "seq": 8,
+      "sql": null,
+      "code": "finished",
+      "label": "完成",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    }
+  ],
+  "connection_id": 1792061562063,
+  "decision": "allow"
+}

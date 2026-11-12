@@ -47,9 +47,21 @@ agent/ai-platform/configs/.runtime/
 deploy/nacos/runtime/
 deploy/nacos/_last-boot.txt
 deploy/nacos/plugins/
+deploy/nacos/nacos-server-*.zip
 
 # 运行时日志目录（后台服务持续写入，物理清理需先停服务）
 /backend/logs/
 
 # Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
 /nul
+
+# 本地探测 / QA 临时产物（AI 辅助开发反复生成，不提交）
+**/_e2e*.txt
+**/_full*.txt
+**/_pytest_full.txt
+**/qa_*.txt
+**/_tsc*.txt
+**/_git_info.txt
+**/.qa-*.txt
+# vite/vitest config 预打包临时文件（vite.config.ts.timestamp-*.mjs 等）
+**/*.timestamp-*.mjs

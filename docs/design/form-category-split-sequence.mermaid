@@ -1,0 +1,88 @@
+sequenceDiagram
+    autonumber
+    participant U as 管理员(浏览器)
+    participant W as mis-admin-web
+    participant B as mis-admin-bff (:8081)
+    participant T as mis-taskflow (:8104)
+    participant DB as PostgreSQL
+
+    %% ========== 场景 1：表单列表加载（带分类列解析） ==========
+    rect rgb(238,242,255)
+    Note over U,DB: 场景 1 · 表单管理 Tab 加载（并行取「表单平铺列表」+「分类树」）
+    U->>W: 进入「表单注册」页
+    W->>B: GET /api/v1/form-definitions?tenantId=1&status=&categoryId=
+    B->>T: GET /internal/v1/form-definitions?tenantId=1&status=&categoryId=
+    T->>DB: SELECT * FROM form_definition WHERE tenant_id=1 AND deleted=0 [AND category_id=?]
+    DB-->>T: 表单行(含 category_id)
+    T-->>B: Result<List<FormDefinitionVO>>（含 categoryId）
+    B-->>W: Result<List<FormDefinitionVO>>
+    par 同时
+        W->>B: GET /api/v1/form-categories/tree?tenantId=1
+        B->>T: GET /internal/v1/form-categories/tree?tenantId=1
+        T->>DB: SELECT * FROM form_category WHERE tenant_id=1 AND deleted=0
+        DB-->>T: 分类行
+        T-->>B: Result<List<FormCategoryVO>>（内存组装 children）
+        B-->>W: Result<List<FormCategoryVO>>
+    end
+    W->>W: 用分类树构建 id→name 映射，渲染「分类」列（categoryId=null → 未分类）
+    W-->>U: 表格（名称/编码[未关联组件标红]/类型/分类/状态/排序/操作）
+    end
+
+    %% ========== 场景 2：新建分类 ==========
+    rect rgb(240,253,244)
+    Note over U,DB: 场景 2 · 分类管理 Tab 新建子分类
+    U->>W: 点「新增子分类」
+    W->>B: POST /api/v1/form-categories?tenantId=1&operatorId=1  body{parentId,code,name,...}
+    B->>T: POST /internal/v1/form-categories?tenantId=1&operatorId=1  (同 body)
+    T->>T: FormCategoryService.create → 校验 code 唯一 / 父节点存在未软删 / 防环
+    T->>DB: INSERT INTO form_category(id,tenant_id,parent_id,code,name,...)
+    DB-->>T: ok
+    T-->>B: Result<Long id>
+    B-->>W: Result<Long id>
+    W->>B: GET /api/v1/form-categories/tree?tenantId=1  (刷新树)
+    B-->>W: 最新分类树
+    W-->>U: toast「已创建」+ 树刷新
+    end
+
+    %% ========== 场景 3：新建/编辑表单（分类作为属性） ==========
+    rect rgb(255,247,237)
+    Note over U,DB: 场景 3 · 表单对话框「分类」下拉（categoryId，可空）
+    U->>W: 填写表单，从 form_category 下拉选分类
+    W->>B: POST /api/v1/form-definitions?tenantId=1&operatorId=1 body{categoryId,code,name,status,...}
+    B->>T: POST /internal/v1/form-definitions?tenantId=1&operatorId=1 (同 body)
+    T->>T: FormDefinitionService.create → code 唯一(含软删)校验
+    alt categoryId 非空
+        T->>DB: SELECT 1 FROM form_category WHERE id=? AND tenant_id=? AND deleted=0
+        DB-->>T: 存在性
+        T->>T: 不存在 → BusinessException(VALIDATION_ERROR)
+    end
+    T->>DB: INSERT INTO form_definition(id,tenant_id,category_id,code,name,...)
+    DB-->>T: ok
+    T-->>B: Result<Long id>
+    B-->>W: Result<Long id>
+    W-->>U: toast「已创建」+ 列表刷新
+    end
+
+    %% ========== 场景 4：删除分类（引用校验） ==========
+    rect rgb(254,242,242)
+    Note over U,DB: 场景 4 · 删除分类（有子分类 or 被表单引用 → 拒绝）
+    U->>W: 选中分类 → 删除
+    W->>B: DELETE /api/v1/form-categories/{id}?tenantId=1
+    B->>T: DELETE /internal/v1/form-categories/{id}?tenantId=1
+    T->>DB: SELECT count(*) FROM form_category WHERE parent_id=id AND deleted=0
+    DB-->>T: children
+    alt children>0
+        T-->>B: BusinessException「下还有 N 个子分类」
+    else children==0
+        T->>DB: SELECT count(*) FROM form_definition WHERE category_id=id AND deleted=0
+        DB-->>T: usedByForms
+        alt usedByForms>0
+            T-->>B: BusinessException「已被 N 个表单引用」
+        else
+            T->>DB: UPDATE form_category SET deleted=1, updated_at=NOW() WHERE id=id
+            T-->>B: Result.ok()
+        end
+    end
+    B-->>W: Result / 错误
+    W-->>U: toast + 树刷新
+    end

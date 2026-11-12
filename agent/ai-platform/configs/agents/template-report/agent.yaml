@@ -1,0 +1,38 @@
+# =============================================================================
+# template-report — 模板报告智能体（由 mis-copilot 首步委派）
+# =============================================================================
+
+agent:
+  name: template-report
+  display_name: 模板报告智能体
+  description: >
+    从 mis-ai-template-report 拉取可见模板报告与槽位，用决策模型判定是否命中；
+    命中则抽取参数并执行（或打开参数卡）；未命中立即返回由 Coordinator 继续选人。
+  version: "0.1.0"
+  tags:
+    - mis
+    - template-report
+    - ai-report
+
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: false
+    priority: 5
+    keywords: []
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: false
+
+  push:
+    enabled: false
+    channels: []

@@ -26,6 +26,10 @@
 | 查各模块职责与内容 | **[modules-guide](project/modules-guide.md)** |
 | 知识库 / RAG 引擎 | **[完整规划](backend/knowledge-base-app-plan.md)** · [**二期扩展**](backend/knowledge-base-phase2-plan.md)（含同义词 Wave D） · [设计摘要](backend/knowledge-base.md) · [ADR-018](adr/ADR-018-knowledge-base-mis-kb.md) · [`deploy/ragflow`](../deploy/ragflow/) |
 | 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
+| **多窗口 Agent 团队（PM/DEV/QA/OPS）** | **[agents/README](agents/README.md)** · [定稿方案](agents/大型项目cursor方案.md) |
+| 财务辅助 / POS 对账迁入 | [ADR-021](adr/ADR-021-finance-pos-account-bff-legacy-token.md) · [老 auth 兑换](integration/smp-auth-service-exchange.md) · [MIS 回查手机号](integration/mis-legacy-auth-me.md) · 迁移 `V86__finance_pos_account_seed.sql` |
+| 外部 iframe 嵌入 Copilot | [embed-copilot](integration/embed-copilot.md) · [A2UI 架构 D12/D14](ai-fusion/a2ui/01-architecture.md) · demo `frontend/mis-admin-web/public/embed-host-demo.html` |
+| 本地表单对接外部工作流（致远等） | [规划 19](architecture/msg-log-workflow/19-external-workflow-integration-plan.md) · [ADR-022](adr/ADR-022-external-workflow-binding.md) |
 
 ---
 
@@ -66,6 +70,8 @@ docs/
 │   └── ci-cd.md                       # 📝 CI/CD
 ├── project/
 │   ├── decisions.md                   # ✅ 全局决策
+│   ├── decisions-portal-todo-message.md  # ✅ 门户待办/消息中心决策纪要
+│   ├── decisions-form-workflow.md     # ✅ 表单·流程/工作流决策纪要
 │   ├── sprint-plan.md                 # 📝 Sprint 计划
 │   ├── modules-guide.md               # 📝 各项目/模块详细说明
 │   └── conventions.md                 # 📝 编码规范
@@ -86,6 +92,8 @@ docs/
 6. [微服务划分](backend/microservices.md) + [公共模块](backend/common-modules.md)
 7. **[运维总览](devops/README.md)** → [本地开发](devops/local-dev.md)
 8. [代码阅读顺序](CODE-READING-GUIDE.md)
+9. [消息·日志·工作流综合架构设计](architecture/msg-log-workflow/06-workflow-architecture-final-design-v4.md)
+10. [全量开发与测试总计划](architecture/msg-log-workflow/07-full-development-plan.md)
 
 ---
 
@@ -102,6 +110,7 @@ docs/
 | mis-org | ✅ | 组织/部门/员工 |
 | mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
 | mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
+| **mis-taskflow** | ✅ | 消息中心 + 代办任务 + 工作流引擎 + 高可用执行闭环；见 [07-full-development-plan](architecture/msg-log-workflow/07-full-development-plan.md) |
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
 | **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
 | **Coordinator–Worker 调度基座** | ✅ | 需求/架构/ADR/规范齐套；目录 [ai-fusion/coordinator-worker/](ai-fusion/coordinator-worker/README.md) |

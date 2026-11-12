@@ -1,0 +1,288 @@
+/**
+ * A2UI 渲染层协议类型（T06' 迁入 mis-admin-web）。
+ *
+ * <p>口径基准（docs/ai-fusion/a2ui/02-task-breakdown.md §4）：
+ * - catalogId：`mis-a2ui-catalog-v1`（协议版本锚点；资产 major ↔ Gateway catalog major 匹配）
+ * - 组件名：`approval-card`（approval:view / approval:decide）、`data-table`（默认可见）、
+ *   `form-sheet`（form:submit）、`entity-select`（默认可见）
+ * - 错误码：40301 / 40303 / 40304 / 40305 / 4004 / 40101
+ * - 用户操作回传：前端经 WS `{ type: 'a2ui_action', action: A2uiClientAction }` 回传
+ */
+
+import type { ReactNode } from 'react';
+
+// ------------------------------------------------------------------ 常量口径
+
+/** 协议版本锚点（与 Gateway A2UIMiddlewareConfig.defaultCatalogId 对齐）。 */
+export const A2UI_CATALOG_ID = 'mis-a2ui-catalog-v1' as const;
+
+/** A2UI v0.9 协议版本。 */
+export const A2UI_PROTOCOL_VERSION = 'v0.9' as const;
+
+/** 错误码（与 03-permission-design.md §3.3 对齐）。 */
+export const A2UI_ERROR_CODES = {
+  FORBIDDEN: 40301,
+  ACL_UNAVAILABLE: 40303,
+  RENDER_FORBIDDEN: 40304,
+  EVENT_FORBIDDEN: 40305,
+  POLICY_UNMAPPED: 4004,
+  EMBED_TOKEN_INVALID: 40101,
+} as const;
+
+// ------------------------------------------------------------------ 组件名
+
+/**
+ * 受支持的 A2UI 组件名（与 Gateway SHARED_CATALOG 严格一致）。
+ *
+ * <p>扩展基础组件（T06'' 修复「未知 A2UI 组件」）：Gateway 可能下发 AG-UI 风格
+ * 基础节点 `text` / `container` / `button` / `input`，前端需原生渲染而非回退占位。
+ * 业务组件 `approval-card` / `data-table` / `form-sheet` / `entity-select` 保持不变。
+ */
+export type A2uiComponentName =
+  | 'approval-card'
+  | 'data-table'
+  | 'form-sheet'
+  | 'entity-select'
+  | 'text'
+  | 'container'
+  | 'button'
+  | 'input'
+  | 'divider';
+
+/** 已知组件名集合。 */
+export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
+  'approval-card',
+  'data-table',
+  'form-sheet',
+  'entity-select',
+  'text',
+  'container',
+  'button',
+  'input',
+  'divider',
+]);
+
+// ------------------------------------------------------------------ Surface Model
+
+/** Surface 组件树节点（占位保留原 id，保证 updateComponents path 稳定）。 */
+export interface A2uiComponentNode {
+  /** 组件实例 id（Gateway 生成，updateComponents 以 path/id 定位）。 */
+  id: string;
+  /** 组件名（registry 注册的组件名）。 */
+  component: string;
+  /** 纯数据 props（前端已 camelize，组件直接消费）。 */
+  props: Record<string, unknown>;
+  /** 子节点（容器组件）。 */
+  children?: A2uiComponentNode[];
+}
+
+/**
+ * 原始组件节点输入（LLM / Gateway 下发形态，归一化前）。
+ *
+ * <p>与**归一化后**的 {@link A2uiComponentNode} 区分：本类型描述 operation 入参，
+ * MessageProcessor.normalizeComponentNode 负责把它归一化为 {@link A2uiComponentNode}：
+ * - 组件名：`component`（协议形态）优先，缺省回落 `type`（LLM / AG-UI 习惯形态）；
+ * - props：`props`（协议形态）优先，缺省把其余扁平字段（`text` / `label` /
+ *   `direction` / `gap` / `padding` …）抬升进 props；
+ * - `children` 递归归一。
+ *
+ * <p>故本类型仅强制要求 `id`，其余字段宽松（非协议扁平字段经索引签名放行）——
+ * 与运行时真实接受能力一致（运行时同样读 `component` 或 `type`，见
+ * MessageProcessor.normalizeComponentNode）。
+ */
+export interface A2uiComponentInput {
+  /** 组件实例 id（Gateway 生成，updateComponents 以 path/id 定位）。 */
+  id: string;
+  /** 组件名（协议形态：registry 注册的组件名）。 */
+  component?: string;
+  /** 组件名（LLM / AG-UI 习惯形态；缺 `component` 时回落使用）。 */
+  type?: string;
+  /** 纯数据 props（协议形态）；缺省时扁平字段被抬升为 props。 */
+  props?: Record<string, unknown>;
+  /** 子节点（递归归一化）。 */
+  children?: A2uiComponentInput[];
+  /** 其余扁平字段（`text` / `label` / `direction` / `gap` / `padding` …）归一化时抬升进 props。 */
+  [extra: string]: unknown;
+}
+
+/** 单个 A2UI Surface（= 一张动态卡片 / 界面）。 */
+export interface A2uiSurface {
+  surfaceId: string;
+  components: A2uiComponentNode[];
+  dataModels: Record<string, unknown>;
+  /** 渲染权限过滤后的降级占位（Gateway 已过滤；本地 UX 层再兜一层）。 */
+  permissionDenied?: boolean;
+}
+
+// ------------------------------------------------------------------ A2UI Operations
+
+/**
+ * A2UI operations（ACTIVITY_SNAPSHOT 渲染指令）。
+ *
+ * <p>02 文档：A2UI operations 封装在 ACTIVITY_SNAPSHOT 的 `a2ui_operations`
+ * 中（`{ version: 'v0.9', <one operation> }`）。前端 MessageProcessor 兼容
+ * `{ operations: [...] }` 与单操作 `{ version, ...operation }` 两种承载。
+ *
+ * <p>两种 operation 风格（MessageProcessor.applyOperation 均消费）：
+ * - `op` 风格：`{ op: 'createSurface', ... }`（内部 / 兼容承载）；
+ * - v0.9 风格：`{ version: 'v0.9', createSurface: {...} }`（Gateway
+ *   A2UIMiddleware / EventConverter 实际产出，`deleteSurface` 映射为 removeSurface）。
+ */
+export type A2uiOperation = A2uiOpOperation | A2uiV09Operation;
+
+/** `op` 风格 operation：`{ op: 'createSurface', ... }`。 */
+export type A2uiOpOperation =
+  | {
+      op: 'createSurface';
+      surfaceId: string;
+      /** 初始组件树（原始形态，MessageProcessor 归一化为 A2uiComponentNode）。 */
+      components?: A2uiComponentInput[];
+    }
+  | {
+      op: 'updateComponents';
+      surfaceId: string;
+      components: Array<
+        | A2uiComponentInput
+        | {
+            /** 定位路径：`/components/{id}` 或 `/components/{index}`；缺省按 id 匹配。 */
+            path?: string;
+            component?: string;
+            props?: Record<string, unknown>;
+            children?: A2uiComponentNode[];
+          }
+      >;
+    }
+  | {
+      op: 'updateDataModel';
+      surfaceId: string;
+      path: string;
+      value: unknown;
+    }
+  | {
+      op: 'removeSurface';
+      surfaceId: string;
+    };
+
+/**
+ * A2UI v0.9 协议风格单操作：`{ version: 'v0.9', <one operation> }`。
+ *
+ * operation 键名即操作名；`deleteSurface` 是 A2UI v0.9 协议名，
+ * 前端映射为 op 风格的 `removeSurface`。
+ */
+export type A2uiV09Operation =
+  | {
+      version?: string;
+      createSurface: { surfaceId: string; catalogId?: string };
+    }
+  | {
+      version?: string;
+      updateComponents: { surfaceId: string; components: A2uiComponentInput[] };
+    }
+  | {
+      version?: string;
+      updateDataModel: { surfaceId: string; path?: string; value?: unknown };
+    }
+  | {
+      version?: string;
+      deleteSurface: { surfaceId: string };
+    };
+
+// ------------------------------------------------------------------ 用户操作回传
+
+/**
+ * A2UI 用户操作（前端 → Gateway，02 文档 §4 用户操作回传）。
+ *
+ * <p>Gateway 转 `RunAgentInput.forwardedProps.a2uiAction` 交给中间件
+ * `processUserAction` 合成 tool call 消息发回 Python。
+ */
+export interface A2uiClientAction {
+  surfaceId: string;
+  componentId: string;
+  /** 操作名（与 registry actionApiMap 的 key 一致：approve / reject / submit / confirm…）。 */
+  action: string;
+  payload: Record<string, unknown>;
+}
+
+// ------------------------------------------------------------------ 组件 Props
+
+/**
+ * A2UI 组件统一 Props（所有注册组件共享签名）。
+ *
+ * <p>与 旧版独立前端 `components/a2ui/types.ts` 对齐，扩展 bff 回调与权限回调：
+ * - `actions.onApprove/onReject`：审批决定（写操作，走 bff-actions）
+ * - `actions.onSubmit`：表单提交（写操作，走 bff-actions）
+ * - `actions.onEntitySelect`：实体选择（回传 Agent，经 Gateway dispatchAction，非 BFF 写操作）
+ */
+export interface A2uiComponentProps {
+  /** 组件名（调试 / 回退）。 */
+  component: A2uiComponentName;
+  /** 后端下发纯数据 props（已 camelize）。 */
+  props: Record<string, unknown>;
+  /** 前端注入回调。 */
+  actions?: A2uiActions;
+  /**
+   * 子节点渲染结果（仅容器类组件消费，如 `container`）。
+   *
+   * <p>由 SurfaceRenderer 递归渲染 `node.children` 后注入，使容器真正包裹子节点；
+   * 叶子组件（如 `approval-card`）忽略此字段，保持原行为。
+   */
+  children?: ReactNode;
+}
+
+/** A2UI 动作回调声明。 */
+export interface A2uiActions {
+  onApprove?: (data?: Record<string, unknown>) => void;
+  onReject?: (data?: Record<string, unknown>) => void;
+  onSubmit?: (data: Record<string, unknown>) => void;
+  onEntitySelect?: (data: {
+    resumeToken: string;
+    selectedCandidate?: Record<string, unknown>;
+    action: 'confirm' | 'manual' | 'cancel';
+  }) => void;
+}
+
+// ------------------------------------------------------------------ Registry Entry
+
+/** 操作 → BFF API 映射（前端声明仅供调用方使用；BFF 以 sys_api 表为唯一权威）。 */
+export interface A2uiActionApiBinding {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  path: string;
+  permissionCode: string;
+}
+
+/** 前端 registry 条目（D5 双层声明：UX 层，可篡改仅影响显示；Gateway catalog 权威）。 */
+export interface A2uiRegistryEntry {
+  name: A2uiComponentName;
+  component: import('react').ComponentType<A2uiComponentProps>;
+  /** 渲染权限码（UX 层提示；Gateway SurfacePermissionFilter 权威过滤）。 */
+  requiredPermission?: string;
+  /** 操作 → BFF API 映射（写操作 100% 由 BFF 校验，见 03-permission-design.md §3.2）。 */
+  actionApiMap?: Record<string, A2uiActionApiBinding>;
+  /** 组件级渲染权限降级文案（无权限时的占位文案，缺省用通用文案）。 */
+  deniedText?: string;
+}
+
+/** 渲染权限校验结果。 */
+export interface A2uiPermissionDecision {
+  allowed: boolean;
+  /** 缺失的权限码列表。 */
+  missingPermissions: string[];
+  /** 权限源不可用（fail-closed）。 */
+  sourceUnavailable?: boolean;
+}
+
+/** BFF 写操作结构化错误（PermissionErrorBanner 消费）。 */
+export interface BffActionError {
+  code: number;
+  message: string;
+  missingPermissions: string[];
+  /** 是否权限类错误（40301 / 40304 / 40305 / 4004）。 */
+  permissionDenied: boolean;
+}
+
+/** BFF 写操作结果。 */
+export interface BffActionResult<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: BffActionError;
+}

@@ -186,7 +186,46 @@ if (hasPermission('system:user:edit')) { ... }
 - [x] 内置仅 `TENANT_ADMIN`；平台 **superadmin** 独立账号
 - [x] admin 不可删除自己
 
-## 9. 关联文档
+## 9. 流程定义（摘录）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| workflow:definition:edit | 菜单 95006 | 流程定义列表 / 编排 / 发布 / 关联表单 |
+
+关联 API（经 `sys_menu_api`）：含 `PUT /api/v1/workflow/definitions/{id}/supported-forms`（sys_api **95101**，V142）。
+
+## 9.1 问数增强 / 样本对分类（摘录，V148）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| iqd:enhance:view | 菜单 92521 | 含 `GET /api/v1/iqd/sql-pair-categories/tree`、`GET /api/v1/iqd/sql-pairs` |
+| iqd:enhance:save | 菜单 92522 | 含样本对分类 POST/PUT/DELETE（sys_api **92981–92983**）与样本保存 |
+
+## 9.2 模板报告（摘录，V160–V161）
+
+| 权限码 | 菜单 | 说明 |
+|--------|------|------|
+| ai-report:view | 菜单 93201 | ping / 分类树 / 参数来源 / 工作流平台列表 / 报告 defs 读 / ACL 列表（sys_api **93211–93212,93216–93217,93220–93221,93225**）；S3：`catalog` / `prepare-card` / `execute` / `results`（**93228–93230,93232**，亦绑问数旗舰页 93040） |
+| ai-report:save | 菜单 93202 | 分类/报告/工作流平台/ACL 写（sys_api **93213–93215,93218–93219,93222–93224,93226–93227**） |
+
+报告 execute 旁路结果写入会话：`POST /api/v1/agent-ops/sessions/{id}/transcript`（sys_api **93231** / code **00920078**，V162；绑 `agent:chat:use` 92032 与问数旗舰页 93040）。
+
+Copilot 语音转写：`POST /api/v1/agent-ops/speech/transcribe`（sys_api **93233** / code **00920079**，V167；绑 `agent:chat:use` 92032）。音频不进会话附件。
+
+运行时业务码：**40321** = 无权限或必要参数无可选项（前端不插参数卡）。
+
+分类 API：`sys_api` **92980–92983** / `sys_menu_api` **92984–92987**（V148）。
+
+## 10. 消息管理
+
+| permission | 菜单 | API |
+|------------|------|-----|
+| `taskflow:message:manage` | 95131（挂在消息与待办 95003 下，侧栏不展示） | 预览 / 发送 / 发送记录 / 上传：`sys_api` **95141–95145**；按手机号解析：`sys_api` **95148**（V152） |
+| （收件人下载） | 95003 与 95131 均绑定 | `GET /api/v1/messages/files/{id}`，`sys_api` **95146** |
+
+接收范围可同时选全员、部门（含子部门）、岗位类型（含下级类型与兼职）、指定用户，按并集去重。内置管理员角色（role_id=1）已授权。
+
+## 11. 关联文档
 
 - [接口规范](api-specification.md)
 - [种子数据](../database/seed-data.md)

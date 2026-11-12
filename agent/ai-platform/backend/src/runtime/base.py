@@ -5,10 +5,10 @@
 """
 
 from __future__ import annotations
-from typing import Any
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from typing import Any
 
 from src.runtime.events import AgentEvent, HealthStatus
 
@@ -57,6 +57,7 @@ class AgentRuntime(ABC):
         channel: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        memory_context: str = "",
     ) -> AsyncIterator[AgentEvent]:
         """
         执行 Agent 并产出 AgentEvent 对象。
@@ -70,6 +71,8 @@ class AgentRuntime(ABC):
             channel: 渠道类型（注入 MCP）。
             channel_user_id: 渠道侧 userId（注入 MCP）。
             mis_user_id: MIS userId（T03 S9 第五键，注入 MCP identity 供 E1–E5 判权）。
+            memory_context: Memory-only context assembled by MemoryInjector and
+                appended to system prompt.
 
         Yields:
             按顺序产出 AgentEvent 对象（text.delta、tool.call 等）。

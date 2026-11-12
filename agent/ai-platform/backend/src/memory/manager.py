@@ -18,12 +18,15 @@ MemoryManager — Agent 记忆的中央编排器。
 """
 
 from __future__ import annotations
+
+import hashlib
+import uuid
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import uuid
-from datetime import datetime, timedelta, timezone
-
 import httpx
+import redis.asyncio as aioredis
 import structlog
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -32,7 +35,6 @@ from sqlalchemy import delete, func, select
 
 from src.config import get_settings
 from src.db.session import db_session_context
-from src.models.agent_memory import AgentMemory
 from src.memory.models import (
     ExtractedMemory,
     MemoryEntry,
@@ -40,6 +42,7 @@ from src.memory.models import (
     MemoryType,
 )
 from src.memory.static_loader import StaticMemoryLoader, get_static_memory_loader
+from src.models.agent_memory import AgentMemory
 
 logger = structlog.get_logger("memory.manager")
 
@@ -278,7 +281,7 @@ class MemoryManager:
 
         # 合并并计算综合分数
         merged: list[MemorySearchResult] = []
-        now: Any = datetime.now(timezone.utc)
+        now: Any = datetime.now(UTC)
 
         for hit in user_level_results + session_level_results:
             payload: dict[str, Any] = hit.get("payload", {})
@@ -423,15 +426,55 @@ class MemoryManager:
         )
         expires_at: datetime | None = None
         if effective_ttl > 0:
-            expires_at: Any = datetime.now(timezone.utc) + timedelta(days=effective_ttl)
+            expires_at: Any = datetime.now(UTC) + timedelta(days=effective_ttl)
 
-        meta: Any = metadata or {}
+        meta: dict[str, Any] = dict(metadata or {})
+        content_hash: str = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+        meta.setdefault("content_hash", content_hash)
 
         # 1. 插入 PostgreSQL
         memory_id: str = str(uuid.uuid4())
-        now: Any = datetime.now(timezone.utc)
+        now: Any = datetime.now(UTC)
 
         async with db_session_context() as session:
+            existing_record: AgentMemory | None = None
+            if hasattr(session, "execute"):
+                try:
+                    existing_stmt: Any = select(AgentMemory).where(
+                        AgentMemory.agent_name == agent_name,
+                        AgentMemory.user_id == user_id,
+                        AgentMemory.memory_type == memory_type.value,
+                    )
+                    if session_id is None:
+                        existing_stmt = existing_stmt.where(AgentMemory.session_id.is_(None))
+                    else:
+                        existing_stmt = existing_stmt.where(AgentMemory.session_id == session_id)
+                    existing_result: Any = await session.execute(existing_stmt.limit(100))
+                    for candidate in existing_result.scalars().all():
+                        candidate_meta: Any = candidate.metadata_ or {}
+                        if candidate_meta.get("content_hash") == content_hash:
+                            existing_record = candidate
+                            break
+                except Exception as exc:  # noqa: BLE001 - dedup is best-effort
+                    logger.debug("Memory dedup lookup skipped", error=str(exc))
+
+            if existing_record is not None:
+                if importance > float(existing_record.importance or 0.0):
+                    existing_record.importance = importance
+                    existing_record.metadata_ = {**(existing_record.metadata_ or {}), **meta}
+                return MemoryEntry(
+                    id=str(existing_record.id),
+                    agent_name=existing_record.agent_name,
+                    session_id=existing_record.session_id,
+                    user_id=existing_record.user_id,
+                    memory_type=memory_type,
+                    content=existing_record.content,
+                    importance=float(existing_record.importance),
+                    metadata=existing_record.metadata_ or {},
+                    expires_at=existing_record.expires_at,
+                    created_at=existing_record.created_at,
+                    updated_at=existing_record.updated_at,
+                )
             record: AgentMemory = AgentMemory(
                 id=memory_id,
                 agent_name=agent_name,
@@ -483,6 +526,7 @@ class MemoryManager:
                 "memory_type": memory_type.value,
                 "content": content,
                 "importance": importance,
+                "metadata": meta,
                 "created_at": now.isoformat(),
                 "expires_at": expires_at.isoformat() if expires_at else None,
             },
@@ -532,6 +576,7 @@ class MemoryManager:
         user_id: str,
         session_id: str | None,
         extracted: list[ExtractedMemory],
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         """
         批量写入 LLM 提取的记忆点。
@@ -541,16 +586,33 @@ class MemoryManager:
         返回实际写入的记忆数量。
         """
         written: int = 0
+        base_meta: dict[str, Any] = dict(metadata or {})
+        user_level_eligible = bool(base_meta.get("user_level_eligible", True))
+        user_level_types = {
+            MemoryType.PREFERENCE,
+            MemoryType.DECISION,
+            MemoryType.FACT,
+        }
         for item in extracted:
             if item.importance <= _MIN_WRITE_IMPORTANCE:
                 continue
+            effective_session_id = session_id
+            if user_level_eligible and item.memory_type in user_level_types:
+                # Stable personal memories (preferences/decisions/facts) should be
+                # retrievable across sessions for the same canonical owner.
+                effective_session_id = None
+            item_meta: dict[str, Any] = dict(base_meta)
+            item_meta["requested_scope"] = (
+                "user" if effective_session_id is None else "session"
+            )
             result: MemoryEntry | None = await self.write_dynamic_memory(
                 agent_name=agent_name,
                 user_id=user_id,
-                session_id=session_id,
+                session_id=effective_session_id,
                 memory_type=item.memory_type,
                 content=item.content,
                 importance=item.importance,
+                metadata=item_meta,
             )
             if result is not None:
                 written += 1
@@ -583,6 +645,34 @@ class MemoryManager:
     # 遗忘策略
     # ==================================================================
 
+    @asynccontextmanager
+    async def _forget_cycle_leader_guard(self) -> Any:
+        """Best-effort leader guard for multi-replica forget cycles."""
+        redis: aioredis.Redis | None = None
+        token: str = str(uuid.uuid4())
+        key: str = f"{self._settings.REDIS_KEY_PREFIX}memory:forget:leader"
+        acquired: bool = False
+        try:
+            redis = aioredis.from_url(
+                self._settings.redis_url,
+                max_connections=2,
+                decode_responses=True,
+                socket_connect_timeout=5,
+            )
+            acquired = bool(await redis.set(key, token, nx=True, ex=3600))
+            yield acquired
+        except Exception as exc:  # noqa: BLE001 - leader lock failure falls back to local execution
+            logger.warning("Memory forget leader lock unavailable; running locally", error=str(exc))
+            yield True
+        finally:
+            if redis is not None:
+                # Keep the leader key until TTL expiry so replicas scheduled in the
+                # same window cannot run a duplicate forget cycle after this one
+                # completes quickly. Redis outage or process crash still recovers
+                # by TTL.
+                with suppress(Exception):
+                    await redis.aclose()
+
     async def run_forget_cycle(self) -> dict[str, int]:
         """
         执行完整的遗忘策略周期。
@@ -597,23 +687,33 @@ class MemoryManager:
 
         返回包含每个操作计数的摘要字典。
         """
-        expired_count: int = await self._forget_expired()
-        evicted_count: int = await self._enforce_capacity_all()
-        promoted_count: int = await self._promote_session_memories()
-        decayed_count: int = await self._apply_importance_decay()
+        async with self._forget_cycle_leader_guard() as is_leader:
+            if not is_leader:
+                logger.debug("Forget cycle skipped; another replica is leader")
+                return {
+                    "expired_deleted": 0,
+                    "capacity_evicted": 0,
+                    "session_promoted": 0,
+                    "importance_decayed": 0,
+                }
 
-        summary: dict[str, Any] = {
-            "expired_deleted": expired_count,
-            "capacity_evicted": evicted_count,
-            "session_promoted": promoted_count,
-            "importance_decayed": decayed_count,
-        }
-        logger.info("Forget cycle completed", **summary)
-        return summary
+            expired_count: int = await self._forget_expired()
+            evicted_count: int = await self._enforce_capacity_all()
+            promoted_count: int = await self._promote_session_memories()
+            decayed_count: int = await self._apply_importance_decay()
+
+            summary: dict[str, int] = {
+                "expired_deleted": expired_count,
+                "capacity_evicted": evicted_count,
+                "session_promoted": promoted_count,
+                "importance_decayed": decayed_count,
+            }
+            logger.info("Forget cycle completed", **summary)
+            return summary
 
     async def _forget_expired(self) -> int:
         """从 PG 和 Qdrant 中删除 ``expires_at < NOW()`` 的记忆。"""
-        now: Any = datetime.now(timezone.utc)
+        now: Any = datetime.now(UTC)
         expired_ids: list[str] = []
 
         async with db_session_context() as session:
@@ -753,6 +853,9 @@ class MemoryManager:
 
             promoted_ids: list[str] = []
             for record in records:
+                meta: Any = record.metadata_ or {}
+                if meta.get("user_level_eligible") is False:
+                    continue
                 record.session_id = None
                 promoted_ids.append(record.id)
 
@@ -780,7 +883,7 @@ class MemoryManager:
         每个月，importance 乘以 0.95。我们在 metadata 中跟踪上次
         衰减日期，以避免在同一月内重复衰减。
         """
-        now: Any = datetime.now(timezone.utc)
+        now: Any = datetime.now(UTC)
         cutoff: Any = now - timedelta(days=_DAYS_PER_MONTH)
         decay_key: str = "last_decay_at"
         decayed_count: int = 0
@@ -822,7 +925,7 @@ class MemoryManager:
 
         返回立即删除的记忆数量。
         """
-        now: Any = datetime.now(timezone.utc)
+        now: Any = datetime.now(UTC)
         summary_ttl: Any = now + timedelta(days=_SESSION_SUMMARY_TTL_DAYS)
         deleted_ids: list[str] = []
 
@@ -882,7 +985,7 @@ class MemoryManager:
         try:
             created: Any = datetime.fromisoformat(created_at_str)
             if created.tzinfo is None:
-                created: str = created.replace(tzinfo=timezone.utc)
+                created: str = created.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             return 1.0
 
@@ -913,7 +1016,7 @@ class MemoryManager:
                 expires_at: None = None
 
         created_at_str: str = payload.get("created_at", "")
-        created_at: Any = datetime.now(timezone.utc)
+        created_at: Any = datetime.now(UTC)
         if created_at_str:
             try:
                 created_at: Any = datetime.fromisoformat(created_at_str)

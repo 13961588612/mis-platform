@@ -1,43 +1,64 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
-import { SYSTEM_NAV, flattenSystemNavLeaves } from '@/lib/nav/system-nav';
+import { buildSearchIndex, groupLabel } from '@/lib/search/search-registry';
+import type { SearchItem } from '@/lib/search/types';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
+import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
+/** 条目分组键：门户三入口自成一组，其余按 `appCode`（`null` → 平台级）。 */
+function groupKey(item: SearchItem): string {
+  return item.portalTab ? '__portal__' : item.appCode ?? '__platform__';
+}
+
+/** 条目分组标题：门户组固定「门户」，其余走 `groupLabel`（appName / 平台级）。 */
+function itemGroupLabel(item: SearchItem): string {
+  return item.portalTab ? '门户' : groupLabel(item.appCode, item.appName);
+}
+
+/**
+ * 命令面板（⌘K）—— 搜索「门户三入口 + 各业务 APP 菜单」。
+ *
+ * <p>索引来源见 `lib/search/search-registry.ts`：门户首页 / 待办事项 / 消息中心 +
+ * system / agent / kb / iqd / finance 五份菜单（**不含工作台 `task`**，也不含 `type:'app'` 项）。
+ *
+ * <p><b>点击跳转（关键）</b>：门户三 Tab **不进 URL**（见 `stores/portal-tab-store.ts`），
+ * 故命中 `portalTab` 的条目必须**先写 store 再跳路由**：`setActiveTab(tab)` → `navigate('/portal')`；
+ * 其余菜单条目直接 `navigate(path)`。
+ *
+ * <p><b>「待办事项」子 Tab 落「全部」</b>：命中 `portalTab==='todo'` 时先写子 Tab
+ * （`setActiveKey('all')`）再写主 Tab，避免待办面板以旧键挂载多打一轮请求
+ * （与 `use-portal-entry.ts` 的写序约定一致）。
+ *
+ * <p>渲染：按分组（`appCode`）展示分组标题；保留 ↑/↓ 高亮、回车跳转、关键词过滤、空态。
+ */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
 
+  /** 全量索引（静态，不随渲染变化）。 */
+  const index = useMemo(() => buildSearchIndex(), []);
+
+  /** 关键词过滤（命中标题 / 路径 / 别名即可）。无关键词：展示全部。 */
   const items = useMemo(() => {
-    const leaves = flattenSystemNavLeaves().map((i) => {
-      const parent = SYSTEM_NAV.find(
-        (n) => n.kind === 'branch' && n.children.some((c) => c.path === i.path),
-      );
-      return {
-        path: i.path,
-        title: i.title,
-        icon: i.icon,
-        group: parent && parent.kind === 'branch' ? parent.title : '导航',
-      };
-    });
-    const base = [
-      { path: '/portal', title: '返回门户', icon: 'Home', group: '快捷' },
-      ...leaves,
-    ];
     const kw = q.trim().toLowerCase();
-    if (!kw) return base;
-    return base.filter(
-      (i) => i.title.toLowerCase().includes(kw) || i.path.toLowerCase().includes(kw),
+    if (!kw) return index;
+    return index.filter(
+      (i) =>
+        i.title.toLowerCase().includes(kw) ||
+        (i.path ?? '').toLowerCase().includes(kw) ||
+        (i.keywords ?? []).some((k) => k.toLowerCase().includes(kw)),
     );
-  }, [q]);
+  }, [index, q]);
 
   useEffect(() => {
     if (open) {
@@ -50,9 +71,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     setActive(0);
   }, [q]);
 
-  const go = (path: string) => {
+  const go = (item: SearchItem) => {
     onOpenChange(false);
-    navigate(path);
+    if (item.portalTab) {
+      if (item.portalTab === 'todo') {
+        usePortalTodoTabStore.getState().setActiveKey('all');
+      }
+      usePortalTabStore.getState().setActiveTab(item.portalTab);
+      navigate('/portal');
+      return;
+    }
+    if (item.path) navigate(item.path);
   };
 
   return (
@@ -70,12 +99,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               setActive((i) => Math.max(0, i - 1));
             } else if (e.key === 'Enter' && items[active]) {
               e.preventDefault();
-              go(items[active].path);
+              go(items[active]);
             }
           }}
         >
           <Dialog.Title className="sr-only">命令面板</Dialog.Title>
-          <Dialog.Description className="sr-only">搜索菜单并快速跳转</Dialog.Description>
+          <Dialog.Description className="sr-only">搜索门户页面与各应用菜单并快速跳转</Dialog.Description>
           <div className="flex items-center gap-2 border-b px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
@@ -95,23 +124,28 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ) : (
               items.map((item, idx) => {
                 const Icon = resolveNavIcon(item.icon);
+                const prev = items[idx - 1];
+                const showHeader = !prev || groupKey(prev) !== groupKey(item);
                 return (
-                  <button
-                    key={`${item.path}-${item.title}`}
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm',
-                      idx === active ? 'bg-accent' : 'hover:bg-accent/70',
-                    )}
-                    onMouseEnter={() => setActive(idx)}
-                    onClick={() => go(item.path)}
-                  >
-                    <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-                    {item.group ? (
-                      <span className="truncate text-xs text-muted-foreground">{item.group}</span>
+                  <Fragment key={item.id}>
+                    {showHeader ? (
+                      <div className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
+                        {itemGroupLabel(item)}
+                      </div>
                     ) : null}
-                  </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm',
+                        idx === active ? 'bg-accent' : 'hover:bg-accent/70',
+                      )}
+                      onMouseEnter={() => setActive(idx)}
+                      onClick={() => go(item)}
+                    >
+                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
+                    </button>
+                  </Fragment>
                 );
               })
             )}

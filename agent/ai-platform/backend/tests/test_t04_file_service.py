@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -51,7 +51,7 @@ def config_dir(
 def fake_manager(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """把 file_service 中的 ConfigManager 单例替换为 stub（reload_agent 返回非空配置）。"""
     mgr = MagicMock()
-    mgr.reload_agent = MagicMock(return_value=MagicMock())
+    mgr.reload_agent = AsyncMock(return_value=(MagicMock(), None))
     monkeypatch.setattr(fs, "get_config_manager", lambda: mgr)
     return mgr
 
@@ -223,18 +223,19 @@ def test_read_config_file_not_found(config_dir: Path) -> None:
 # ===========================================================================
 
 
-def test_write_config_file_persists_and_reloads(
+@pytest.mark.asyncio
+async def test_write_config_file_persists_and_reloads(
     config_dir: Path, fake_manager: MagicMock
 ) -> None:
     agent_dir = config_dir / "agents" / "a1"
     agent_dir.mkdir()
     content = "agent:\n  name: a1\n  display_name: A1\n  description: d\n"
 
-    result = fs.write_config_file("a1", "agent.yaml", content)
+    result = await fs.write_config_file("a1", "agent.yaml", content)
 
     assert result["reloaded"] is True
     assert "name: a1" in (agent_dir / "agent.yaml").read_text(encoding="utf-8")
-    fake_manager.reload_agent.assert_called_once_with("a1")
+    fake_manager.reload_agent.assert_awaited_once_with("a1")
 
 
 def test_write_config_file_readonly_rejected(
@@ -245,7 +246,10 @@ def test_write_config_file_readonly_rejected(
     (agent_dir / "roles.yaml").write_text("x: 1\n", encoding="utf-8")
 
     with pytest.raises(ConfigPathError):
-        fs.write_config_file("a1", "identity/roles.yaml", "x: 2\n")
+        # 校验在 await 前同步抛出；用 asyncio.run 统一入口
+        import asyncio
+
+        asyncio.run(fs.write_config_file("a1", "identity/roles.yaml", "x: 2\n"))
 
 
 def test_write_config_file_too_large(
@@ -256,7 +260,9 @@ def test_write_config_file_too_large(
     big = "agent:\n  name: a1\n  display_name: A1\n" + ("#" * (fs.MAX_FILE_SIZE_BYTES + 10)) + "\n"
 
     with pytest.raises(ConfigFileTooLargeError):
-        fs.write_config_file("a1", "agent.yaml", big)
+        import asyncio
+
+        asyncio.run(fs.write_config_file("a1", "agent.yaml", big))
 
 
 def test_write_config_file_masked_placeholder_rejected(
@@ -267,7 +273,9 @@ def test_write_config_file_masked_placeholder_rejected(
     content = f"agent:\n  name: a1\n  display_name: A1\n  password: \"{fs.MASKED_VALUE}\"\n"
 
     with pytest.raises(ConfigFileMaskedError):
-        fs.write_config_file("a1", "agent.yaml", content)
+        import asyncio
+
+        asyncio.run(fs.write_config_file("a1", "agent.yaml", content))
 
 
 def test_write_config_file_invalid_top_level(
@@ -277,7 +285,9 @@ def test_write_config_file_invalid_top_level(
     agent_dir.mkdir()
 
     with pytest.raises(ConfigValidationError):
-        fs.write_config_file("a1", "agent.yaml", "just a string")
+        import asyncio
+
+        asyncio.run(fs.write_config_file("a1", "agent.yaml", "just a string"))
 
 
 def test_write_config_file_validation_failure_missing_fields(
@@ -287,4 +297,6 @@ def test_write_config_file_validation_failure_missing_fields(
     agent_dir.mkdir()
 
     with pytest.raises(ConfigValidationError):
-        fs.write_config_file("a1", "agent.yaml", "agent:\n  name: a1\n")
+        import asyncio
+
+        asyncio.run(fs.write_config_file("a1", "agent.yaml", "agent:\n  name: a1\n"))

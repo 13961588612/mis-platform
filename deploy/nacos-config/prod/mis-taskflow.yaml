@@ -1,0 +1,13 @@
+# Nacos config: mis-taskflow (prod)
+# 消息附件 / 正文图片走 S4 MinIO（桶 mis-message，启动时自动建桶）。
+server:
+  port: 8104
+
+mis:
+  message:
+    storage:
+      endpoint: http://10.254.26.36:9000
+      # 与 prod-deploy MinIO ROOT 一致；含 # 须加引号
+      access-key: root
+      secret-key: "mis#minio1014"
+      bucket: mis-message

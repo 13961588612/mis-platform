@@ -1,0 +1,300 @@
+classDiagram
+  %% ============================================================
+  %% 门户重构 类图（前端视图模型/组件 + 后端服务/VO/DTO）
+  %% 图例：[新增] / [修改] / [复用]
+  %% ============================================================
+
+  %% ---------- 前端 · 门户容器与 Tab ----------
+  class PortalPage {
+    <<component>> [修改]
+    +activeTab: 'home'|'todo'|'message'
+    -drawer: DrawerState
+    +render()
+  }
+  class PortalHomeTab {
+    <<component>> [新增]
+    +tenantId: string
+    +userId: string
+    +render()  %% 沿用现有欢迎条+WorkbenchOverview+TaskBoard+MessageBoard+ProcessBoard+AppRail
+  }
+  class PortalTodoTab {
+    <<component>> [新增]
+    +tenantId: string
+    +userId: string
+    -activeTabKey: string
+    -keyword: string
+    -debouncedKeyword: string
+    -rows: PortalTodoRow[]
+    -drawerRow: PortalTodoRow|null
+    +load()  %% 按 tab 配置选数据源
+    +onRowClick(row)
+  }
+  class PortalMessageTab {
+    <<component>> [新增]
+    +tenantId: string
+    +userId: string
+    -msgType: string
+    -keyword: string
+    -drawerId: string|null
+    +load()
+    +onRowClick(item)
+  }
+  class TodoDetailDrawer {
+    <<component>> [新增]
+    +open: boolean
+    +row: PortalTodoRow|null
+    +onActionDone(): void
+    +render()  %% Sheet 右侧 + ProcessShell(embedded) + 三动作
+  }
+  class MessageDetailDrawer {
+    <<component>> [新增]
+    +open: boolean
+    +messageId: string|null
+    +render()  %% 正文+元信息+流程表单(可选)+回复区
+  }
+  class ProcessShell {
+    <<component>> [修改]
+    +instanceId: string
+    +variant: 'page'|'embedded'
+    +onActionDone: (()=>void)|undefined
+    -detail: ProcessDetail|null
+    -myPendingTask: WfTask|null
+    +handle(action)
+    +handleTransfer(sysTaskId,newAssignee)
+  }
+  class AppLayout {
+    <<component>> [修改]
+    +hideSidebar: boolean  %% pathname==='/portal'
+    +render()  %% 条件渲染 aside；navNodes/activeAppCode 不变
+  }
+
+  %% ---------- 前端 · 门户待办视图模型（聚合策略） ----------
+  class PortalTodoRow {
+    <<interface>> [新增]
+    +key: string
+    +source: 'my'|'sent'|'handled'
+    +title: string
+    +bizType: string
+    +bizRefId: string
+    +statusCode: string
+    +statusText: string
+    +ownerName: string|null
+    +timeIso: string
+    +instanceId: string|null
+    +taskId: string|null
+    +sysTaskId: string|null
+    +priority: number|null
+    +overdue: boolean
+  }
+  class TodoTabConfig {
+    <<interface>> [新增]
+    +key: string
+    +label: string
+    +source: 'my'|'sent'|'handled'
+    +status: string|null
+    +adapter: (raw)=>PortalTodoRow
+  }
+  class TodoAdapters {
+    <<module>> [新增]
+    +fromTaskItem(item: TaskItem): PortalTodoRow
+    +fromHandledTask(item: TaskItem): PortalTodoRow
+    +fromWfInstance(item: WfInstance): PortalTodoRow
+  }
+
+  %% ---------- 前端 · API ----------
+  class MessagesApi {
+    <<module>> [修改]
+    +fetchInbox(params)
+    +searchMessages(params)
+    +fetchMessageDetail(id,userId)
+    +markMessagesRead(userId,ids)
+    +fetchMessageStats(tenantId,userId)
+    +replyMessage(id,userId,content)  %% 新增
+  }
+  class TasksApi {
+    <<module>> [修改]
+    +fetchMyTasks(params{+keyword})
+    +fetchHandledTasks(params{+keyword})
+    +handleTask(...)
+    +transferTask(id,tenantId,operatorId,newAssigneeId,newAssigneeName,comment)
+  }
+  class WorkflowApi {
+    <<module>> [修改]
+    +fetchProcessDetail(id,tenantId)
+    +fetchMyProcesses(tenantId,initiatorId,status,page,size,{+keyword})
+  }
+  class WfInstanceId {
+    <<module>> [复用]
+    +wfInstanceId(item: Pick~TaskItem,'metadata'~): string|null
+  }
+
+  %% ---------- 后端 · 实体 ----------
+  class SysMessage {
+    <<entity>> [修改]
+    +id: Long
+    +tenantId: Long
+    +msgType: String
+    +category: String
+    +title: String
+    +summary: String
+    +content: String
+    +senderId: Long
+    +receiverIds: Long[]
+    +referenceTaskId: Long
+    +instanceId: Long  %% 新增列 sys_message.instance_id
+    +createdAt: LocalDateTime
+  }
+  class WfHistory {
+    <<entity>> [修改]
+    +OP_SUBMIT: String
+    +OP_APPROVE: String
+    +OP_REJECT: String
+    +OP_FORWARD: String
+    +OP_SKIP: String
+    +OP_COMMENT: String  %% 新增常量
+    +id: Long
+    +instanceId: Long
+    +nodeCode: String
+    +operatorId: Long
+    +operatorName: String
+    +operation: String
+    +comment: String
+    +createdAt: LocalDateTime
+  }
+  class WfTask {
+    <<entity>> [复用]
+    +id: Long
+    +instanceId: Long
+    +nodeCode: String
+    +sysTaskId: Long   %% 转办时映射到 sys_task
+    +assigneeId: Long
+    +status: String
+  }
+
+  %% ---------- 后端 · DTO / VO ----------
+  class PublishMessageRequest {
+    <<record>> [修改]
+    +msgType: String
+    +category: String
+    +title: String
+    +summary: String
+    +content: String
+    +attachments: String
+    +senderId: Long
+    +senderName: String
+    +receiverIds: List~Long~
+    +referenceTaskId: Long
+    +instanceId: Long  %% 新增组件（record 位置参数）
+  }
+  class ReplyMessageRequest {
+    <<record>> [新增]
+    +content: String  %% @NotBlank
+  }
+  class MessageVO {
+    <<record>> [修改]
+    +...existing...
+    +instanceId: String   %% 新增
+    +canReply: boolean    %% 新增
+  }
+  class MessageDetailVO {
+    <<record>> [修改]
+    +...existing...
+    +instanceId: String   %% 新增
+    +canReply: boolean    %% 新增
+  }
+  class ProcessDetailVO {
+    <<record>> [复用]
+    +instance: WfInstanceVO
+    +tasks: List~WfTaskVO~
+    +history: List~WfHistoryVO~
+    +formData: String
+  }
+
+  %% ---------- 后端 · Service ----------
+  class ProcessService {
+    <<service>> [修改]
+    +startProcess(...)
+    +completeTask(tenantId,wfTaskId,req,operatorId)
+    +detail(instanceId,tenantId)
+    +myInitiated(tenantId,initiatorId,status,page,size,{+keyword})
+    -notify(instance,result,title,summary)  %% 写入 instanceId
+    -recordHistory(...)
+    +replyToMessage(tenantId,messageId,operatorId,operatorName,content)  %% 新增
+  }
+  class MessageService {
+    <<service>> [修改]
+    +publish(tenantId,req)  %% 写入 instanceId
+    +inbox(...)  +search(...)  +detail(...)  +markRead(...)  +stats(...)
+    -toVo(m,mine): MessageVO  %% 补 instanceId/canReply
+  }
+  class TaskService {
+    <<service>> [修改]
+    +myTasks(...{+keyword})
+    +handledTasks(...{+keyword})
+    +handleTask(...)
+    +transferTask(...)
+  }
+
+  %% ---------- 后端 · Repository ----------
+  class SysMessageRepository {
+    <<repo>> [复用]
+    +findInbox(...)  +searchInbox(...)
+  }
+  class SysTaskRepository {
+    <<repo>> [修改]
+    +findByAssignee(...{+keyword})
+    +findOpenByAssignee(...{+keyword})
+    +findHandledByAssignee(...{+keyword})
+  }
+  class WfInstanceRepository {
+    <<repo>> [修改]
+    +findByInitiator(...{+keyword})
+  }
+  class WfHistoryRepository {
+    <<repo>> [复用]
+    +findByInstanceIdOrderByCreatedAtAsc(instanceId)
+  }
+
+  %% ---------- BFF ----------
+  class BffMessageController {
+    <<controller>> [修改]
+    +POST /api/v1/messages/{id}/reply  %% 新增
+  }
+  class BffTaskflowWebClient {
+    <<client>> [修改]
+    +replyMessage(messageId,userId,body)
+    +myTasks(...{+keyword})  +handledTasks(...{+keyword})  +myInitiated(...{+keyword})
+  }
+
+  %% ---------- 关系 ----------
+  PortalPage "1" --> "1" PortalHomeTab : 默认选中
+  PortalPage "1" --> "1" PortalTodoTab
+  PortalPage "1" --> "1" PortalMessageTab
+  PortalTodoTab "1" --> "1" TodoDetailDrawer : 行点击打开
+  PortalTodoTab ..> TodoTabConfig : 读取6类Tab配置
+  TodoTabConfig ..> TodoAdapters : 使用适配器
+  TodoAdapters ..> TasksApi : source=my/handled
+  TodoAdapters ..> WorkflowApi : source=sent
+  TodoAdapters ..> WfInstanceId : 解析 instanceId
+  PortalMessageTab "1" --> "1" MessageDetailDrawer : 行点击打开
+  PortalMessageTab ..> MessagesApi
+  MessageDetailDrawer ..> MessagesApi : detail/replyMessage
+  MessageDetailDrawer ..> WorkflowApi : fetchProcessDetail(流程通知)
+  TodoDetailDrawer "1" --> "1" ProcessShell : variant=embedded
+  ProcessShell ..> WorkflowApi : fetchProcessDetail
+  ProcessShell ..> TasksApi : transferTask(转办)
+  ProcessShell ..> WfInstanceId
+
+  AppLayout ..> PortalPage : KeepAliveOutlet 渲染
+
+  MessageService ..> SysMessage
+  ProcessService ..> WfHistory : recordHistory(OP_COMMENT)
+  ProcessService ..> MessageService : notify -> publish(instanceId)
+  ProcessService ..> WfHistoryRepository
+  ProcessService ..> WfTask : myPendingTask.sysTaskId
+  TaskService ..> SysTaskRepository
+  ProcessService ..> WfInstanceRepository
+  MessageService ..> SysMessageRepository
+
+  BffMessageController ..> BffTaskflowWebClient
+  BffTaskflowWebClient ..> MessageService : /internal/v1/messages/{id}/reply

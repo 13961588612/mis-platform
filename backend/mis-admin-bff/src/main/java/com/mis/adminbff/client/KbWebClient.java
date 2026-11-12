@@ -63,7 +63,6 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriBuilder;
-import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
@@ -545,18 +544,11 @@ public class KbWebClient extends AbstractDownstreamClient {
      */
     public KbDocumentChunksVO listDocumentChunks(
             Long libraryId, Long id, String keywords, int page, int pageSize) {
-        String uri = UriComponentsBuilder
-                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunks")
-                .queryParam("page", Math.max(page, 1))
-                .queryParam("pageSize", Math.max(pageSize, 1))
-                .queryParamIfPresent("keywords",
-                        keywords == null || keywords.isBlank()
-                                ? java.util.Optional.empty()
-                                : java.util.Optional.of(keywords))
-                .buildAndExpand(libraryId, id)
-                .toUriString();
         return block(client().get()
-                .uri(uri)
+                .uri(queryUri("/internal/v1/kb/libraries/" + libraryId + "/documents/" + id + "/chunks",
+                        "page", Math.max(page, 1),
+                        "pageSize", Math.max(pageSize, 1),
+                        "keywords", keywords))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(DOCUMENT_CHUNKS));
@@ -623,13 +615,9 @@ public class KbWebClient extends AbstractDownstreamClient {
     }
 
     public void setDocumentEnabled(Long libraryId, Long id, boolean enabled) {
-        String uri = UriComponentsBuilder
-                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/{id}/enable")
-                .queryParam("enabled", enabled)
-                .buildAndExpand(libraryId, id)
-                .toUriString();
         block(client().put()
-                .uri(uri)
+                .uri(queryUri("/internal/v1/kb/libraries/" + libraryId + "/documents/" + id + "/enable",
+                        "enabled", enabled))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(VOID));
@@ -651,13 +639,9 @@ public class KbWebClient extends AbstractDownstreamClient {
      * @return 批量结果
      */
     public KbReparseAllResultVO reparseAllDocuments(Long libraryId, boolean onlyFailed) {
-        String uri = UriComponentsBuilder
-                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/reparse-all")
-                .queryParam("onlyFailed", onlyFailed)
-                .buildAndExpand(libraryId)
-                .toUriString();
         return block(client().post()
-                .uri(uri)
+                .uri(queryUri("/internal/v1/kb/libraries/" + libraryId + "/documents/reparse-all",
+                        "onlyFailed", onlyFailed))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(REPARSE_ALL));

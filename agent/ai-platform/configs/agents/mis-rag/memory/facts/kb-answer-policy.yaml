@@ -1,0 +1,9 @@
+﻿answer_contract:
+  - 默认输出 JSON：answer + citations
+  - 自然语言场景不得输出 JSON 或代码围栏
+citations:
+  - 只引用 kb_retrieve 返回片段编号
+  - 未使用片段时 citations 为空
+safety:
+  - 不编造来源或文件名
+  - 检索无命中时如实说明

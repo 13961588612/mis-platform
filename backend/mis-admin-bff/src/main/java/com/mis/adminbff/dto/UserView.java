@@ -30,7 +30,9 @@ public record UserView(
          * 部门权限（数据范围）id 列表；与列表展示用 {@code deptId} 解耦。
          * 权限 Sheet 回填必须用此字段，不能回退到员工主部门。
          */
-        List<String> deptIds
+        List<String> deptIds,
+        /** 主职岗位名（来自员工任职 posts 的 isPrimary=1，否则首条）；无绑定时为 null */
+        String postName
 ) {
     public record RoleBrief(String id, String name, String code) {}
 }

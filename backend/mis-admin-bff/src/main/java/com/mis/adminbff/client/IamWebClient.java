@@ -34,6 +34,10 @@ public class IamWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<Long>>> LONG_LIST =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<com.mis.adminbff.client.model.UserBrief>>> USER_BRIEFS =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<com.mis.adminbff.client.model.PhoneUser>>> PHONE_USERS =
+            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<UserPermissionsDTO>> USER_PERMISSIONS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<RoleDataScopeVO>> ROLE_DATA_SCOPE =
@@ -135,6 +139,26 @@ public class IamWebClient extends AbstractDownstreamClient {
                 })
                 .retrieve()
                 .bodyToMono(USER_PAGE));
+    }
+
+    /**
+     * 按手机号查「正常状态」账号（D12 手机号匹配，02 §5.3 / 03 §5.2 口径）。
+     *
+     * <p>复用 {@link #pageUsers} 的 {@code status=1}（正常）过滤；mis-iam 侧
+     * {@code SysUser} 带 {@code @SQLRestriction("deleted = 0")}，已自动排除软删除。
+     * 返回同一手机号下全部正常账号，由调用方按「=1 映射 / >1 40301 / =0 40301」判定。
+     *
+     * @param tenantId 租户（必填；D12 宿主注册行配置 {@code tenant_id}）
+     * @param phone    明文手机号（仅内存瞬时使用）
+     * @return 正常状态账号列表（分页第 1 页，最多 100 条）
+     */
+    public List<IamUserVO> findNormalUsersByPhone(Long tenantId, String phone) {
+        if (tenantId == null || phone == null || phone.isBlank()) {
+            return List.of();
+        }
+        PageResult<IamUserVO> page = pageUsers(
+                tenantId, null, 1, null, null, phone, null, null, 1, 100);
+        return page != null && page.getList() != null ? page.getList() : List.of();
     }
 
     /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
@@ -255,6 +279,65 @@ public class IamWebClient extends AbstractDownstreamClient {
                 .uri(queryUri("/internal/v1/apps", "tenantId", tenantId, "kind", kind))
                 .retrieve()
                 .bodyToMono(APP_LIST));
+        return data != null ? data : List.of();
+    }
+
+    public List<Long> enabledUserIds(Long tenantId, Long appId) {
+        List<Long> data = block(client().get()
+                .uri(uriBuilder -> uriBuilder.path("/internal/v1/users/enabled-ids")
+                        .queryParam("tenantId", tenantId)
+                        .queryParam("appId", appId)
+                        .build())
+                .retrieve().bodyToMono(LONG_LIST));
+        return data != null ? data : List.of();
+    }
+
+    public List<Long> enabledUserIdsAmong(Long tenantId, Long appId, List<Long> ids) {
+        return postEnabled("/internal/v1/users/enabled-ids/among", tenantId, appId, ids);
+    }
+
+    public List<Long> enabledUserIdsByEmployees(Long tenantId, Long appId, List<Long> employeeIds) {
+        return postEnabled("/internal/v1/users/enabled-ids/by-employees", tenantId, appId, employeeIds);
+    }
+
+    public List<com.mis.adminbff.client.model.PhoneUser> enabledUsersByPhones(Long tenantId, Long appId, List<String> phones) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("appId", appId);
+        body.put("phones", phones);
+        List<com.mis.adminbff.client.model.PhoneUser> data = block(client().post()
+                .uri("/internal/v1/users/enabled-by-phones")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(PHONE_USERS));
+        return data != null ? data : List.of();
+    }
+
+    public List<com.mis.adminbff.client.model.UserBrief> userBriefs(Long tenantId, List<Long> ids) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("ids", ids);
+        List<com.mis.adminbff.client.model.UserBrief> data = block(client().post()
+                .uri("/internal/v1/users/briefs")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(USER_BRIEFS));
+        return data != null ? data : List.of();
+    }
+
+    private List<Long> postEnabled(String path, Long tenantId, Long appId, List<Long> ids) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("appId", appId);
+        body.put("ids", ids);
+        List<Long> data = block(client().post()
+                .uri(path)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(LONG_LIST));
         return data != null ? data : List.of();
     }
 

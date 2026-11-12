@@ -41,8 +41,10 @@ def client_and_base(
     monkeypatch.setattr(fs, "get_settings", lambda: settings)
     monkeypatch.setattr(src_config, "get_settings", lambda: settings, raising=False)
 
+    from unittest.mock import AsyncMock
+
     mgr = MagicMock()
-    mgr.reload_agent = MagicMock(return_value=MagicMock())
+    mgr.reload_agent = AsyncMock(return_value=(MagicMock(), None))
     monkeypatch.setattr(fs, "get_config_manager", lambda: mgr)
 
     app = FastAPI()
@@ -112,7 +114,38 @@ def test_write_config_file_ok(
 
     assert resp.status_code == 200
     assert resp.json()["data"]["reloaded"] is True
-    mgr.reload_agent.assert_called_once_with("a1")
+    mgr.reload_agent.assert_awaited_once_with("a1")
+
+
+def test_write_metadata_yaml_does_not_require_agent_fields(
+    client_and_base: tuple[TestClient, Path, MagicMock]
+) -> None:
+    """metadata.yaml 根节点是 metadata:，不得误用 agent.yaml schema。"""
+    client, base, mgr = client_and_base
+    agent_dir = _seed_agent(base, "a1")
+    (agent_dir / "metadata.yaml").write_text(
+        "metadata:\n  name: a1\n  display_name: A1\n",
+        encoding="utf-8",
+    )
+    content = (
+        "metadata:\n"
+        "  name: a1\n"
+        "  display_name: A1\n"
+        "  description: worker catalog\n"
+        "  enabled: true\n"
+    )
+
+    resp = client.put(
+        "/api/v1/agents/a1/config-files/metadata.yaml",
+        json={"content": content},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 0
+    saved = (agent_dir / "metadata.yaml").read_text(encoding="utf-8")
+    assert "metadata:" in saved
+    assert "agent:" not in saved
+    mgr.reload_agent.assert_awaited()
 
 
 def test_write_config_file_path_escape_rejected(

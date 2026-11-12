@@ -10,18 +10,17 @@ FastAPI 应用入口。
 """
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from src.agent.manager import AgentManager
@@ -31,7 +30,11 @@ from src.hitl.approval import ApprovalManager
 from src.llm.gateway import LLMGateway
 from src.push.scheduler import PushScheduler
 from src.router.agent_router import AgentRouter
-from src.utils.logging import configure_logging
+from src.utils.logging import (
+    classify_request_log_bucket,
+    configure_logging,
+    set_log_bucket,
+)
 
 # ===== 生命周期管理 =====
 
@@ -131,12 +134,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("ConfigManager init deferred", error=str(exc))
 
     # 初始化 PushScheduler
+    memory_forget_job_id: str = "agent-memory-forget-cycle"
     try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.memory.manager import get_memory_manager
         from src.push.scheduler import get_push_scheduler
 
         push_scheduler: PushScheduler = get_push_scheduler()
         await push_scheduler.start()
-        logger.info("PushScheduler started")
+        scheduler: Any = getattr(push_scheduler, "_scheduler", None)
+        if scheduler is None:
+            raise RuntimeError("PushScheduler does not expose _scheduler")
+        scheduler.add_job(
+            get_memory_manager().run_forget_cycle,
+            trigger=IntervalTrigger(hours=1, timezone=settings.SCHEDULER_TIMEZONE),
+            id=memory_forget_job_id,
+            name="Agent memory forget cycle",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("PushScheduler started", memory_forget_job_id=memory_forget_job_id)
     except Exception as exc:
         logger.warning("PushScheduler init deferred", error=str(exc))
 
@@ -252,7 +271,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     await asyncio.sleep(settings.AGENT_RESYNC_S)
                     # 重认领孤儿租约 + 起本 core 新拥有的 agent 运行时 + 刷注册表。
                     await agent_manager.sync_from_configs(
-                        config_manager.list_configs()
+                        config_manager.list_configs(),
+                        quiet=True,
                     )
                     # 重新订阅本 core 拥有的 agent 流（崩溃 Core 易主后及时接管）。
                     worker: Any = get_inbound_stream_worker()
@@ -278,10 +298,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("Startup phase complete")
 
+    # ===== 方案 A 多连接：WrenAI MCP 进程引导（T4/T5）=====
+    # 批量拉起所有启用连接的 MCP 进程 + 启动后台健康监督循环（崩溃重启 + 状态回写）。
+    # 单连接启动失败（如 MDL 未构建）不阻断 Worker 主进程；best-effort。
+    mcp_stop_event: Any = None
+    mcp_health_task: Any = None
+    reconcile_stop_event: Any = None
+    reconcile_task: Any = None
+    try:
+        from src.agent.mis_iqd.bootstrap import (
+            bulk_start_enabled_iqd_mcp,
+            start_iqd_mcp_reconciler,
+            start_iqd_mcp_supervisor,
+        )
+
+        await bulk_start_enabled_iqd_mcp()
+        mcp_stop_event, mcp_health_task = await start_iqd_mcp_supervisor()
+        # 跨机器部署 reconcile 循环（仅远程模式生效）：对账 agent 部署状态并回写 mis-iqd
+        reconcile_stop_event, reconcile_task = await start_iqd_mcp_reconciler()
+        logger.info("IQD MCP bootstrap complete")
+    except Exception as exc:
+        logger.warning("IQD MCP bootstrap deferred", error=str(exc))
+
     yield
 
     # --- 关闭阶段 ---
     logger.info("Application shutting down")
+
+    # ===== 方案 A 多连接：WrenAI MCP 进程优雅关闭（T4/T5）=====
+    # 先停健康监督循环（避免关闭期再触发重启），再 stop_all 回收端口 + 回写 stopped。
+    try:
+        from src.agent.mis_iqd.bootstrap import shutdown_iqd_mcp
+
+        await shutdown_iqd_mcp(mcp_stop_event, mcp_health_task)
+        # 停止跨机器部署 reconcile 循环（置 stop_event + 取消任务）
+        await shutdown_iqd_mcp(reconcile_stop_event, reconcile_task)
+        logger.info("IQD MCP shutdown complete")
+    except Exception as exc:
+        logger.warning("IQD MCP shutdown error", error=str(exc))
 
     # 先取消 agent 故障转移再对齐循环（T9 收口），避免其在拆除 worker / 释放租约期间
     # 再触发 sync_from_configs / refresh_streams 产生竞态。
@@ -394,21 +448,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ===== Trace ID 中间件 =====
+    # ===== Trace ID + 日志分桶中间件 =====
     @app.middleware("http")
     async def add_trace_id(request: Request, call_next: Any) -> Any:
-        """为每个请求注入 traceId 以支持分布式追踪。"""
+        """为每个请求注入 traceId，并按路径把日志写入 chat/sys 文件。"""
         import uuid
 
         trace_id: str = request.headers.get("X-Trace-Id", str(uuid.uuid4()))
+        log_bucket = classify_request_log_bucket(request.url.path)
+        set_log_bucket(log_bucket)
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             trace_id=trace_id,
             service=settings.APP_NAME,
+            log_bucket=log_bucket,
         )
-        response: Any = await call_next(request)
-        response.headers["X-Trace-Id"] = trace_id
-        return response
+        try:
+            response: Any = await call_next(request)
+            response.headers["X-Trace-Id"] = trace_id
+            return response
+        finally:
+            # 请求结束后回到默认 sys，避免同任务后续日志误入 chat
+            set_log_bucket("sys")
 
     # ===== 健康检查端点 =====
     @app.get("/health", tags=["system"])
@@ -482,11 +543,20 @@ def create_app() -> FastAPI:
     from src.api.routes.auth import router as auth_router
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
+    from src.api.routes.iqd_credentials import router as iqd_credentials_router
+    from src.api.routes.iqd_db_profile_test import router as iqd_db_profile_test_router
+    from src.api.routes.iqd_discovery import router as iqd_discovery_router
+    from src.api.routes.iqd_enhance import router as iqd_enhance_router
+    from src.api.routes.iqd_mcp_manager import router as iqd_mcp_manager_router
+    from src.api.routes.iqd_scope_dict_sync import router as iqd_scope_dict_sync_router
+    from src.api.routes.iqd_scope_preview import router as iqd_scope_preview_router
+    from src.api.routes.iqd_selfheal import router as iqd_selfheal_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
     from src.api.routes.push import router as push_router
     from src.api.routes.session import router as session_router
     from src.api.routes.skill import router as skill_router
+    from src.api.routes.speech import router as speech_router
 
     app.include_router(agent_router, prefix="/api/v1")
     app.include_router(agent_config_files_router, prefix="/api/v1")
@@ -495,12 +565,29 @@ def create_app() -> FastAPI:
     # T04 O1f：企微多 Bot 管理（#48–#54），BFF /agent-ops/channels/** 透传至此
     app.include_router(channels_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")
+    app.include_router(speech_router, prefix="/api/v1")
     app.include_router(skill_router, prefix="/api/v1/skills", tags=["skills"])
     app.include_router(mcp_router, prefix="/api/v1/mcp", tags=["mcp"])
     app.include_router(admin_router, prefix="/api/v1")
     app.include_router(push_router, prefix="/api/v1")
     # 阶段1 认证对齐：受 MIS RS256 保护的业务能力端点（供 BFF 适配层调用）
     app.include_router(mis_capability_router, prefix="/api/v1")
+    # v1.10 样本对方言转化 + 试运行（BFF → AiPlatformClient → 本路由 → MisIqdService）
+    app.include_router(iqd_enhance_router, prefix="/api/v1")
+    # 运维自愈三按钮（BFF → AiPlatformClient → 本路由 → IqdAskService）
+    app.include_router(iqd_selfheal_router, prefix="/api/v1")
+    app.include_router(iqd_scope_preview_router, prefix="/api/v1")
+    # dept ?????mis-iqd ???? -> ??? mis_dept_scope?BFF -> ????
+    app.include_router(iqd_scope_dict_sync_router, prefix="/api/v1")
+    # v1.11 建模台表发现通道（BFF → AiPlatformDiscoveryClient → 本路由 → IqdDiscoveryService）；
+    # 路由自带前缀 /iqd/discovery，挂载后为 /api/v1/iqd/discovery/**
+    app.include_router(iqd_discovery_router, prefix="/api/v1")
+    # Tab① 数据库连接配置：连通性测试（BFF → 本路由 → 直连业务库）
+    app.include_router(iqd_db_profile_test_router, prefix="/api/v1")
+    # 方案 A 多连接：WrenAI MCP 连接级生命周期管理（BFF → AiPlatformClient → 本路由）
+    app.include_router(iqd_mcp_manager_router, prefix="/api/v1")
+    # 路线 A：问数连接凭证保险库（BFF → AiPlatformClient → 本路由 → CredentialVault）
+    app.include_router(iqd_credentials_router, prefix="/api/v1")
 
     # ===== 统一 API 响应格式 =====
     # 所有 API 响应遵循：{ code, data, message, traceId }

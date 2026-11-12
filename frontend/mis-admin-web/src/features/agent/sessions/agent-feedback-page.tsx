@@ -486,6 +486,8 @@ export function AgentFeedbackPage() {
               <option value="web">网页</option>
               <option value="wecom">企业微信</option>
               <option value="api">API</option>
+              <option value="iqd_test">问数测试</option>
+              <option value="kb_test">问答测试</option>
               <option value="unknown">未知</option>
             </select>
           </div>

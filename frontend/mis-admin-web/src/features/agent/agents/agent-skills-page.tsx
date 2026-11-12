@@ -27,9 +27,32 @@ import { SubmitButton } from '@/components/common/submit-button';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { AgentContentState } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
-import { getAgentSkills, listSkills, saveAgentSkills } from '../api/agent-ops-api';
+import {
+  getAgentSkills,
+  getSkill,
+  isMcpSkillId,
+  listSkills,
+  listSkillsMcpOnly,
+  saveAgentSkills,
+} from '../api/agent-ops-api';
 import { agentErrorMessage } from '../types';
 import type { AgentSkillBinding, Skill } from '../types';
+
+function isRegistryMissing(skill: Skill | null | undefined): boolean {
+  return skill?.tags?.includes('registry_missing') === true;
+}
+
+/** 合并多源技能列表（后写不覆盖先写，保留更完整的全局池字段）。 */
+function mergeSkillMaps(...lists: Skill[][]): Skill[] {
+  const map = new Map<string, Skill>();
+  for (const list of lists) {
+    for (const s of list) {
+      if (!s?.skill_id) continue;
+      if (!map.has(s.skill_id)) map.set(s.skill_id, s);
+    }
+  }
+  return [...map.values()];
+}
 
 export interface AgentSkillsPageProps {
   agentId: string;
@@ -77,41 +100,79 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
   const [bindError, setBindError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const loadPool = useCallback(async () => {
-    setPoolLoading(true);
-    setPoolError(null);
-    try {
-      setPool(await listSkills());
-    } catch (e) {
-      setPoolError(agentErrorMessage(e, '获取技能池失败'));
-    } finally {
-      setPoolLoading(false);
-    }
-  }, []);
-
-  const loadBindings = useCallback(async () => {
+  const loadPoolAndBindings = useCallback(async () => {
     if (!agentId) return;
+    setPoolLoading(true);
     setBindLoading(true);
+    setPoolError(null);
     setBindError(null);
     try {
-      const list = await getAgentSkills(agentId);
-      const map = toBindingMap(list);
-      setBindings(map);
-      setBaseline(new Map(map));
-    } catch (e) {
-      setBindError(agentErrorMessage(e, '获取 Agent 技能绑定失败'));
+      // 全局池 + 显式拉 MCP source（动态发现技能）+ Agent 绑定快照里的 pool
+      const [globalResult, mcpResult, snapshotResult] = await Promise.allSettled([
+        listSkills(),
+        listSkillsMcpOnly(),
+        getAgentSkills(agentId),
+      ]);
+
+      if (snapshotResult.status === 'rejected') {
+        setBindError(agentErrorMessage(snapshotResult.reason, '获取 Agent 技能绑定失败'));
+      }
+
+      const globalPool = globalResult.status === 'fulfilled' ? globalResult.value : [];
+      const mcpPool = mcpResult.status === 'fulfilled' ? mcpResult.value : [];
+      if (
+        globalResult.status === 'rejected' &&
+        mcpResult.status === 'rejected' &&
+        snapshotResult.status === 'rejected'
+      ) {
+        setPoolError(agentErrorMessage(globalResult.reason, '获取技能池失败'));
+      }
+
+      const snapshot =
+        snapshotResult.status === 'fulfilled'
+          ? snapshotResult.value
+          : { bindings: [] as AgentSkillBinding[], pool: [] as Skill[] };
+
+      let merged = mergeSkillMaps(globalPool, mcpPool, snapshot.pool);
+
+      // 仍缺的已绑定技能：按 ID 回填（避免分页/时序导致假「池中不存在」）
+      const missingIds = snapshot.bindings
+        .map((b) => b.skill_id)
+        .filter((id) => !merged.some((s) => s.skill_id === id));
+      if (missingIds.length > 0) {
+        const hydrated = await Promise.all(
+          missingIds.map(async (sid) => {
+            try {
+              return await getSkill(sid);
+            } catch {
+              return null;
+            }
+          }),
+        );
+        merged = mergeSkillMaps(
+          merged,
+          hydrated.filter((s): s is Skill => s != null),
+        );
+      }
+
+      setPool(merged);
+      if (snapshotResult.status === 'fulfilled') {
+        const map = toBindingMap(snapshot.bindings);
+        setBindings(map);
+        setBaseline(new Map(map));
+      }
     } finally {
+      setPoolLoading(false);
       setBindLoading(false);
     }
   }, [agentId]);
 
   useEffect(() => {
-    void loadPool();
-  }, [loadPool]);
+    void loadPoolAndBindings();
+  }, [loadPoolAndBindings]);
 
-  useEffect(() => {
-    void loadBindings();
-  }, [loadBindings]);
+  const loadPool = loadPoolAndBindings;
+  const loadBindings = loadPoolAndBindings;
 
   /** skill_id → 池内状态，用于置灰与提交时回填 `skill_status`。 */
   const poolStatus = useMemo(() => {
@@ -169,10 +230,20 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
     setSaving(true);
     try {
       const saved = await saveAgentSkills(agentId, toBindingList(bindings, poolStatus));
-      const map = toBindingMap(saved);
+      // 以 GET 回读为准，避免「PUT 回显成功但磁盘/热更新未对齐」造成假成功
+      const snapshot = await getAgentSkills(agentId);
+      setPool((prev) => mergeSkillMaps(prev, snapshot.pool));
+      const map = toBindingMap(snapshot.bindings);
       setBindings(map);
       setBaseline(new Map(map));
-      toast.success('已保存技能绑定');
+      if (!saved.reload_ok) {
+        toast.warning(
+          saved.reload_warning ||
+            `已保存技能绑定（${map.size} 项），但热重载失败，新会话或重启 Agent 后生效`,
+        );
+      } else {
+        toast.success(`已保存技能绑定（${map.size} 项）`);
+      }
     } catch (e) {
       toast.error(agentErrorMessage(e, '保存 Agent 技能绑定失败'));
     } finally {
@@ -336,8 +407,13 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
             >
               <ul className="divide-y">
                 {boundRows.map((row) => {
-                  const offline = row.skill !== null && row.skill.status !== 'active';
+                  const registryMissing = isRegistryMissing(row.skill);
+                  const offline =
+                    row.skill !== null &&
+                    row.skill.status !== 'active' &&
+                    !registryMissing;
                   const missing = row.skill === null;
+                  const mcpGone = (missing || registryMissing) && isMcpSkillId(row.skillId);
                   return (
                     <li key={row.skillId} className="px-3 py-2 text-sm">
                       <div className="flex items-start gap-2">
@@ -359,6 +435,11 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
                                 已停用
                               </span>
                             )}
+                            {isMcpSkillId(row.skillId) ? (
+                              <span className="rounded-md border px-1.5 py-0.5 text-[0.7rem] text-muted-foreground">
+                                MCP
+                              </span>
+                            ) : null}
                           </div>
                           <div className="truncate font-mono text-xs text-muted-foreground">
                             {row.skillId}
@@ -370,10 +451,24 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
                               该技能在技能池中已停用，绑定保留但不会生效。
                             </p>
                           ) : null}
-                          {missing ? (
+                          {mcpGone ? (
+                            <p className="mt-1 flex items-start gap-1 text-xs text-warning">
+                              <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
+                              MCP 工具未在技能注册表中（动态发现仅存内存）。请到「MCP 管理」对
+                              该 Server 重新「发现」后刷新本页；不必取消绑定。
+                            </p>
+                          ) : null}
+                          {missing && !mcpGone ? (
                             <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
                               <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
                               技能池中已不存在该技能，建议取消绑定。
+                            </p>
+                          ) : null}
+                          {registryMissing && !mcpGone ? (
+                            <p className="mt-1 flex items-start gap-1 text-xs text-warning">
+                              <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
+                              {row.skill?.description ||
+                                '技能未加载到注册表，绑定保留但当前不会生效。'}
                             </p>
                           ) : null}
                         </div>

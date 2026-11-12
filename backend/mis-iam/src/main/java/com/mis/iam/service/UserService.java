@@ -178,7 +178,9 @@ public class UserService {
                 rolePermissionRepository.findTargetIdsByUserIdAndPermType(
                         userId, SysRolePermission.PermType.org),
                 rolePermissionRepository.findTargetIdsByUserIdAndPermType(
-                        userId, SysRolePermission.PermType.dept));
+                        userId, SysRolePermission.PermType.dept),
+                rolePermissionRepository.findTargetIdsByUserIdAndPermType(
+                        userId, SysRolePermission.PermType.store));
     }
 
     @Transactional(readOnly = true)
@@ -518,6 +520,62 @@ public class UserService {
 
     private static boolean isTenantAdmin(SysUser user) {
         return user.getIsTenantAdmin() != null && user.getIsTenantAdmin() == 1;
+    }
+
+
+    @Transactional(readOnly = true)
+    public List<PhoneUser> enabledByPhones(Long tenantId, Long appId, List<String> phones) {
+        if (phones == null || phones.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findEnabledByPhones(tenantId, appId, phones).stream()
+                .map(u -> new PhoneUser(u.getId(), u.getPhone(), u.getUsername(), u.getRealName()))
+                .toList();
+    }
+
+    public record PhoneUser(Long id, String phone, String username, String realName) {
+    }
+
+    /** 当前应用下启用用户，供消息全员发送。 */
+    @Transactional(readOnly = true)
+    public List<Long> enabledIds(Long tenantId, Long appId) {
+        return userRepository.findEnabledIds(tenantId, appId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Long> enabledIdsAmong(Long tenantId, Long appId, List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findEnabledIdsAmong(tenantId, appId, userIds);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Long> enabledIdsByEmployees(Long tenantId, Long appId, List<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findEnabledIdsByEmployeeIds(tenantId, appId, employeeIds);
+    }
+
+    @Transactional(readOnly = true)
+    public List<UserBrief> briefs(Long tenantId, List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findByTenantIdAndIdIn(tenantId, userIds).stream()
+                .map(u -> new UserBrief(u.getId(), u.getUsername(), u.getRealName()))
+                .toList();
+    }
+
+    public record UserBrief(Long id, String username, String realName) {
+    }
+
+    /** Retrieve the bound employeeId for a user (for mis-org DataSetScopeService). */
+    @Transactional(readOnly = true)
+    public Long resolveEmployeeId(Long userId) {
+        SysUser user = requireUser(userId);
+        return user.getEmployeeId();
     }
 
     private SysUser requireUser(Long id) {

@@ -34,7 +34,7 @@
 | F6 | TS gateway `EventTransformer`：H5 渠道 `ui.render` **原样透传**（`toH5Event` 返回 `eventData: event`，不渲染）；Bot 渠道 `ui.render` 降级为 `template_card` | `agent/ai-platform/gateway/src/router/EventTransformer.ts` | gateway 对 A2UI = 透明承载，不渲染 |
 | F7 | gateway 路由：`/ws/chat`(WS, **需鉴权**, token 取自 `?token=` 查询或 `Authorization` 头)、`/api/messages/send`(REST 兜底)、`/api/events/stream`(SSE)、`/health*`、`/auth/wecom/*`；CORS `credentials:true` + 允许 `Authorization/X-Trace-Id/X-Channel` 头 | `agent/ai-platform/gateway/src/server.ts` | 决定嵌入鉴权与跨域策略 |
 | F8 | gateway 鉴权：本地 **HS256** 验签（`jwtSecret`+`jwtIssuer`），`JwtClaims.iss` 强校验；`extractToken` 支持 `Bearer` 头与 `?token=` 查询；`PUBLIC_PATHS` 含 `/auth/login`、`/auth/refresh`、`/auth/wecom/*` | `agent/ai-platform/gateway/src/middleware/auth.ts` | **gateway 当前不接受 MIS JWT（RS256）**——嵌入鉴权模型的核心待决项 |
-| F9 | H5 `useChat` 对 `ui.render` **仅插入占位文本 `[UI: <component>]`**（渲染为桩）；`cardAdapter` 负责 snake→camel 转换；`useAuth` 走 H5 自有 `/auth/login` 或企微 OAuth | `agent/ai-platform/frontend/src/hooks/useChat.ts`、`utils/cardAdapter.ts`、`hooks/useAuth.ts` | **A2UI 消费侧渲染器（component registry）尚未实现**——决策二落地缺口 |
+| F9 | H5 `useChat` 对 `ui.render` **仅插入占位文本 `[UI: <component>]`**（渲染为桩）；`cardAdapter` 负责 snake→camel 转换；`useAuth` 走 H5 自有 `/auth/login` 或企微 OAuth | 旧独立 H5 前端（T11 已退役删除；`useChat`/`cardAdapter`/`useAuth` 逻辑已迁入 mis-admin-web `features/agent/ai`） | **A2UI 消费侧渲染器（component registry）尚未实现**——决策二落地缺口 |
 | F10 | 迁移工具分工：MIS 用 **Flyway**（Java，管 `mis_platform` 等）；ai-platform 用 **Alembic**（Python，管其 schema） | 既有文档 + 读码 | PG 共享须「同实例 + 异库 + 异迁移工具」隔离 |
 
 ---

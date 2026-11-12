@@ -5,6 +5,7 @@ import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.client.SystemWebClient;
 import com.mis.adminbff.client.model.ConfigVO;
 import com.mis.adminbff.client.model.DeptVO;
+import com.mis.adminbff.client.model.EmployeePostVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.EmployeeBindingCheck;
 import com.mis.adminbff.client.model.IamRoleVO;
@@ -322,6 +323,7 @@ public class UserAggregateService {
             // 权限 Sheet 回填：透传 IAM 用户组织/部门权限（与列表展示用 orgId/deptId 解耦）
             List<String> permissionOrgIds = sanitizeIdList(user.orgIds());
             List<String> permissionDeptIds = sanitizeIdList(user.deptIds());
+            String postName = resolvePrimaryPostName(emp);
             result.add(new UserView(
                     user.id(),
                     user.username(),
@@ -340,9 +342,26 @@ public class UserAggregateService {
                     user.createdAt(),
                     user.appId(),
                     permissionOrgIds,
-                    permissionDeptIds));
+                    permissionDeptIds,
+                    postName));
         }
         return result;
+    }
+
+    /** 主职岗位名：优先 isPrimary=1，否则取任职列表首条。 */
+    private static String resolvePrimaryPostName(EmployeeVO emp) {
+        if (emp == null || emp.posts() == null || emp.posts().isEmpty()) {
+            return null;
+        }
+        return emp.posts().stream()
+                .filter(p -> p != null && Integer.valueOf(1).equals(p.isPrimary()))
+                .map(EmployeePostVO::postName)
+                .filter(n -> n != null && !n.isBlank())
+                .findFirst()
+                .orElseGet(() -> {
+                    String name = emp.posts().get(0).postName();
+                    return name != null && !name.isBlank() ? name : null;
+                });
     }
 
     private static Long toLongOrNull(String v) {

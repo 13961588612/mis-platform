@@ -105,6 +105,12 @@ class LLMGateway:
     ) -> LLMRequest:
         """跨 provider 故障转移时使用 provider 对应的模型。"""
         model: Any = request.model
+        if (
+            request.provider
+            and request.provider.lower() == provider.lower()
+            and provider not in model.lower()
+        ):
+            return request
         if provider not in model.lower():
             model = self._model_for_provider(provider)
         if model == request.model:
@@ -127,6 +133,14 @@ class LLMGateway:
             return "qwen"
         # 默认使用 failover manager 的当前活跃 provider
         return self._failover_manager.get_active_provider()
+
+    def _ordered_providers_for_request(self, request: LLMRequest) -> list[str]:
+        """按显式 provider 或模型名中的 provider 优先排序，再做 failover。"""
+        base = self._failover_manager.get_failover_providers()
+        requested = (request.provider or self._select_provider(request.model) or "").lower()
+        if requested not in self._adapters:
+            return base
+        return [requested, *[p for p in base if p != requested]]
 
     def _check_quota(self, request: LLMRequest) -> None:
         """
@@ -171,7 +185,7 @@ class LLMGateway:
         )
 
         # 获取要尝试的 provider 有序列表（活跃 + 备用）
-        providers: list[str] = self._failover_manager.get_failover_providers()
+        providers: list[str] = self._ordered_providers_for_request(request)
 
         last_error: Exception | None = None
         for provider in providers:
@@ -250,7 +264,7 @@ class LLMGateway:
             estimated_tokens=request.max_tokens,
         )
 
-        providers: list[str] = self._failover_manager.get_failover_providers()
+        providers: list[str] = self._ordered_providers_for_request(request)
         total_usage: TokenUsage = TokenUsage()
         provider_used: str = ""
         success: bool = False

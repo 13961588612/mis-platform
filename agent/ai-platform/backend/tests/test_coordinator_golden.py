@@ -66,8 +66,10 @@ EXPECTED_ROLES: dict[str, AgentRole] = {
     "mis-summary": AgentRole.WORKER,
     "mis-admin-helper": AgentRole.WORKER,
     "mis-user-helper": AgentRole.WORKER,
+    "mis-iqd": AgentRole.WORKER,
+    "bgbh-analyst": AgentRole.WORKER,
 }
-"""7 个 Agent 的期望调度角色（T04 验收：role 解析正确；1.3/1.4 新增两个 helper）。"""
+"""9 个 Agent 的期望调度角色（含百购分析 Worker bgbh-analyst）。"""
 
 LAZY_DELEGATION_CORPUS: tuple[str, ...] = (
     "帮我查一下",
@@ -301,25 +303,14 @@ async def _load_configs(base_path: Path) -> tuple[list[AgentConfig], MagicMock]:
 def _patch_catalog_sources(
     monkeypatch: pytest.MonkeyPatch,
     configs: list[AgentConfig],
-    whitelist: list[str],
+    whitelist: list[str] | None = None,
 ) -> None:
-    """把 Catalog 的两个数据源（ConfigManager / Settings）替换为替身。
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture。
-        configs: `list_configs()` 返回的配置列表。
-        whitelist: `INVOKE_AGENT_WHITELIST` 配置值。
-    """
+    """把 Catalog 的 ConfigManager 数据源替换为替身（``whitelist`` 已忽略）。"""
+    del whitelist
     fake_manager = SimpleNamespace(list_configs=lambda: list(configs))
     monkeypatch.setattr(
         "src.config_manager.manager.get_config_manager",
         lambda: fake_manager,
-        raising=True,
-    )
-    monkeypatch.setattr(
-        catalog_module,
-        "get_settings",
-        lambda: SimpleNamespace(INVOKE_AGENT_WHITELIST=list(whitelist)),
         raising=True,
     )
 
@@ -778,7 +769,7 @@ async def test_too_short_goal_is_rejected_in_strict_mode() -> None:
 
 
 async def test_repo_configs_load_five_agents_without_warning() -> None:
-    """真实 configs 目录可加载 7 个 Agent，且加载过程无告警/报错。"""
+    """真实 configs 目录可加载全部 Agent，且加载过程无告警/报错。"""
     configs, logger_spy = await _load_configs(REPO_CONFIGS)
     agent_ids = sorted(config.agent_id for config in configs)
 
@@ -788,7 +779,7 @@ async def test_repo_configs_load_five_agents_without_warning() -> None:
 
 
 async def test_repo_configs_declare_expected_roles() -> None:
-    """7 个 Agent 的 role 解析正确：1 个 Coordinator + 6 个 Worker。"""
+    """全部 Agent 的 role 解析正确：1 个 Coordinator，其余为 Worker。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     roles = {config.agent_id: config.role for config in configs}
 
@@ -797,7 +788,7 @@ async def test_repo_configs_declare_expected_roles() -> None:
 
 
 async def test_worker_metadata_declares_delegation_contract() -> None:
-    """6 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
+    """Worker 的委派契约齐备，且 when_to_use 互不重复。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     workers = {
         config.agent_id: config.metadata
@@ -805,7 +796,13 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
         if config.role is AgentRole.WORKER
     }
 
-    assert set(workers) == {*DEFAULT_WHITELIST, "mis-admin-helper", "mis-user-helper"}
+    assert set(workers) == {
+        *DEFAULT_WHITELIST,
+        "mis-admin-helper",
+        "mis-user-helper",
+        "mis-iqd",
+        "bgbh-analyst",
+    }
     hints: list[str] = []
     for agent_id, metadata in workers.items():
         assert metadata is not None, agent_id
@@ -820,20 +817,23 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
     assert workers["crm-assistant"].safety_level == "needs_hitl"
 
 
-async def test_catalog_from_repo_configs_matches_whitelist(
+async def test_catalog_from_repo_configs_includes_enabled_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """由真实配置构建的 Catalog = (白名单 ∩ enabled ∩ role=worker) ∪ ADMIN_HELPER，
-    Coordinator 被排除；mis-admin-helper 特例收录但不在白名单。"""
+    """由真实配置构建的 Catalog = enabled ∩ role=worker ∪ ADMIN_HELPER；
+    Coordinator 被排除；不再与环境白名单求交。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
-    _patch_catalog_sources(monkeypatch, configs, sorted(DEFAULT_WHITELIST))
+    _patch_catalog_sources(monkeypatch, configs, [])  # 环境白名单已忽略
 
     catalog = build_worker_catalog()
 
     assert catalog.fallback is False
-    # 1.3/1.4：mis-extract/mis-summary 已 enabled:false → 不出现；mis-admin-helper 特例收录；
-    # 白名单内 enabled 的 worker（mis-rag/crm-assistant）正常出现。
-    assert set(catalog.worker_ids()) == {"mis-admin-helper", "mis-rag", "crm-assistant"}
+    ids = set(catalog.worker_ids())
+    assert "mis-admin-helper" in ids
+    assert "mis-rag" in ids
+    assert "crm-assistant" in ids
+    assert "spm-report" in ids
+    assert "mis-copilot" not in ids
     assert catalog.coordinators == ["mis-copilot"]
     assert catalog.get("mis-copilot") is None
     assert catalog.get("crm-assistant").is_read_only() is False

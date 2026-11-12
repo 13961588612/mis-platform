@@ -4,7 +4,8 @@
 1. ``POST /api/v1/agents/{agent_id}/chat/stream`` 的 SSE 事件契约：
    - 事件序列为 ``delta → ... → done``（至少一帧 delta，末帧 done，无 error）；
    - 事件名精确匹配 ``delta | done | error``；
-   - 每帧 data 载荷含 ``traceId``；delta 帧含 ``delta``，done 帧含 ``finishReason`` / ``sessionId``。
+   - ?? data ??? ``traceId``?delta ?? ``delta``?done ??
+     ``finishReason`` / ``sessionId``?
 2. 401 无鉴权保护（与既非流式端点一致）。
 3. T-ext-2 / T-sum-plt 离线契约锚点：mis-extract / mis-summary 的 system.md 含目标契约关键词。
 
@@ -27,8 +28,8 @@ _BACKEND = Path(__file__).resolve().parents[1]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
+from src.cluster.session_lock import LockAcquireResult  # noqa: E402
 from src.config import Settings  # noqa: E402
-from src.identity.mis_token import MisTokenVerifier  # noqa: E402
 from src.runtime.events import AgentEvent  # noqa: E402
 
 # —— 真实 MIS 密钥对（公开密钥，非机密）——
@@ -101,6 +102,7 @@ class TestMisStreamContract:
     @pytest.fixture
     def client(self):
         from fastapi.testclient import TestClient
+
         from src.api.routes import mis_capability as mc
         from src.main import app
 
@@ -119,8 +121,23 @@ class TestMisStreamContract:
         mock_agent_mgr = MagicMock()
         mock_agent_mgr.ensure_agent_ready = AsyncMock(return_value=fake_instance)
 
+        class _NoopCtx:
+            async def __aenter__(self):
+                return LockAcquireResult(True)
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        class _NoopLock:
+            def acquire(self, session_id):
+                return _NoopCtx()
+
         with patch.object(mc, "get_session_manager", return_value=mock_session_mgr), patch.object(
             mc, "get_agent_manager", return_value=mock_agent_mgr
+        ), patch.object(
+            mc,
+            "get_shared_redis_session_lock",
+            AsyncMock(return_value=_NoopLock()),
         ), patch("src.api.deps.get_settings", return_value=_mis_settings()):
             yield TestClient(app)
 
@@ -160,6 +177,11 @@ class TestMisStreamContract:
 
         done = [f for f in frames if f["event"] == "done"][0]
         assert "finishReason" in done["data"] and "sessionId" in done["data"]
+        # 评价锚点（feedback-enhance §2.2 方案 C）：done 帧必须透传 assistant
+        # 消息 UUID（messageId），与 sessionId 构成 agent_feedback 唯一约束定位键。
+        assert "messageId" in done["data"] and done["data"]["messageId"], (
+            "done 帧应携带 messageId（assistant 消息 UUID）"
+        )
 
     def test_no_auth_returns_401(self, client):
         resp = client.post(

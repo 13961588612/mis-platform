@@ -136,7 +136,7 @@ export function MonitorPage(): JSX.Element {
   // ===== Auto-refresh =====
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    const interval = setInterval(fetchAll, 120_000);
     return () => clearInterval(interval);
   }, [fetchAll]);
 

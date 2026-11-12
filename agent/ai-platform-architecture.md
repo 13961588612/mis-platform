@@ -1949,6 +1949,10 @@ graph TD
 
 ### 7.1 前端依赖（H5 Web Application）
 
+> ⚠️ **T11（2026-08-22）已退役删除**：本 H5 前端（`agent/ai-platform/frontend/`）已随 A2UI 单前端收敛退役，
+> 以下依赖清单为历史快照。其中 `@copilotkit/*` 与 Vercel AI SDK（`ai`）为**零 API 调用僵尸依赖**，
+> 已随退役一并下线（见 `docs/ai-fusion/a2ui/04-open-source-reuse.md` §4 / `02-task-breakdown.md` T11）。
+
 ```json
 {
   "dependencies": {

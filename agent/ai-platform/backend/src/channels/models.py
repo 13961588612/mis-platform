@@ -11,7 +11,7 @@ camelCase（如 ``wsUrl``）都会让 ``agent-wecom-page.tsx`` 的 ``BOT_COLS`` 
       bot_id: string;
       name: string;
       enabled: boolean;
-      ws_url: string;
+      bot_secret_id: string;
       secret_masked: string;
       bound_agent_id?: string;
       health: 'connected' | 'disconnected' | 'unknown';
@@ -19,7 +19,7 @@ camelCase（如 ``wsUrl``）都会让 ``agent-wecom-page.tsx`` 的 ``BOT_COLS`` 
 
     export interface WecomBotPayload {
       name: string;
-      ws_url: string;
+      bot_secret_id: string;
       secret?: string;          // 留空 = 不修改
       bound_agent_id?: string;
     }
@@ -40,7 +40,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: 健康状态取值，与前端 ``WecomBot['health']`` 完全一致。
 BotHealth = Literal["connected", "disconnected", "unknown"]
@@ -58,8 +58,8 @@ MAX_SECRET_LENGTH: int = 512
 #: ``name`` 允许的最大长度。
 MAX_NAME_LENGTH: int = 64
 
-#: ``ws_url`` 允许的最大长度。
-MAX_WS_URL_LENGTH: int = 512
+#: ``bot_secret_id`` 允许的最大长度（防止误粘贴超长内容）。
+MAX_BOT_SECRET_ID_LENGTH: int = 128
 
 
 def _utc_now_iso() -> str:
@@ -85,21 +85,32 @@ def mask_secret(secret: str) -> str:
 
 
 class WecomBotRecord(BaseModel):
-    """企微 Bot 的**落盘态**记录（含明文 secret，禁止直接返回给前端）。
+    """企微 Bot 的**落盘态**记录（密钥只存引用，明文不落 YAML）。
 
     对应 ``configs/channels/wecom-bots.yaml`` 中 ``bots[]`` 的一项。
+
+    ``secret_ref`` 默认写规范引用 ``secret://wecom/bot/<bot_id>``，真实明文经
+    :class:`~src.identity.credential_vault.CredentialVault` 加密存到
+    ``ai_platform.credential_mappings``；YAML 里永远只有引用。也兼容部署侧手工
+    写的 ``env:<NAME>`` / 明文（历史数据），由 :class:`WecomBotSecretService`
+    按引用类型分别解析。
     """
 
-    bot_id: str = Field(..., description="Bot 唯一 ID（创建时后端生成，不可变更）")
+    bot_id: str = Field(..., description="平台内部唯一 ID（创建时后端生成，不可变更）")
+    bot_secret_id: str = Field(..., description="企微官方 BotID（长连接鉴权）")
+    corp_id: str = Field(default="", description="企微企业 ID（用于身份绑定）")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用（Gateway 只拉取 enabled=true）")
-    ws_url: str = Field(default="", description="企微 Bot 回调 WebSocket 地址")
-    secret: str = Field(default="", description="明文 secret（仅落盘，不出响应）")
+    secret_ref: str = Field(
+        default="",
+        description="密钥引用：``secret://wecom/bot/<bot_id>``（Vault）或 env:/明文（部署侧手工）",
+    )
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID；空串表示未绑定")
     created_at: str = Field(default_factory=_utc_now_iso, description="创建时间 ISO-8601")
     updated_at: str = Field(default_factory=_utc_now_iso, description="更新时间 ISO-8601")
 
-    @field_validator("bot_id", "name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("bot_id", "name", "bot_secret_id", "secret_ref", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _coerce_str(cls, value: Any) -> str:
         """把 ``None`` / 非字符串安全地折叠成字符串，避免 YAML 手改后炸掉。
@@ -139,18 +150,47 @@ class WecomBotRecord(BaseModel):
         """序列化为 YAML 落盘用的字典（字段顺序稳定，便于 diff / Git 审计）。
 
         Returns:
-            含明文 ``secret`` 的字典。
+            只含 ``secret_ref`` 引用的字典 —— 明文密钥永不落 YAML。
         """
         return {
             "bot_id": self.bot_id,
             "name": self.name,
             "enabled": self.enabled,
-            "ws_url": self.ws_url,
-            "secret": self.secret,
+            "bot_secret_id": self.bot_secret_id,
+            "secret_ref": self.secret_ref,
             "bound_agent_id": self.bound_agent_id,
+            "corp_id": self.corp_id,
+            "tenant_id": self.tenant_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_secret(cls, data: Any) -> Any:
+        """兼容历史 YAML 的 ``secret: <明文>`` 写法（升级到 ``secret_ref`` 前落盘的数据）。
+
+        关键点：**不能把明文丢弃**，否则升级即失联。这里把旧的明文整段搬进
+        ``secret_ref``，由 :class:`WecomBotSecretService` 识别为「明文引用」并按
+        原语义使用；运营台下次保存该 Bot 时即收编进 Vault。
+
+        Args:
+            data: YAML / dict 反序列化出的原始映射。
+
+        Returns:
+            规范化后的映射（存在旧 ``secret`` 且无 ``secret_ref`` 时做字段搬运）。
+        """
+        if not isinstance(data, dict):
+            return data
+        if "secret_ref" in data:
+            return data
+        legacy = data.get("secret")
+        if isinstance(legacy, str) and legacy.strip():
+            migrated = dict(data)
+            migrated["secret_ref"] = legacy.strip()
+            migrated.pop("secret", None)
+            return migrated
+        return data
 
     def to_wire(self, health: str = "unknown") -> dict[str, Any]:
         """转成前端 ``WecomBot`` 契约（snake_case，secret 脱敏）。
@@ -166,14 +206,20 @@ class WecomBotRecord(BaseModel):
             "bot_id": self.bot_id,
             "name": self.name,
             "enabled": self.enabled,
-            "ws_url": self.ws_url,
-            "secret_masked": mask_secret(self.secret),
+            "bot_secret_id": self.bot_secret_id,
+            # 明文不再进入本进程之外的任何地方：掩码只表达「是否已配置密钥」。
+            "secret_masked": mask_secret(self.secret_ref),
             "health": normalized_health,
         }
         # 前端 `bound_agent_id?: string`：未绑定时不下发该 key，
         # 与 dialog 里 `bound_agent_id || undefined` 的写法对称。
         if self.bound_agent_id:
             wire["bound_agent_id"] = self.bound_agent_id
+        # 身份绑定扩展（方案 §8.1）：仅在配置后下发，不破坏旧前端契约。
+        if self.corp_id:
+            wire["corp_id"] = self.corp_id
+        if self.tenant_id is not None:
+            wire["tenant_id"] = self.tenant_id
         return wire
 
 
@@ -184,10 +230,10 @@ class WecomBotWire(BaseModel):
     在 ``bound_agent_id`` 为 ``None`` 时仍然下发 key。
     """
 
-    bot_id: str = Field(..., description="Bot 唯一 ID")
+    bot_id: str = Field(..., description="平台内部唯一 ID")
+    bot_secret_id: str = Field(..., description="企微官方 BotID（长连接鉴权）")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用")
-    ws_url: str = Field(default="", description="WebSocket 地址")
     secret_masked: str = Field(default="", description="脱敏后的 secret（从不返回明文）")
     bound_agent_id: str | None = Field(default=None, description="绑定的 Agent ID")
     health: BotHealth = Field(default="unknown", description="运行时健康状态")
@@ -197,13 +243,15 @@ class WecomBotCreateRequest(BaseModel):
     """创建 Bot 的请求体（对应前端 ``WecomBotPayload``，#49）。"""
 
     name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="展示名称")
-    ws_url: str = Field(
-        ..., min_length=1, max_length=MAX_WS_URL_LENGTH, description="WebSocket 地址"
+    bot_secret_id: str = Field(
+        ..., min_length=1, max_length=MAX_BOT_SECRET_ID_LENGTH, description="企微官方 BotID"
     )
     secret: str = Field(default="", max_length=MAX_SECRET_LENGTH, description="明文 secret")
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID，可留空")
+    corp_id: str = Field(default="", description="企微企业 ID（用于身份绑定）")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID")
 
-    @field_validator("name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _strip(cls, value: Any) -> str:
         """去除首尾空白并把 ``None`` 折叠成空串。
@@ -218,24 +266,6 @@ class WecomBotCreateRequest(BaseModel):
             return ""
         return str(value).strip()
 
-    @field_validator("ws_url")
-    @classmethod
-    def _validate_ws_url(cls, value: str) -> str:
-        """校验 WebSocket 地址协议前缀。
-
-        Args:
-            value: 待校验地址。
-
-        Returns:
-            原值。
-
-        Raises:
-            ValueError: 协议不是 ``ws://`` / ``wss://`` 时抛出。
-        """
-        if not value.startswith(("ws://", "wss://")):
-            raise ValueError("ws_url must start with ws:// or wss://")
-        return value
-
 
 class WecomBotUpdateRequest(BaseModel):
     """更新 Bot 的请求体（#50）。
@@ -246,16 +276,18 @@ class WecomBotUpdateRequest(BaseModel):
     """
 
     name: str | None = Field(default=None, max_length=MAX_NAME_LENGTH, description="展示名称")
-    ws_url: str | None = Field(
-        default=None, max_length=MAX_WS_URL_LENGTH, description="WebSocket 地址"
+    bot_secret_id: str | None = Field(
+        default=None, max_length=MAX_BOT_SECRET_ID_LENGTH, description="企微官方 BotID；缺省 = 不修改"
     )
     secret: str | None = Field(
         default=None, max_length=MAX_SECRET_LENGTH, description="新 secret；留空/缺省 = 不修改"
     )
     bound_agent_id: str | None = Field(default=None, description="绑定的 Agent ID；空串 = 解绑")
+    corp_id: str | None = Field(default=None, description="企微企业 ID；缺省 = 不修改")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID；缺省 = 不修改")
     secret_clear: bool = Field(default=False, description="显式清空 secret")
 
-    @field_validator("name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _strip_optional(cls, value: Any) -> str | None:
         """去除首尾空白，保留 ``None``（表示「字段缺省 / 不修改」）。
@@ -270,22 +302,3 @@ class WecomBotUpdateRequest(BaseModel):
             return None
         return str(value).strip()
 
-    @field_validator("ws_url")
-    @classmethod
-    def _validate_ws_url(cls, value: str | None) -> str | None:
-        """校验 WebSocket 地址协议前缀（仅在显式提供时）。
-
-        Args:
-            value: 待校验地址或 ``None``。
-
-        Returns:
-            原值。
-
-        Raises:
-            ValueError: 显式提供了非空且协议非法的地址时抛出。
-        """
-        if value is None or value == "":
-            return value
-        if not value.startswith(("ws://", "wss://")):
-            raise ValueError("ws_url must start with ws:// or wss://")
-        return value

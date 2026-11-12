@@ -13,12 +13,23 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BeforeValidator, Field, field_validator
+from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
+def _wren_env(*names: str) -> AliasChoices:
+    """``IqdMcpSettings`` 字段多以 ``wren_`` 开头，配合 ``env_prefix=WREN_`` 会变成
+    ``WREN_WREN_*``。用短别名（如 ``AGENT_ENDPOINT`` → ``WREN_AGENT_ENDPOINT``）
+    对齐运维文档；同时保留 ``WREN_WREN_*`` 兼容已手写的双前缀。
+    """
+    return AliasChoices(*names)
+
+
 def _parse_str_list(v: Any) -> list[str]:
-    """解析 list 环境变量：支持 JSON 数组、逗号分隔，或已是 list。"""
+    """解析 list 环境变量：支持 JSON 数组、逗号分隔，或已是 list。
+
+    兼容 ``source .env`` 把 ``["--force"]`` 吃成 ``[--force]`` 的伪 JSON。
+    """
     if v is None or v == "":
         return []
     if isinstance(v, list):
@@ -28,10 +39,20 @@ def _parse_str_list(v: Any) -> list[str]:
         if s.startswith("["):
             import json
 
-            parsed = json.loads(s)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        return [part.strip() for part in s.split(",") if part.strip()]
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except json.JSONDecodeError:
+                inner = s[1:-1].strip() if s.endswith("]") else s[1:]
+                if not inner:
+                    return []
+                return [
+                    part.strip().strip("'\"")
+                    for part in inner.split(",")
+                    if part.strip()
+                ]
+        return [part.strip().strip("'\"") for part in s.split(",") if part.strip()]
     return v
 
 
@@ -51,6 +72,248 @@ class LogLevel(str, Enum):
     WARNING = "WARNING"
     ERROR = "ERROR"
     FATAL = "FATAL"
+
+
+class IqdMcpSettings(BaseSettings):
+    """本地 WrenAI MCP server 连接配置（v1.9，architecture §3.2 / deploy-iqd.md）。
+
+    对接外部 WrenAI 产品的适配层保留 wren 命名；凭证由 ``wren profile`` server-side
+    注入（不落平台库、不落前端），本段只描述进程与连接形态。
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="WREN_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    wren_mcp_host: str = Field(
+        default="127.0.0.1",
+        description="wren serve mcp 监听地址（官方默认仅本机）；单连接回退端点",
+        validation_alias=_wren_env("MCP_HOST", "WREN_MCP_HOST"),
+    )
+    wren_mcp_port: int = Field(
+        default=8080,
+        description="单连接回退 MCP HTTP transport 端口（方案 A 下每连接独立端口，见 wren_mcp_port_range）",
+        validation_alias=_wren_env("MCP_PORT", "WREN_MCP_PORT"),
+    )
+    # ===== 方案 A：多连接每进程独立端口 + 独立 project 目录 =====
+    wren_mcp_default_host: str = Field(
+        default="127.0.0.1",
+        description="每连接 wren serve mcp 监听地址（官方硬约束：仅本机、无 bearer-token）",
+        validation_alias=_wren_env("MCP_DEFAULT_HOST", "WREN_MCP_DEFAULT_HOST"),
+    )
+    wren_mcp_port_range: str = Field(
+        default="18080-18180",
+        description="多连接 MCP 端口段（含端点，逗号分隔可多段）；进程管理器按连接分配并回收复用",
+        validation_alias=_wren_env("MCP_PORT_RANGE", "WREN_MCP_PORT_RANGE"),
+    )
+    wren_projects_root: str = Field(
+        default="/var/lib/mis-iqd/wren-projects",
+        description="多连接 wren project 根目录；每连接 project_home = {wren_projects_root}/{connId}",
+        validation_alias=_wren_env("PROJECTS_ROOT", "WREN_PROJECTS_ROOT"),
+    )
+    wren_mcp_health_interval_seconds: float = Field(
+        default=120.0,
+        description="后台健康检查/跨机 reconcile 间隔（秒）；失败计数达阈值置 unhealthy 并触发崩溃重启。"
+        "默认 120s，避免 status+mcp-deploy 过频刷日志。",
+        validation_alias=_wren_env(
+            "MCP_HEALTH_INTERVAL_SECONDS", "WREN_MCP_HEALTH_INTERVAL_SECONDS"
+        ),
+    )
+    wren_mcp_health_failure_threshold: int = Field(
+        default=3,
+        description="健康连续失败次数阈值（达到后置 unhealthy 并重启进程）",
+        validation_alias=_wren_env(
+            "MCP_HEALTH_FAILURE_THRESHOLD", "WREN_MCP_HEALTH_FAILURE_THRESHOLD"
+        ),
+    )
+    wren_mcp_dryrun_restart_threshold: int = Field(
+        default=2,
+        description=(
+            "dry_run 连续返回基础设施错误（连接失效）多少次后自动重启该连接的 MCP 进程；"
+            "0 关闭看门狗。默认 2：单次失败可能只是抖动，连续两次即认定 wren 进程池"
+            "持有的 DB 连接已坏死（实测不会自愈），重启是唯一恢复手段。"
+        ),
+        validation_alias=_wren_env(
+            "MCP_DRYRUN_RESTART_THRESHOLD", "WREN_MCP_DRYRUN_RESTART_THRESHOLD"
+        ),
+    )
+    wren_mcp_dryrun_restart_cooldown_seconds: float = Field(
+        default=120.0,
+        description="两次自动重启之间的最小间隔（秒），防止重启风暴",
+        validation_alias=_wren_env(
+            "MCP_DRYRUN_RESTART_COOLDOWN_SECONDS", "WREN_MCP_DRYRUN_RESTART_COOLDOWN_SECONDS"
+        ),
+    )
+
+    wren_mcp_start_timeout_seconds: float = Field(
+        default=30.0,
+        description="单进程拉起后等待 ready（target/mdl.json 可读 + HTTP health）的超时（秒）",
+        validation_alias=_wren_env(
+            "MCP_START_TIMEOUT_SECONDS", "WREN_MCP_START_TIMEOUT_SECONDS"
+        ),
+    )
+    wren_mcp_dir_retention_days: int = Field(
+        default=7,
+        description="连接禁用/删除后 project 目录保留天数（保留期便于回溯/审计），到期定时清理",
+        validation_alias=_wren_env(
+            "MCP_DIR_RETENTION_DAYS", "WREN_MCP_DIR_RETENTION_DAYS"
+        ),
+    )
+    wren_mcp_transport: str = Field(
+        default="http",
+        description="MCP 传输方式：http（一期唯一形态）",
+        validation_alias=_wren_env("MCP_TRANSPORT", "WREN_MCP_TRANSPORT"),
+    )
+    wren_mcp_allow_write: bool = Field(
+        default=False,
+        description="是否允许 MCP 写工具（本期默认关闭，只读兜底）",
+        validation_alias=_wren_env("MCP_ALLOW_WRITE", "WREN_MCP_ALLOW_WRITE"),
+    )
+    wren_mcp_timeout_seconds: float = Field(
+        default=60.0,
+        description="单次 MCP 工具调用超时（秒），对齐 SLO P95 ≤ 20s",
+        validation_alias=_wren_env("MCP_TIMEOUT_SECONDS", "WREN_MCP_TIMEOUT_SECONDS"),
+    )
+    wren_cli_bin: str = Field(
+        default="wren",
+        description="本地 wren CLI 可执行文件（profile / context build 管理面）",
+        validation_alias=_wren_env("CLI_BIN", "WREN_CLI_BIN"),
+    )
+    wren_profile_name: str = Field(
+        default="",
+        description="业务数据源 profile 名（凭证由 wren profile 注入，非本字段）",
+        validation_alias=_wren_env("PROFILE_NAME", "WREN_PROFILE_NAME"),
+    )
+    wren_language: str = Field(
+        default="zh-CN",
+        description="WrenAI 生成语言",
+        validation_alias=_wren_env("LANGUAGE", "WREN_LANGUAGE"),
+    )
+
+    # ===== 跨机器部署（v0.2·方案 A 落地）：wren 机常驻 WrenMcpAgent =====
+    # 鉴权：bearer-token + 内网网络隔离（决策 ②⑥：去 mTLS，无双向证书）。
+    # 仅当 wren_agent_endpoint 非空时启用跨机器管控；为空走本地 Plan A 子进程模型。
+    wren_agent_endpoint: str = Field(
+        default="",
+        description="WrenMcpAgent 控制面基址（内网直连，如 http://wren-mcp-agent:9100）；"
+        "空=本地 Plan A 模式",
+        validation_alias=_wren_env("AGENT_ENDPOINT", "WREN_AGENT_ENDPOINT"),
+    )
+    wren_agent_control_port: int = Field(
+        default=9100,
+        description="WrenMcpAgent 控制面监听端口（agent 侧 systemd/Docker 配置用）",
+        validation_alias=_wren_env("AGENT_CONTROL_PORT", "WREN_AGENT_CONTROL_PORT"),
+    )
+    wren_agent_mcp_port: int = Field(
+        default=9101,
+        description="WrenMcpAgent 数据面 MCP 反向代理监听端口（按 connId 路由到本机 127.0.0.1）",
+        validation_alias=_wren_env("AGENT_MCP_PORT", "WREN_AGENT_MCP_PORT"),
+    )
+    wren_agent_token: str = Field(
+        default="",
+        description="控制面/数据面共享 bearer token（内网隔离 + 该 token 二选一兜底；"
+        "wren 机不接 Vault，S1 明文经此通道推送后注入 wren 进程 env）",
+        validation_alias=_wren_env("AGENT_TOKEN", "WREN_AGENT_TOKEN"),
+    )
+    # 下列仅在 wren 机 agent 侧生效（端口段 + project 根目录现已落到 wren 机）：
+    wren_agent_wren_port_range: str = Field(
+        default="18080-18180",
+        description="wren 机端口段（agent 按连接分配并回收，对应 wren_mcp_port_range 现移 wren 机）",
+        validation_alias=_wren_env(
+            "AGENT_WREN_PORT_RANGE", "WREN_AGENT_WREN_PORT_RANGE"
+        ),
+    )
+    wren_agent_projects_root: str = Field(
+        default="/var/lib/mis-iqd/wren-projects",
+        description="wren 机 project 根目录（每连接 project_home = {root}/{connId}）",
+        validation_alias=_wren_env(
+            "AGENT_PROJECTS_ROOT", "WREN_AGENT_PROJECTS_ROOT"
+        ),
+    )
+    wren_agent_mcp_host: str = Field(
+        default="",
+        description="数据面可达 host（ai-platform 侧视角）；空=取 wren_agent_endpoint 主机名",
+        validation_alias=_wren_env("AGENT_MCP_HOST", "WREN_AGENT_MCP_HOST"),
+    )
+    build_timeout_seconds: float = Field(
+        default=120.0,
+        description="单次 context build + memory index 整库重建超时（秒）；超时→同步标记 failed 保留 pending 可重试",
+    )
+    memory_index_enabled: bool = Field(
+        default=True,
+        description="是否启用 `wren memory index` 下发记忆索引（闭环 build+index 关键步；部署侧需 wren CLI 支持）",
+    )
+
+    # ------------------------------------------------------------------ 运维自愈三按钮（Q5：可选 flag 仅来自配置，方法体不得硬编码）
+    # NoDecode：.env 可用逗号分隔或 JSON；避免 source 后伪 JSON 被 EnvSettingsSource 直接 json.loads
+    self_heal_force_build_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
+        default_factory=list,
+        description="运维自愈 force-rebuild 时附加给 `wren context build` 的可选 flag（如 ['--force']）；"
+        "W0 真机实测后由运维在 backend/.env 回填，默认空（退化普通增量 build）",
+    )
+    self_heal_memory_reset_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
+        default_factory=lambda: ["--force"],
+        description="运维自愈 re-index 时附加给 `wren memory reset` 的可选参数；"
+        "W0 实测：非 TTY 无确认会 stderr=Aborted，须 `--force`/`-f` 跳过确认",
+    )
+    self_heal_context_validate_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
+        default_factory=list,
+        description="运维自愈 validate 时附加给 `wren context validate` 的可选参数；W0 实测后回填，默认空",
+    )
+
+
+class IqdConfigClientSettings(BaseSettings):
+    """mis-iqd 配置读取 API 客户端配置（v1.9，architecture §3.2 / §4.2.2 D.7.3）。
+
+    Worker 不直连 mis_platform 库：配置（连接/ACL/范围/维度注册表/脱敏规则/字典同步
+    状态）经本客户端调 mis-iqd ``/internal/v1/iqd/**`` 读取 + 本地缓存消费
+    （启动全量 + 变更事件 + 每日兜底；缓存不可得 fail-closed 45204）。
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="IQD_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    internal_api_base_url: str = Field(
+        # 本机联调默认 loopback；Docker Compose 用 IQD_INTERNAL_API_BASE_URL=http://mis-iqd:8109 覆盖
+        default="http://127.0.0.1:8109",
+        description="mis-iqd 服务基址（内网直连，非经 Gateway）",
+    )
+    timeout_seconds: float = Field(
+        default=10.0,
+        description="单次配置读取请求超时（秒）",
+    )
+    cache_ttl_seconds: int = Field(
+        default=10,
+        description="配置本地缓存 TTL（秒）；默认 10s 满足「变更生效 ≤10s」（D.7.3），"
+        "未订阅 Redis 事件时靠 TTL 回源；另有每日定期刷新兜底",
+    )
+    cache_refresh_jitter: float = Field(
+        default=30.0,
+        description="缓存刷新抖动（秒），避免多实例同时回源",
+    )
+    redis_url: str = Field(
+        default="",
+        description="可选：变更事件订阅用 Redis URL（如 redis://localhost:6379/0）；"
+        "为空则退回 TTL/每日兜底",
+    )
+    sync_coalesce_window_sec: float = Field(
+        default=3.0,
+        description="每连接增强同步合并窗口（秒）；窗口内多次保存合并为一次 build+index（P1-2 幂等/可重试）",
+    )
 
 
 class Settings(BaseSettings):
@@ -77,7 +340,19 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"
     LOG_FILE: str = Field(
         default="logs/backend.log",
-        description="日志文件路径；设为空字符串则仅输出到控制台",
+        description=(
+            "日志基路径；启用文件日志时默认拆成 "
+            "`{stem}-chat.log`（对话）与 `{stem}-sys.log`（健康检查/系统）。"
+            "设为空字符串则仅输出到控制台"
+        ),
+    )
+    LOG_FILE_CHAT: str = Field(
+        default="",
+        description="对话相关日志文件；空则由 LOG_FILE 推导为 `{stem}-chat.log`",
+    )
+    LOG_FILE_SYS: str = Field(
+        default="",
+        description="系统/健康检查日志文件；空则由 LOG_FILE 推导为 `{stem}-sys.log`",
     )
     LOG_MAX_BYTES: int = Field(
         default=10_485_760,
@@ -89,8 +364,8 @@ class Settings(BaseSettings):
     )
     AGENT_TRACE_LOG: bool = True
     AGENT_MESSAGE_TIMEOUT: int = Field(
-        default=120,
-        description="单条入站消息 Agent 处理超时（秒），超时后向前端推送 error + done",
+        default=1800,
+        description="单条入站消息 Agent 处理超时（秒，默认 30min），超时后向前端推送 error + done",
     )
     MCP_TOOL_CALL_TIMEOUT: int = Field(
         default=30,
@@ -102,7 +377,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
     WORKERS: int = 1
     RELOAD: bool = False
-    CORS_ORIGINS: list[str] = Field(
+    # NoDecode：避免 pydantic-settings 先按 JSON 解析，从而支持 .env 逗号分隔写法
+    CORS_ORIGINS: Annotated[list[str], NoDecode, BeforeValidator(_parse_str_list)] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
@@ -169,8 +445,14 @@ class Settings(BaseSettings):
         description="XAUTOCLAIM 重投循环周期（毫秒）",
     )
     XCLAIM_MIN_IDLE_MS: int = Field(
-        default=30000,
-        description="孤儿消息进入重投的最小 idle 阈值（毫秒）；低于此值不抢投",
+        # 必须 > AGENT_MESSAGE_TIMEOUT：入站 ACK 在整段处理结束后才发。
+        # 旧默认 30s 时，A2UI/RAG 常跑 40s+，PEL idle 超阈值会被 XAUTOCLAIM
+        # 重投 → 同 run 再跑一遍、用户消息重复落库（看起来像「自动发了两次」）。
+        default=1_920_000,
+        description=(
+            "孤儿消息进入重投的最小 idle 阈值（毫秒，默认 32min）；须大于 "
+            "AGENT_MESSAGE_TIMEOUT（秒）×1000，避免长任务处理中被误重投"
+        ),
     )
 
     # ===== Agent Core 多实例（T8/T9：决策 1 + 同构问题①）=====
@@ -183,8 +465,9 @@ class Settings(BaseSettings):
         description="稳定 Core 实例 ID；优先级 CORE_ID 环境变量 > os.hostname() > 告警随机；k8s StatefulSet 注入 pod 名 core-1",
     )
     AGENT_LEASE_TTL_S: int = Field(
-        default=30,
-        description="Agent 运行时租约 TTL（秒）；心跳续租未达则释放易主",
+        default=90,
+        description="Agent 运行时租约 TTL（秒）；心跳续租未达则释放易主。"
+        "须 > AGENT_RESYNC_S，保证周期再对齐能在租约过期后接管。",
     )
     AGENT_HEARTBEAT_S: int = Field(
         default=10,
@@ -198,10 +481,17 @@ class Settings(BaseSettings):
         default=10,
         description="session 锁看门狗续期间隔（秒）",
     )
+    SESSION_LOCK_MAX_HOLD_S: int = Field(
+        default=1860,
+        description="session 锁累计持有上限（秒，默认 31min）；看门狗续期不超过此窗口，到时停止续期"
+        "使锁随 TTL 自然过期，兜底持有方卡死导致锁永不释放、后续请求无限等待"
+        "的极端场景。须 >= SESSION_LOCK_TTL_S，且覆盖 AGENT_MESSAGE_TIMEOUT。",
+    )
     AGENT_RESYNC_S: int = Field(
-        default=15,
-        description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < 租约 TTL，使崩溃 Core 的 "
-        "agent 在租约过期后被新 owner 及时接管运行并重新订阅 aip:stream:agent:{agentId}",
+        default=45,
+        description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < AGENT_LEASE_TTL_S，使崩溃 Core 的 "
+        "agent 在租约过期后被新 owner 及时接管运行并重新订阅 aip:stream:agent:{agentId}。"
+        "默认 45s（配合 quiet resync）：过短会在多 Core/多副本下刷屏。",
     )
 
     # ===== Qdrant =====
@@ -237,6 +527,18 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_FAILOVER_AUTO_SWITCH: bool = True
 
+    # ===== IQD NL2SQL Dedicated Model =====
+    # 仅接管问数 SQL 生成：NL->SQL 与 cube 规格生成；不影响外层回答模型。
+    # 为空时回退 LLM_PRIMARY_MODEL，保持向后兼容。
+    IQD_NL2SQL_MODEL: str = ""
+    IQD_NL2SQL_PROVIDER: str = ""
+    IQD_NL2SQL_ENABLE_THINKING: bool = False
+    IQD_NL2SQL_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0)
+    # 复杂 WITH/多表 JOIN 用 1024 易截断半截 SQL（现网：WITH leaf AS (SELECT … AS leaf_id
+    # 无闭合括号仍送 dry_run → Expecting )）。4096 覆盖常见品类层级查询。
+    IQD_NL2SQL_MAX_TOKENS: int = Field(default=4096, ge=1)
+    IQD_NL2SQL_TIMEOUT_SECONDS: int | None = Field(default=30, ge=0)
+
     # DeepSeek API
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_ENDPOINT: str = "https://api.deepseek.com/v1"
@@ -244,6 +546,61 @@ class Settings(BaseSettings):
     # Qwen API（须用 compatible-mode，与 OpenAI SDK 对齐）
     QWEN_API_KEY: str = ""
     QWEN_API_ENDPOINT: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # Copilot 语音转写（复用 QWEN_API_KEY，不另造密钥）
+    SPEECH_ASR_MODEL: str = Field(
+        default="qwen3-asr-flash",
+        description="短语音同步 ASR 模型（DashScope compatible-mode）",
+    )
+    SPEECH_MAX_SECONDS: int = Field(default=60, ge=1, description="单次录音时长上限（秒）")
+    SPEECH_MAX_BYTES: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1024,
+        description="单次录音体积上限（字节）",
+    )
+    SPEECH_TIMEOUT_SECONDS: int = Field(default=30, ge=5, description="ASR HTTP 超时（秒）")
+
+    # ===== 意图检测 / JEV（与主对话 QWEN_* 分离，独立 Key；tongyi-intent-detect）=====
+    INTENT_DETECT_MODEL: str = Field(
+        default="tongyi-intent-detect-v3",
+        description="意图预路由专用模型（JEV / Chat Completions）；勿写入 agent model.primary",
+    )
+    INTENT_DETECT_API_KEY: str = Field(
+        default="",
+        description="意图检测专用 API Key；空则 JEV 步骤失败并按 on_fail 回退",
+    )
+    INTENT_DETECT_ENDPOINT: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        description="意图检测 OpenAI 兼容 endpoint（北京专域可覆盖）；实际 POST {endpoint}/chat/completions",
+    )
+    INTENT_DETECT_TIMEOUT_MS: int = Field(
+        default=2000,
+        ge=200,
+        description="单次意图检测超时（毫秒）",
+    )
+
+    # ===== 决策模型（百炼 decision-model / System One；与 INTENT_DETECT_* 并列）=====
+    DECISION_MODEL_NAME: str = Field(
+        default="decision-model-preview",
+        description="决策模型名（System One）；Coordinator intent-router.model.name 可覆盖",
+    )
+    DECISION_MODEL_API_KEY: str = Field(
+        default="",
+        description=(
+            "决策模型专用 API Key；空则回退 INTENT_DETECT_API_KEY（便于同 Key 试用）"
+        ),
+    )
+    DECISION_MODEL_ENDPOINT: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        description=(
+            "决策模型 API 前缀（北京专域可覆盖）；实际 POST {endpoint}/systemone"
+        ),
+    )
+    DECISION_MODEL_TIMEOUT_MS: int = Field(
+        default=2000,
+        ge=200,
+        description="单次决策模型调用超时（毫秒）",
+    )
 
     # ===== 出站代理 =====
     OUTBOUND_PROXY_ENABLED: bool = True
@@ -262,6 +619,15 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # HS256 新签发门禁（T11 agent/frontend 退役）：默认关闭 = 不再签发新的
+    # 平台自有 HS256 token（原 H5/wecom-h5 登录链路已随前端删除）。
+    # 验签（verify_access_token / verify_refresh_token / deps HS256 分支）不受影响，
+    # 仍可校验存量 in-flight token；生产主通道为 MIS RS256 + BFF 兑换（T12）。
+    HS256_ISSUANCE_ENABLED: bool = Field(
+        default=False,
+        description="True=允许平台自有 HS256 签发（仅单测验证 token 机制用）；"
+        "False（默认，T11 退役口径）=签发下线，create/refresh 抛 TokenError。",
+    )
 
     # ===== MIS 身份信任（阶段1：认证对齐）=====
     # MIS 使用 RS256（RSA 公钥）签发 JWT；平台用同一公钥验签。
@@ -298,7 +664,9 @@ class Settings(BaseSettings):
     # 上游 MIS RS256 JWT 的回放头名（与 BFF ReverseTrustInterceptor 对齐）。
     MIS_JWT_REPLAY_HEADER: str = "X-Mis-Upstream-Jwt"
     # P0 允许的 FormFill Skill ID 白名单（意图 → skillId 由工具内部映射）。
-    FORMFILL_ALLOWED_SKILLS: list[str] = Field(
+    FORMFILL_ALLOWED_SKILLS: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=lambda: ["user-fill"],
         description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
     )
@@ -322,6 +690,10 @@ class Settings(BaseSettings):
     MIS_ACL_HTTP_TIMEOUT: float = 3.0
     # 回源路径（挂在 MIS_ADMIN_BFF_BASE_URL 之下）。
     MIS_ACL_PERMISSIONS_PATH: str = "/internal/permissions"
+    # Copilot / iframe 问数身份回源（与测试问数 X-Mis-* 同构）。
+    MIS_ASK_IDENTITY_PATH: str = "/internal/identity/ask-context"
+    MIS_ASK_IDENTITY_CACHE_KEY_PREFIX: str = "mis:acl:askident:"
+    MIS_ASK_IDENTITY_CACHE_TTL: int = 60
     # 回源时 appId 入参的默认值（工具执行链路无 JWT，取此默认；REST 链路优先取 ctx.profile["app_id"]）。
     MIS_ACL_DEFAULT_APP_ID: str = ""
     # MCP 工具（E2）在 skill 注册表未命中时的兜底权限码（V22 已落真实码：菜单 92301，
@@ -329,7 +701,9 @@ class Settings(BaseSettings):
     # 运行时执行码 = ai:mcp:call，运营台手动调用码 = agent:mcp:call（Q7 方案 B+）。
     MIS_ACL_MCP_FALLBACK_PERMISSION: str = "ai:mcp:call"
     # 超管豁免角色码；**默认空 = 豁免关闭**（§4.2 规则 4）。显式配置后命中角色方可绕过。
-    MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: list[str] = Field(
+    MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="超管豁免角色码白名单；默认空集合表示豁免关闭（fail-closed）",
     )
@@ -367,16 +741,14 @@ class Settings(BaseSettings):
     )
 
     # ===== Copilot 调度（agent__invoke）=====
-    # 硬约束（R5/R8）：默认白名单移除已灰度下线的 mis-extract / mis-summary，
-    # 加入承接其能力的 mis-user-helper；**绝不**包含 mis-admin-helper
-    # （后台操作员专属，只经 create_session 直达，copilot 全链路 fail-closed）。
-    INVOKE_AGENT_WHITELIST: list[str] = Field(
-        default_factory=lambda: [
-            "mis-rag",
-            "crm-assistant",
-            "mis-user-helper",
-        ],
-        description="mis-copilot 可委托的目标 Agent 白名单（不含 mis-admin-helper）",
+    # 已取消环境白名单硬闸：可派发执行者以各 Coordinator 的
+    # coordination.yaml → delegation.worker_ids（管理台保存）为准。
+    # 本字段保留仅为兼容旧 .env，**运行时与 Catalog 均忽略**；留空即可。
+    INVOKE_AGENT_WHITELIST: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
+        default_factory=list,
+        description="已废弃：可派发以 coordination.worker_ids 为准；本字段忽略",
     )
 
     # ===== 联网搜索（1.4 search tool）=====
@@ -403,7 +775,9 @@ class Settings(BaseSettings):
         default=10.0,
         description="generic_api provider 单次请求超时（秒）",
     )
-    SEARCH_SPECIFIED_URLS: list[str] = Field(
+    SEARCH_SPECIFIED_URLS: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="specified_urls provider 的定向 URL 列表（P2 待实现）",
     )
@@ -412,8 +786,8 @@ class Settings(BaseSettings):
         description="invoke_agent 最大深度（1=仅顶层 Copilot 可委托，禁止递归）",
     )
     INVOKE_AGENT_TIMEOUT_SECONDS: int = Field(
-        default=120,
-        description="单次子 Agent 委托超时（秒）",
+        default=1680,
+        description="单次子 Agent 委托超时（秒，默认 28min，须小于 AGENT_MESSAGE_TIMEOUT）",
     )
 
     # ===== Coordinator–Worker 调度基座（C1/C3/C5，design-impl.md §6.2）=====
@@ -453,6 +827,12 @@ class Settings(BaseSettings):
         default=False,
         description="是否允许 mode=\"continue\" 复用已有 Worker 子会话（未命中静默降级 spawn）",
     )
+
+    # ===== 问数（WrenAI 对接，v1.9 / B1）=====
+    # 本地 MCP server 连接 + mis-iqd 配置读取 API 客户端。
+    # 配置入口：进程环境变量 / backend/.env（BaseSettings）；ai-platform 不读 Nacos。
+    iqd_mcp: IqdMcpSettings = Field(default_factory=IqdMcpSettings)
+    iqd_config: IqdConfigClientSettings = Field(default_factory=IqdConfigClientSettings)
 
     DEV_TEST_ACCOUNTS_ENABLED: bool = Field(
         default=False,
@@ -500,6 +880,12 @@ class Settings(BaseSettings):
     # ===== 企微多 Bot（T04 Q4 方案 A：配置文件持久化）=====
     #: 相对 CONFIG_BASE_PATH 的企微 Bot 清单文件路径。
     WECOM_BOT_CONFIG_FILE: str = "channels/wecom-bots.yaml"
+    #: Corp->tenant / 通讯录应用凭证配置文件（多 corp）。
+    WECOM_CORP_CONFIG_FILE: str = "channels/wecom-corps.yaml"
+    #: 企微用户身份绑定：手机号哈希用盐（不落明文手机号）。
+    WECOM_PHONE_HASH_SALT: str = "mis-wecom-phone-salt"
+    #: 企微身份绑定总开关（关闭则入站企微身份一律 fail-closed）。
+    WECOM_IDENTITY_BINDING_ENABLED: bool = True
     #: Gateway ⇄ backend 服务间共享令牌。
     #:
     #: Gateway 启动时需要拉取**含明文 secret** 的 Bot 运行时清单
@@ -531,6 +917,25 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_USER_PER_MINUTE: int = 30
     RATE_LIMIT_PER_DEPARTMENT_PER_MINUTE: int = 200
 
+    # ===== LLM Token 日配额（覆盖 configs/system/system.yaml → llm_gateway.cost_control）=====
+    #: 未设置时读 system.yaml；设了环境变量则优先。
+    LLM_QUOTA_PER_USER: int | None = Field(
+        default=None,
+        description="每用户每日 token 上限；空则用 system.yaml cost_control.default_quota.per_user",
+    )
+    LLM_QUOTA_PER_DEPARTMENT: int | None = Field(
+        default=None,
+        description="每部门每日 token 上限；空则用 system.yaml per_department",
+    )
+    LLM_QUOTA_ALERT_THRESHOLD: float | None = Field(
+        default=None,
+        description="用量告警比例 0~1；空则用 system.yaml alert_threshold",
+    )
+    LLM_QUOTA_HARD_LIMIT: bool | None = Field(
+        default=None,
+        description="超限是否硬拒绝；空则用 system.yaml hard_limit",
+    )
+
     # ===== HITL（人机协同） =====
     HITL_APPROVAL_TIMEOUT_SECONDS: int = 300
     HITL_MAX_PENDING_PER_USER: int = 5
@@ -549,16 +954,6 @@ class Settings(BaseSettings):
     SENTRY_DSN: str = ""
     JAEGER_AGENT_HOST: str = ""
     JAEGER_AGENT_PORT: int = 6831
-
-    # ===== 属性验证器 =====
-
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Any) -> list[str]:
-        """从逗号分隔字符串或列表中解析 CORS Origins。"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
 
     # ===== 派生属性 =====
 
@@ -580,7 +975,12 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        """Redis 连接 URL。"""
+        """Redis 连接 URL。
+
+        密码含 ``#`` / ``@`` / ``/`` 时，请在环境变量里写百分号编码（如 ``mis%23redis1014``），
+        本属性不做二次编码；裸 ``#`` 会导致 URL 被截断
+        （典型报错：``Port could not be cast to integer value as 'mis'``）。
+        """
         if self.REDIS_PASSWORD:
             return (
                 f"redis://:{self.REDIS_PASSWORD}"

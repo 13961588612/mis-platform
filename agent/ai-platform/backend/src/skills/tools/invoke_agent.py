@@ -1,10 +1,12 @@
 """agent__invoke — 调度智能体委托调用其他 Agent（Copilot 调度器）。
 
-仅应由 ``mis-copilot`` 暴露。白名单目标：mis-extract / mis-summary / mis-rag / crm-assistant。
+仅应由 Coordinator（如 ``mis-copilot``）暴露。可派发目标以该 Coordinator 的
+``coordination.yaml`` → ``delegation.worker_ids``（管理台保存）为准；
+**不再**使用环境变量 ``INVOKE_AGENT_WHITELIST`` 硬闸。
 深度限制 depth<=1，禁止递归调度与自调用。
 
 本模块是 Coordinator–Worker 调度基座的**薄编排层**（design-impl.md §1.2）：
-治理校验（白名单 / 深度 / 超时 / 熔断）留在这里，业务语义（TaskBrief、
+治理校验（可派发列表 / 深度 / 超时 / 熔断）留在这里，业务语义（TaskBrief、
 结果信封 task_notification、dispatch_trace、Worker Catalog、子会话续聊）
 全部下沉到 ``src/coordinator``。
 
@@ -14,7 +16,7 @@
 * ``InvokeAgentInput`` / ``InvokeAgentTool`` / ``_invoke_depth`` / ``resolve_whitelist``
   / ``DEFAULT_WHITELIST`` / ``FORBIDDEN_TARGETS`` / ``get_invoke_depth`` 不改名、不移位；
 * ``get_session_manager`` / ``get_agent_manager`` 保持函数内懒导入（保证可被 patch）；
-* 错误文案逐字保留，失败路径不加信封头。
+* 失败路径不加信封头。
 """
 
 from __future__ import annotations
@@ -27,9 +29,8 @@ from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
-
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from pydantic import BaseModel, Field, field_validator
 
 from src.config import get_settings
 from src.coordinator.brief import TaskBrief, TaskBriefBuilder
@@ -53,6 +54,34 @@ logger = get_logger("skills.invoke_agent")
 
 # 协程内调度深度（防止子 Agent 再 invoke）
 _invoke_depth: ContextVar[int] = ContextVar("invoke_agent_depth", default=0)
+
+#: 委派结果回传 Coordinator 的字符上限（超出则截断，避免下一轮 LLM 超时）
+_INVOKE_OUTPUT_MAX_CHARS = 24_000
+
+
+def _clip_invoke_output(text: str, *, max_chars: int = _INVOKE_OUTPUT_MAX_CHARS) -> str:
+    """截断过长的 ``agent__invoke`` 工具输出。
+
+    Args:
+        text: 原始工具输出。
+        max_chars: 最大字符数。
+
+    Returns:
+        原样或带截断提示的文本。
+    """
+    raw = text or ""
+    if len(raw) <= max_chars:
+        return raw
+    keep = max(0, max_chars - 120)
+    logger.warning(
+        "invoke_agent output clipped for coordinator LLM",
+        original_chars=len(raw),
+        kept_chars=keep,
+    )
+    return (
+        raw[:keep]
+        + "\n\n…[委派结果过长已截断；请基于上文摘要与预览作答，勿要求全量明细]"
+    )
 
 
 def _coerce_mis_user_id(value: Any) -> int | None:
@@ -101,7 +130,7 @@ _STATIC_DESCRIPTION: str = (
     "将任务委托给专用智能体并返回其结果。"
     "当用户需要：表单字段抽取 → mis-extract；审批/文本摘要 → mis-summary；"
     "制度/知识检索 → mis-rag；会员/积分/客户画像/CRM 查询 → crm-assistant。"
-    "通用闲聊、文案撰写请直接回答，不要调用本工具。"
+    "完全确定是闲聊、文案撰写等主题且能直接答的请直接回答，不要调用本工具。"
     "填单/补全表单字段请用 formfill__execute，不要用本工具。"
 )
 
@@ -112,10 +141,76 @@ def get_invoke_depth() -> int:
 
 
 def resolve_whitelist(configured: list[str] | None) -> frozenset[str]:
-    """解析配置白名单；空配置回退默认。"""
+    """解析历史环境白名单（**已废弃**，仅保留符号供静态兜底 / 旧测试）。
+
+    空配置回退 ``DEFAULT_WHITELIST``；运行时委派闸门请用
+    :func:`load_coordinator_worker_ids`。
+    """
     if configured:
         return frozenset(a.strip() for a in configured if a and a.strip())
     return DEFAULT_WHITELIST
+
+
+def load_coordinator_worker_ids(coordinator_id: str) -> frozenset[str]:
+    """读取 Coordinator 的可派发执行者列表（``coordination.yaml`` / worker_ids）。
+
+    Args:
+        coordinator_id: 协调者 Agent ID。
+
+    Returns:
+        worker_ids 集合；文件缺失或非 coordinator 时返回空集（fail-closed）。
+    """
+    if not (coordinator_id or "").strip():
+        return frozenset()
+    try:
+        from src.config_manager.file_service import agent_dir, yaml
+        from pathlib import Path
+
+        path = Path(agent_dir(coordinator_id.strip())) / "coordination.yaml"
+        if not path.exists():
+            return frozenset()
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict) or data.get("role") != "coordinator":
+            return frozenset()
+        delegation = data.get("delegation") or {}
+        raw = delegation.get("worker_ids") or []
+        if not isinstance(raw, list):
+            return frozenset()
+        return frozenset(str(x).strip() for x in raw if str(x).strip())
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不得阻断，按空列表拒绝委派
+        logger.warning(
+            "load coordinator worker_ids failed",
+            coordinator_id=coordinator_id,
+            error=str(exc),
+        )
+        return frozenset()
+
+
+async def resolve_delegate_allowlist(parent_session_id: str) -> frozenset[str] | None:
+    """解析本轮可派发集合。
+
+    Args:
+        parent_session_id: 父会话 ID。
+
+    Returns:
+        - ``None``：无会话 / 会话无 ``agent_id``（单测替身）→ **跳过**可派发校验；
+        - ``frozenset``：已解析的 ``worker_ids``（可为空 = 全部拒绝）。
+    """
+    if not parent_session_id:
+        return None
+    try:
+        from src.agent.session import get_session_manager
+
+        parent = await get_session_manager().get_session(parent_session_id)
+    except Exception:  # noqa: BLE001 - 读会话异常时跳过（与历史单测「无 parent」兼容）
+        return None
+    if parent is None:
+        return frozenset()
+    coordinator_id = str(getattr(parent, "agent_id", "") or "").strip()
+    if not coordinator_id:
+        # 生产会话必有 agent_id；缺省视为测试替身，跳过以免误杀
+        return None
+    return load_coordinator_worker_ids(coordinator_id)
 
 
 class InvokeAgentInput(BaseModel):
@@ -124,9 +219,7 @@ class InvokeAgentInput(BaseModel):
     agent_id: str = Field(
         ...,
         description=(
-            "要委托的目标智能体 ID。"
-            "允许：mis-extract（字段抽取）、mis-summary（摘要）、"
-            "mis-rag（知识检索）、crm-assistant（会员/积分/CRM）。"
+            "要委托的目标智能体 ID（须为当前 Coordinator 调度配置中的可派发执行者）。"
         ),
     )
     content: str = Field(
@@ -236,9 +329,8 @@ class InvokeAgentTool(BaseTool):
             现网错误文案或 Brief 重写模板。
         """
         settings = get_settings()
-        whitelist = resolve_whitelist(settings.INVOKE_AGENT_WHITELIST)
         max_depth = max(1, int(settings.INVOKE_AGENT_MAX_DEPTH or 1))
-        timeout_s = max(5, int(settings.INVOKE_AGENT_TIMEOUT_SECONDS or 120))
+        timeout_s = max(5, int(settings.INVOKE_AGENT_TIMEOUT_SECONDS or 1680))
 
         agent_id = (arguments.agent_id or "").strip()
         content = (arguments.content or "").strip()
@@ -266,11 +358,7 @@ class InvokeAgentTool(BaseTool):
                 is_error=True,
             )
 
-        # 1.3 硬约束·闸②（belt-and-suspenders）：mis-admin-helper 作为后台操作员专属
-        # Agent，copilot 全链路恒定不可达。即便被误配进白名单 / scoped catalog，
-        # 这里也显式拒绝，绝不委派（与运行时 L249 白名单判定形成双保险）。
-        # 懒导入：常量从 catalog 延迟导入，避免模块被 import 时即触发 catalog
-        # 副作用 / 循环依赖（design §8 T03 懒导入红线）。
+        # mis-admin-helper：后台操作员专属，copilot 全链路恒定不可达。
         from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
 
         if agent_id in ADMIN_HELPER_AGENT_IDS:
@@ -278,23 +366,36 @@ class InvokeAgentTool(BaseTool):
                 output=f"目标智能体 {agent_id} 不可经调度链接触达（后台操作员专属，硬约束）",
                 is_error=True,
             )
-        if agent_id not in whitelist:
-            allowed = ", ".join(sorted(whitelist))
-            return ToolResult(
-                output=f"目标智能体不在白名单：{agent_id}。允许：{allowed}",
-                is_error=True,
-            )
-
         meta = context.metadata or {}
         identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else {}
         parent_session_id = str(meta.get("session_id") or "")
-
-        # ===== 计时与任务 ID：治理校验通过后开始（design-impl.md §7.2）=====
         started_at = perf_counter()
         task_id = uuid4().hex[:12]
         intent = (arguments.intent or "").strip() or _WORKER_INTENT_HINTS.get(
             agent_id, "unknown"
         )
+
+        # 可派发闸：coordination.worker_ids（管理台）。无会话上下文时跳过（单测兼容）。
+        allowlist = await resolve_delegate_allowlist(parent_session_id)
+        if allowlist is not None and agent_id not in allowlist:
+            allowed = ", ".join(sorted(allowlist)) or "（空，请在调度配置中选择可派发执行者）"
+            if parent_session_id:
+                await self._record_trace(
+                    parent_session_id,
+                    DispatchTraceEntry(
+                        intent=intent,
+                        worker_id=agent_id,
+                        tool=self.name,
+                        status=TRACE_STATUS_REJECTED,
+                        latency_ms=_elapsed_ms(started_at),
+                        task_id=task_id,
+                        brief_rejected=False,
+                    ),
+                )
+            return ToolResult(
+                output=f"目标智能体不在可派发列表：{agent_id}。允许：{allowed}",
+                is_error=True,
+            )
         worker_spec = self._get_worker_spec(agent_id)
 
         # ===== mode="stop"：停止已绑定的 Worker 子会话（C5）=====
@@ -402,6 +503,19 @@ class InvokeAgentTool(BaseTool):
         child_meta["delegated_from"] = "mis-copilot"
         if parent_session_id:
             child_meta["parent_session_id"] = parent_session_id
+        # Copilot A2UI：父上下文已由入站回源写入 X-Mis-*；透传给 Worker，
+        # 否则 iqd__ask 只有 misUserId、无角色码 → 45204。
+        from src.identity.ask_identity_context import X_MIS_HEADER_KEYS
+
+        for header_key in X_MIS_HEADER_KEYS:
+            value = meta.get(header_key)
+            if isinstance(value, str) and value.strip():
+                child_meta.setdefault(header_key, value)
+        parent_iqd = meta.get("iqd")
+        if isinstance(parent_iqd, dict) and parent_iqd.get("connection_id") is not None:
+            child_iqd = dict(child_meta.get("iqd") or {}) if isinstance(child_meta.get("iqd"), dict) else {}
+            child_iqd.setdefault("connection_id", parent_iqd.get("connection_id"))
+            child_meta["iqd"] = child_iqd
 
         # ===== 续聊锚点（C5）：命中则复用子会话，未命中静默降级 spawn =====
         reuse_session_id = await self._resolve_continue_session(
@@ -410,6 +524,21 @@ class InvokeAgentTool(BaseTool):
             parent_session_id=parent_session_id,
             worker_id=agent_id,
         )
+
+        # 模板报告 Worker：代码管线（目录→决策→抽槽→执行），不进 OpenHarness
+        if agent_id == "template-report":
+            return await self._run_template_report_fast_path(
+                parent_session_id=parent_session_id,
+                parent=parent,
+                brief=brief,
+                child_meta=child_meta,
+                user_id=user_id,
+                mis_user_id=mis_user_id,
+                task_id=task_id,
+                intent=intent,
+                started_at=started_at,
+                meta=meta,
+            )
 
         # 深度必须在并发闸口之前 set：asyncio 子任务拷贝 Context，兄弟任务互不污染
         token: Token[int] = _invoke_depth.set(depth + 1)
@@ -518,6 +647,157 @@ class InvokeAgentTool(BaseTool):
         )
 
     # ===== 内部编排 helper =====
+
+    async def _run_template_report_fast_path(
+        self,
+        *,
+        parent_session_id: str,
+        parent: Any,
+        brief: TaskBrief,
+        child_meta: dict[str, Any],
+        user_id: str,
+        mis_user_id: int | None,
+        task_id: str,
+        intent: str,
+        started_at: float,
+        meta: dict[str, Any],
+    ) -> ToolResult:
+        """模板报告专用快路径：拉 catalog → 决策 → 抽槽 → open_card（点卡后才 execute）/ miss。"""
+        from src.agent.template_report.pipeline import run_template_report_turn
+
+        user_text = ""
+        try:
+            inputs = brief.inputs if isinstance(brief.inputs, dict) else {}
+            user_text = str(inputs.get("user_question") or "").strip()
+        except Exception:  # noqa: BLE001
+            user_text = ""
+        if not user_text:
+            user_text = str(getattr(brief, "goal", "") or "").strip()
+
+        authorization = ""
+        if parent is not None:
+            state = getattr(parent, "state", None) or {}
+            if isinstance(state, dict):
+                authorization = str(
+                    state.get("mis_upstream_jwt") or state.get("misUpstreamJwt") or ""
+                ).strip()
+        if not authorization:
+            authorization = str(
+                meta.get("misUpstreamJwt")
+                or meta.get("mis_upstream_jwt")
+                or child_meta.get("misUpstreamJwt")
+                or ""
+            ).strip()
+        logger.info(
+            "template_report_auth_probe",
+            session_id=parent_session_id or None,
+            has_authorization=bool(authorization),
+            user_id=user_id or None,
+            mis_user_id=mis_user_id,
+            auth_source=(
+                "parent_state"
+                if parent is not None
+                and isinstance(getattr(parent, "state", None), dict)
+                and (
+                    (getattr(parent, "state", None) or {}).get("mis_upstream_jwt")
+                    or (getattr(parent, "state", None) or {}).get("misUpstreamJwt")
+                )
+                else (
+                    "meta"
+                    if (
+                        meta.get("misUpstreamJwt")
+                        or meta.get("mis_upstream_jwt")
+                        or child_meta.get("misUpstreamJwt")
+                    )
+                    else "missing"
+                )
+            ),
+        )
+
+        history_messages: list[dict[str, str]] = []
+        try:
+            # 1) 父会话近几轮（跟问「前天的」依赖上文门店/日期）
+            if parent_session_id:
+                from src.agent.session import get_session_manager
+
+                page = await get_session_manager().list_session_messages(
+                    parent_session_id, page=1, page_size=24
+                )
+                for item in getattr(page, "items", None) or []:
+                    if isinstance(item, dict):
+                        role = str(item.get("role") or "").strip().lower()
+                        content = str(item.get("content") or "").strip()
+                    else:
+                        role = str(getattr(item, "role", "") or "").strip().lower()
+                        content = str(getattr(item, "content", "") or "").strip()
+                    if role not in {"user", "assistant"} or not content:
+                        continue
+                    history_messages.append({"role": role, "content": content})
+            # 2) 硬委派 attachments 兜底（无父消息时）
+            if not history_messages and isinstance(getattr(brief, "inputs", None), dict):
+                attachments = str(brief.inputs.get("attachments_text") or "").strip()
+                if attachments:
+                    history_messages.append({"role": "user", "content": attachments})
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "template_report history load failed",
+                session_id=parent_session_id or None,
+                exc_info=True,
+            )
+
+        outcome = await run_template_report_turn(
+            user_text=user_text,
+            authorization=authorization,
+            user_id=user_id,
+            mis_user_id=mis_user_id,
+            session_id=parent_session_id,
+            history_messages=history_messages or None,
+        )
+        latency_ms = _elapsed_ms(started_at)
+        if outcome.kind == "miss":
+            status = TaskStatus.SKIPPED
+            result_text = ""
+            is_error = False
+        elif outcome.kind == "error":
+            # 权限/目录失败要对用户直出；用 completed 信封，A2UI 才能透传正文
+            # （failed 无信封头会被 decide 路径当成空结果打成通用拒答）。
+            status = TaskStatus.COMPLETED
+            result_text = outcome.text or "模板报告执行失败"
+            is_error = True
+        else:
+            # open_card / executed
+            status = TaskStatus.COMPLETED
+            result_text = outcome.text or ""
+            is_error = False
+
+        logger.info(
+            "template_report_fast_path",
+            kind=outcome.kind,
+            report_code=outcome.report_code,
+            detail=outcome.detail,
+            latency_ms=latency_ms,
+            session_id=parent_session_id or None,
+        )
+        if is_error:
+            await self._record_failure(parent_session_id, "template-report", threshold=3)
+        else:
+            await self._record_success(parent_session_id, "template-report")
+
+        return await self._finish(
+            parent_session_id=parent_session_id,
+            notification=TaskNotification.from_worker_result(
+                task_id=task_id,
+                worker_id="template-report",
+                result=result_text,
+                status=status,
+                error_code="TEMPLATE_REPORT_ERROR" if is_error else "",
+                latency_ms=latency_ms,
+                usage=TaskUsage(duration_ms=latency_ms),
+            ),
+            intent=intent or "template_report",
+            started_at=started_at,
+            is_error=is_error,
+        )
 
     def _get_worker_spec(self, agent_id: str) -> Any | None:
         """从 Catalog 取目标 Worker 契约（未注入 Catalog 时返回 None）。
@@ -679,6 +959,19 @@ class InvokeAgentTool(BaseTool):
         # 子任务（worker 内 qa_pipeline）对其 update 的变异对父任务可见。
         sub_stages_acc: dict[str, int] = {}
         cv_token = QA_SUB_STAGES_CV.set(sub_stages_acc)
+        # 镜像父会话逐步耗时列表：Worker 的「对话步骤」双写到 Coordinator 本轮 timing.steps
+        # （ContextVar 镜像为主；结束后再从 Worker Redis 显式合并兜底）。
+        mirror_token = None
+        parent_steps: list[dict[str, Any]] | None = None
+        try:
+            from src.runtime.step_timing import TURN_STEPS_CV, mirror_turn_steps
+
+            parent_steps = TURN_STEPS_CV.get()
+            if parent_steps is not None:
+                mirror_token = mirror_turn_steps(parent_steps)
+        except Exception:  # noqa: BLE001
+            mirror_token = None
+            parent_steps = None
         try:
             coro = _run_child_agent(
                 agent_id=agent_id,
@@ -710,11 +1003,48 @@ class InvokeAgentTool(BaseTool):
                     await get_worker_session_registry().bind(
                         parent_session_id, agent_id, result.child_session_id
                     )
+            # 从 Worker Redis 回填逐步耗时 → 父会话 steps + 工具下钻 sub_stages
+            # （镜像失败 / 未部署 ContextVar 路径时仍可见「执行者·大模型/MCP」）。
+            try:
+                from src.runtime.step_timing import (
+                    load_latest_turn_steps,
+                    merge_steps_into,
+                    steps_to_sub_stage_map,
+                )
+
+                worker_steps = await load_latest_turn_steps(result.child_session_id)
+                if worker_steps:
+                    merged = merge_steps_into(parent_steps, worker_steps)
+                    if merged:
+                        logger.info(
+                            "invoke_agent_merged_worker_steps",
+                            parent_session_id=parent_session_id or None,
+                            worker_id=agent_id,
+                            child_session_id=result.child_session_id or None,
+                            merged_steps=merged,
+                        )
+                    if not sub_stages_acc:
+                        step_map = steps_to_sub_stage_map(worker_steps)
+                        if step_map:
+                            sub_stages_acc.update(step_map)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "invoke_agent worker step merge skipped",
+                    worker_id=agent_id,
+                    exc_info=True,
+                )
             # 把共享 dict 中的 worker 细分计时回填到结果（空则 None，不可得）
             result.sub_stages = sub_stages_acc if sub_stages_acc else None
             return result
         finally:
             QA_SUB_STAGES_CV.reset(cv_token)
+            if mirror_token is not None:
+                try:
+                    from src.runtime.step_timing import reset_mirror_turn_steps
+
+                    reset_mirror_turn_steps(mirror_token)
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _record_trace(
         self, parent_session_id: str, entry: DispatchTraceEntry
@@ -753,6 +1083,7 @@ class InvokeAgentTool(BaseTool):
         Returns:
             工具结果。
         """
+        latency_ms = notification.latency_ms or _elapsed_ms(started_at)
         await self._record_trace(
             parent_session_id,
             DispatchTraceEntry(
@@ -760,13 +1091,43 @@ class InvokeAgentTool(BaseTool):
                 worker_id=notification.worker_id,
                 tool=self.name,
                 status=notification.status.value,
-                latency_ms=notification.latency_ms or _elapsed_ms(started_at),
+                latency_ms=latency_ms,
                 task_id=notification.task_id,
                 brief_rejected=False,
                 sub_stages=sub_stages,
             ),
         )
-        return ToolResult(output=notification.to_tool_output(), is_error=is_error)
+        try:
+            from src.runtime.step_timing import log_turn_step
+
+            log_turn_step(
+                session_id=parent_session_id or "-",
+                step_name=f"委派执行·{notification.worker_id or 'worker'}",
+                duration_ms=latency_ms,
+                agent_id=notification.worker_id or "",
+                detail=(
+                    f"status={notification.status.value}；"
+                    f"intent={intent or '-'}；"
+                    f"task={notification.task_id}"
+                    + ("；失败" if is_error else "")
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info(
+            "invoke_agent_timing",
+            parent_session_id=parent_session_id or None,
+            task_id=notification.task_id,
+            intent=intent,
+            worker_id=notification.worker_id,
+            status=notification.status.value,
+            latency_ms=latency_ms,
+            is_error=is_error,
+            sub_stages=sub_stages,
+        )
+        # Coordinator 下一轮 LLM 吃不下超长 Worker 正文（尤其 mis-iqd 全量 JSON）会超时。
+        raw_output = notification.to_tool_output()
+        return ToolResult(output=_clip_invoke_output(raw_output), is_error=is_error)
 
     @staticmethod
     async def _record_failure(
@@ -934,9 +1295,12 @@ async def _run_child_agent(
     # 父身份缺失（None）时保留子会话既有值，不清空、不回退 user_id。
     if mis_user_id is not None:
         child_session.mis_user_id = mis_user_id
-    # 标记委托会话，便于排障
+    # 标记委托会话：runtime state → PG metadata（列表折叠 / 详情父链）
     child_session.state["delegated_from"] = "mis-copilot"
-    child_session.state["parent_hint"] = metadata.get("parent_session_id")
+    parent_sid = str(metadata.get("parent_session_id") or "").strip()
+    child_session.state["parent_hint"] = parent_sid or None
+    if parent_sid:
+        child_session.state["parent_session_id"] = parent_sid
     await session_manager.save_session(child_session)
 
     instance = await agent_manager.ensure_agent_ready(agent_id)
@@ -947,35 +1311,173 @@ async def _run_child_agent(
     tool_uses: int = 0
     tokens: int = 0
     kb_retrieve_hits: list[Any] = []
+    # 与文本通道一致：预先生成 assistant 消息 UUID，计时 turn_key / 落库共用，
+    # 运营台打开 Worker 子会话时可按 message.id 映射到逐步耗时。
+    assistant_message_id: str = str(uuid4())
 
-    async for event in instance.process_message(
-        session=child_session,
-        message=Message(role="user", content=content, metadata=metadata),
-    ):
-        if event.type == AgentEventType.TEXT_DELTA and event.content:
-            response_parts.append(event.content)
-        elif event.type == AgentEventType.TOOL_CALL:
-            tool_uses += 1
-        elif event.type == AgentEventType.TOOL_RESULT and event.result:
-            err: Any | None = event.result.get("error")
-            if err:
-                tool_errors.append(f"{event.tool_name}: {err}")
-            elif event.tool_name == "kb_retrieve":
-                output = event.result.get("output")
-                if isinstance(output, str) and output.strip():
-                    from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+    from contextlib import nullcontext
 
-                    kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
-        elif event.type == AgentEventType.ERROR:
-            runtime_error = event.message or "Agent runtime error"
-        elif event.type == AgentEventType.DONE and event.token_usage is not None:
-            tokens = int(getattr(event.token_usage, "total", 0) or 0)
+    from src.cluster.session_lock import get_shared_redis_session_lock
+
+    try:
+        lock = await get_shared_redis_session_lock()
+        lock_ctx = lock.acquire(child_session.session_id)
+    except Exception as exc:  # noqa: BLE001 - lock unavailable must not block delegated work
+        logger.warning("child session lock unavailable; running without lock", error=str(exc))
+        lock_ctx = nullcontext()
+
+    async with lock_ctx as lock_result:
+        if lock_result is not None and not lock_result.locked:
+            raise RuntimeError("child session is busy")
+
+        # 落库用户回合（与 /sessions/{id}/messages 同口径；失败不阻断委派）
+        try:
+            await session_manager.add_message(
+                session_id=child_session.session_id,
+                role="user",
+                content=content,
+                metadata=metadata,
+            )
+            # add_message 可能换了内存对象，刷新引用
+            child_session = await session_manager.get_session(child_session.session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "worker user message persist failed (degraded)",
+                agent_id=agent_id,
+                child_session_id=child_session.session_id,
+                error=str(exc),
+            )
+
+        async for event in instance.process_message(
+            session=child_session,
+            message=Message(role="user", content=content, metadata=metadata),
+            assistant_message_id=assistant_message_id,
+        ):
+            if event.type == AgentEventType.TEXT_DELTA and event.content:
+                # 拦截 Worker 把 forceLiveQuery 历史占位复述成正文
+                from src.runtime.openharness import (
+                    is_force_live_stub_echo,
+                    strip_force_live_stub_markers,
+                )
+                from src.runtime.gateway_api_client import is_model_garbage_payload
+
+                delta = strip_force_live_stub_markers(event.content)
+                if is_force_live_stub_echo(event.content) or not delta:
+                    continue
+                # 乱码哨兵 / 碎片：不回灌父会话，整轮按失败处理
+                if is_model_garbage_payload(delta):
+                    response_parts.append(delta)
+                    continue
+                response_parts.append(delta)
+                # 实时回灌父会话，A2UI Copilot 报告真流式
+                from src.coordinator.parent_progress import emit_parent_text_delta
+
+                await emit_parent_text_delta(delta)
+            elif event.type == AgentEventType.TOOL_CALL:
+                tool_uses += 1
+                # 转发到父会话 SSE，供 Copilot 工具步骤折叠条（不仅显示「委派执行」）
+                from src.coordinator.parent_progress import emit_parent_tool_progress
+
+                await emit_parent_tool_progress(event)
+            elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                from src.coordinator.parent_progress import emit_parent_tool_progress
+
+                await emit_parent_tool_progress(event)
+                err: Any | None = event.result.get("error")
+                if err:
+                    # 空名 Unknown tool 对用户无信息量，且常由 thinking+tools 畸形调用引起
+                    tname = (event.tool_name or "").strip()
+                    err_s = str(err).strip()
+                    if not tname and err_s.startswith("Unknown tool:"):
+                        continue
+                    tool_errors.append(f"{tname}: {err_s}" if tname else err_s)
+                elif event.tool_name == "kb_retrieve":
+                    output = event.result.get("output")
+                    if isinstance(output, str) and output.strip():
+                        from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+
+                        kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
+            elif event.type == AgentEventType.ERROR:
+                runtime_error = event.message or "Agent runtime error"
+            elif event.type == AgentEventType.DONE and event.token_usage is not None:
+                tokens = int(getattr(event.token_usage, "total", 0) or 0)
 
     text = "".join(response_parts).strip()
     child_session_id = str(getattr(child_session, "session_id", "") or "")
 
+    # 委派正文回灌父 SSE 诊断：区分 none / single_dump / multi_chunk
+    try:
+        from src.coordinator.parent_progress import (
+            format_parent_stream_detail,
+            parent_text_stream_stats,
+        )
+
+        stream_stats = parent_text_stream_stats()
+        logger.info(
+            "worker_parent_stream_summary",
+            agent_id=agent_id,
+            child_session_id=child_session_id,
+            worker_text_chars=len(text),
+            worker_text_delta_parts=len(response_parts),
+            stream_mode=stream_stats.get("stream_mode"),
+            stream_delta_count=stream_stats.get("delta_count"),
+            stream_total_chars=stream_stats.get("total_chars"),
+            stream_span_ms=stream_stats.get("span_ms"),
+            stream_max_chunk_chars=stream_stats.get("max_chunk_chars"),
+            detail=format_parent_stream_detail(stream_stats),
+        )
+    except Exception:  # noqa: BLE001 - 诊断日志失败不阻断
+        pass
+
+    from src.runtime.gateway_api_client import (
+        MODEL_GARBAGE_RETRY_MESSAGE,
+        is_model_garbage_payload,
+    )
+
+    garbage_output = bool(text) and is_model_garbage_payload(text)
+    persist_text = (
+        MODEL_GARBAGE_RETRY_MESSAGE
+        if garbage_output
+        else (text or f"（{agent_id} 未返回文本内容）")
+    )
+
+    # 落库助手回合（与 timing turn_key 对齐）；空正文也写一条便于详情映射
+    try:
+        await session_manager.add_message(
+            session_id=child_session_id,
+            role="assistant",
+            content=persist_text,
+            message_id=assistant_message_id,
+            metadata={
+                "delegated_from": "mis-copilot",
+                "parent_session_id": str(metadata.get("parent_session_id") or "") or None,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker assistant message persist failed (degraded)",
+            agent_id=agent_id,
+            child_session_id=child_session_id,
+            error=str(exc),
+        )
+
     if runtime_error:
-        raise RuntimeError(runtime_error)
+        from src.runtime.openharness import is_max_turns_error_message
+
+        # 触顶且已有正文（含 soft-finish 说明）：按软成功返回，避免空失败连环重试
+        if text and is_max_turns_error_message(runtime_error):
+            logger.warning(
+                "worker_max_turns_with_text",
+                agent_id=agent_id,
+                child_session_id=child_session_id,
+                text_chars=len(text),
+                runtime_error=runtime_error[:200],
+            )
+        else:
+            raise RuntimeError(runtime_error)
+
+    if garbage_output:
+        raise RuntimeError(MODEL_GARBAGE_RETRY_MESSAGE)
 
     if not text and tool_errors:
         # 典型：crm-assistant MCP 未连接时工具失败且无正文

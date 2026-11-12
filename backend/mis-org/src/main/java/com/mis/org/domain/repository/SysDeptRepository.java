@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,4 +46,18 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
 
     /** V54 新增：是否存在引用某部门类型的部门。 */
     boolean existsByDeptTypeId(Long deptTypeId);
+
+
+    /** Convenience: find descendant IDs for a department (by ID only, org from internal query). */
+    @Query("""
+            SELECT d.id FROM SysDept d
+            WHERE CONCAT(',', d.ancestors, ',') LIKE CONCAT('%,', CAST(:deptId AS STRING), ',%')
+            """)
+    List<Long> findDescendantIdsById(@Param("deptId") Long deptId);
+
+    @Query("""
+            SELECT d.id FROM SysDept d
+            WHERE d.tenantId = :tenantId AND d.status = 1 AND d.id IN :ids
+            """)
+    List<Long> findActiveIds(@Param("tenantId") Long tenantId, @Param("ids") Collection<Long> ids);
 }

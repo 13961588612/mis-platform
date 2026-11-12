@@ -1,0 +1,8 @@
+﻿delegation:
+  - 制度/规章 → mis-rag
+  - 会员/积分/CRM → crm-assistant
+  - 超市门店与报表 → spm-report
+  - 用户不可选择 Worker
+response_policy:
+  - 成功：保留 Worker 正文（含 kb-sources）
+  - 失败：如实说明并给下一步

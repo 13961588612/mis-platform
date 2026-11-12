@@ -1,0 +1,183 @@
+classDiagram
+    %% ===== mis-taskflow（内部服务）=====
+    class FormCategory {
+        +Long id
+        +Long tenantId
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+        +Integer deleted
+        +Long createdBy
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+        +static Long ROOT_PARENT_ID = 0
+    }
+
+    class FormCategoryRepository {
+        <<interface>>
+        +Optional~FormCategory~ findByIdAndTenantIdAndDeleted(id, tenantId, deleted)
+        +Optional~FormCategory~ findByTenantIdAndCode(tenantId, code)
+        +List~FormCategory~ findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, deleted)
+        +long countByTenantIdAndParentIdAndDeleted(tenantId, parentId, deleted)
+        +long countByTenantIdAndCategoryIdAndDeleted(tenantId, categoryId)
+    }
+
+    class FormCategoryService {
+        +List~FormCategoryVO~ list(tenantId)
+        +List~FormCategoryVO~ tree(tenantId)
+        +FormCategoryVO get(id, tenantId)
+        +Long create(tenantId, operatorId, req)
+        +void update(id, tenantId, req)
+        +void delete(id, tenantId)
+        -void validateParent(tenantId, parentId, selfId)
+    }
+
+    class FormCategoryController {
+        +tree(tenantId)
+        +list(tenantId)
+        +get(id, tenantId)
+        +create(tenantId, operatorId, req)
+        +update(id, tenantId, req)
+        +delete(id, tenantId)
+    }
+
+    class FormCategoryVO {
+        +String id
+        +String tenantId
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+        +List~FormCategoryVO~ children
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+    }
+
+    class UpsertFormCategoryRequest {
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+    }
+
+    class FormDefinition {
+        +Long id
+        +Long tenantId
+        +Long categoryId  %% NEW: 软引用 form_category.id
+        +String code
+        +String name
+        +String description
+        +String status
+        +Integer sortOrder
+        +String config
+        +Integer deleted
+        +Long createdBy
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+    }
+
+    class FormDefinitionRepository {
+        <<interface>>
+        +Optional~FormDefinition~ findByTenantIdAndCode(tenantId, code)
+        +Optional~FormDefinition~ findByIdAndTenantIdAndDeleted(id, tenantId, deleted)
+        +List~FormDefinition~ findByTenantIdAndDeletedOrderBySortOrderAscIdAsc(tenantId, deleted)
+        +List~FormDefinition~ findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(tenantId, status, deleted)
+        +List~FormDefinition~ findByTenantIdAndCategoryIdAndDeletedOrderBySortOrderAscIdAsc(tenantId, categoryId, deleted)
+        +List~FormDefinition~ findAliveByTenantIdAndCodes(tenantId, codes)
+    }
+
+    class FormDefinitionService {
+        +List~FormDefinitionVO~ list(tenantId, status, categoryId)
+        +List~FormDefinitionVO~ listEnabled(tenantId)
+        +FormDefinitionVO get(id, tenantId)
+        +Long create(tenantId, operatorId, req)
+        +void update(id, tenantId, req)
+        +void delete(id, tenantId)
+        +void assertEnabled(tenantId, formCode)
+        +List~String~ listEnabledCodes(tenantId, codes)
+    }
+
+    class FormDefinitionController {
+        +list(tenantId, status, categoryId)
+        +get(id, tenantId)
+        +create(tenantId, operatorId, req)
+        +update(id, tenantId, req)
+        +delete(id, tenantId)
+    }
+
+    class FormDefinitionVO {
+        +String id
+        +String tenantId
+        +Long categoryId  %% NEW
+        +String code
+        +String name
+        +String description
+        +String status
+        +Integer sortOrder
+        +String config
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+    }
+
+    class UpsertFormDefinitionRequest {
+        +Long categoryId  %% CHANGED(was parentId)
+        +String code
+        +String name
+        +String description
+        +String status
+        +Integer sortOrder
+        +String config
+    }
+
+    %% ===== mis-admin-bff（对外 BFF 透传）=====
+    class BffFormCategoryController {
+        <<RestController>>
+        +"/api/v1/form-categories"
+    }
+    class BffFormDefinitionController {
+        <<RestController>>
+        +"/api/v1/form-definitions"
+    }
+    class TaskflowWebClient {
+        +formCategoryTree(tenantId)
+        +formCategories(tenantId)
+        +getFormCategory(id, tenantId)
+        +createFormCategory(tenantId, operatorId, body)
+        +updateFormCategory(id, tenantId, body)
+        +deleteFormCategory(id, tenantId)
+        +formDefinitions(tenantId, status, categoryId)
+        +formDefinition(id, tenantId)
+        +createFormDefinition(...)
+        +updateFormDefinition(...)
+        +deleteFormDefinition(...)
+    }
+
+    FormCategoryController --> FormCategoryService : delegates
+    FormCategoryService --> FormCategoryRepository : uses
+    FormCategoryService --> FormDefinitionRepository : count refs (delete guard)
+    FormCategoryService ..> FormCategoryVO : builds
+    FormCategoryService ..> UpsertFormCategoryRequest : reads
+    FormCategoryRepository ..> FormCategory : manages
+
+    FormDefinitionController --> FormDefinitionService : delegates
+    FormDefinitionService --> FormDefinitionRepository : uses
+    FormDefinitionService ..> FormDefinitionVO : builds
+    FormDefinitionService ..> UpsertFormDefinitionRequest : reads
+    FormDefinitionRepository ..> FormDefinition : manages
+    FormDefinitionService ..> FormCategoryRepository : validate categoryId exists
+
+    BffFormCategoryController --> TaskflowWebClient : passthrough
+    BffFormDefinitionController --> TaskflowWebClient : passthrough
+    BffFormCategoryController ..> FormCategoryVO : returns
+    BffFormDefinitionController ..> FormDefinitionVO : returns
+    TaskflowWebClient ..> FormCategoryController : HTTP /internal/v1/form-categories
+    TaskflowWebClient ..> FormDefinitionController : HTTP /internal/v1/form-definitions
+
+    note for FormDefinition "kind / parent_id 列仍在 DB 中软废弃；实体已移除，不再读写"

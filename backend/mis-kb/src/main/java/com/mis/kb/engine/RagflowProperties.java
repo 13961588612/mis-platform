@@ -73,15 +73,15 @@ public class RagflowProperties {
     private boolean raptorEnabled = true;
 
     /**
-     * 当前引擎是否声明支持页码索引/TOC（{@code parser_config.ext.toc_extraction}）。
+     * 当前引擎是否声明支持页码索引/TOC（{@code parser_config.toc_extraction}）。
      *
-     * <p>同步经 {@code parser_config.ext} 下发（2026-08-19 实测）；本开关控制
-     * {@code capabilities().parserTocSupported} 与前端置灰，默认 {@code true}（RAGFlow 集成环境）。
+     * <p>字段写在 {@code parser_config} 顶层（现网拒 {@code ext}）。本开关控制
+     * {@code capabilities().parserTocSupported} 与前端置灰，默认 {@code true}。
      */
     private boolean parserTocSupported = true;
 
     /**
-     * 当前引擎是否声明支持图像/表格上下文窗口（ext 三键镜像）。
+     * 当前引擎是否声明支持图像/表格上下文窗口（parser_config 三键镜像）。
      *
      * <p>口径同 {@link #parserTocSupported}；默认 {@code true}。
      */

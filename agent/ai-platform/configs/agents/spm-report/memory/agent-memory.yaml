@@ -1,0 +1,22 @@
+# =============================================================================
+# agent-memory.yaml — 超市报表助手静态记忆配置入口
+# =============================================================================
+
+memory_type: static
+
+fields:
+  - personality
+  - facts
+
+personality:
+  file: personality.md
+  description: "超市报表助手的角色身份、人格风格和行为准则"
+
+facts:
+  dir: facts/
+  description: "超市报表域事实与边界（后续可扩展）"
+  glob: "*.yaml"
+
+version: "0.1.0"
+updated_at: "2026-10-30"
+updated_by: "system"

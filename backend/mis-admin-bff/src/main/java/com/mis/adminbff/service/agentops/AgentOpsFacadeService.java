@@ -7,6 +7,7 @@ import com.mis.adminbff.client.AgentOpsClient;
 import com.mis.adminbff.client.AgentOpsUri;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
+import com.mis.adminbff.dto.iqd.IqdFeedbackRequest;
 import com.mis.adminbff.service.KbSubjectProxyService;
 import com.mis.adminbff.support.AgentOpsErrorCodes;
 import com.mis.adminbff.support.RequestContext;
@@ -16,6 +17,7 @@ import com.mis.common.security.context.LoginUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.HashSet;
 import java.util.Map;
@@ -270,9 +272,16 @@ public class AgentOpsFacadeService {
         Map<String, String> params = AgentOpsUri.of(
                 "agent_id", query.agentId(),
                 "channel", query.channel(),
+                "user_id", query.userId(),
                 "keyword", query.keyword(),
                 "from", query.from(),
                 "to", query.to(),
+                "include_empty",
+                query.includeEmpty() == null ? null : String.valueOf(query.includeEmpty()),
+                "include_worker_sessions",
+                query.includeWorkerSessions() == null
+                        ? null
+                        : String.valueOf(query.includeWorkerSessions()),
                 "page", query.normalizedPage(),
                 "page_size", query.normalizedPageSize());
         return client.listSessions(params);
@@ -474,6 +483,21 @@ public class AgentOpsFacadeService {
     }
 
     /**
+     * 用户端评价提交（透传，评价写入链的 BFF 入口，feedback-enhance §2.2）。
+     *
+     * <p>透传层零加工：{@code agent_id} 由下游会话自动带出（= mis-iqd）；body 原样下发。
+     * 操作人/身份经 {@code AgentOpsTransport} 登录上下文头透传（X-User-Id / X-Username），
+     * 不在 body 里注入——与既有反馈端点同款口径，禁止信任客户端伪造评价人。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param request   {@code {rating, comment?, message_id?, content?}}
+     * @return 下游反馈写入结果（透传）
+     */
+    public JsonNode submitFeedback(String sessionId, IqdFeedbackRequest request) {
+        return client.submitFeedback(sessionId, request);
+    }
+
+    /**
      * #32 新建对话会话。
      *
      * <p>下游 {@code CreateSessionRequest.user_id} 必填；运营台 Web 对话只提交 {@code agent_id}。
@@ -502,6 +526,30 @@ public class AgentOpsFacadeService {
     /** #33 发送对话消息（透传，走 chat 超时）。 */
     public JsonNode sendChatMessage(String sessionId, JsonNode body) {
         return client.sendChatMessage(sessionId, body);
+    }
+
+    /** 追加 transcript（透传，只落库）。 */
+    public JsonNode appendTranscript(String sessionId, JsonNode body) {
+        return client.appendTranscript(sessionId, body);
+    }
+
+    /**
+     * P0-1 附件上传（透传 ai-platform）。
+     *
+     * <p>BFF 零加工：{@code MultipartFile} 原样下发下游；登录上下文头由
+     * {@code AgentOpsTransport} 透传（X-User-Id / X-Username / Authorization），
+     * 不在 body 里注入——与既有会话端点同款口径，禁止信任客户端伪造上传人。
+     *
+     * @param file 待上传文件
+     * @return 下游上传结果（透传）
+     */
+    public JsonNode uploadFile(MultipartFile file) {
+        return client.uploadFile(file);
+    }
+
+    /** Copilot 语音转写（透传，音频不落会话附件）。 */
+    public JsonNode transcribeSpeech(MultipartFile file, Integer durationMs) {
+        return client.transcribeSpeech(file, durationMs);
     }
 
     // ==================================================================

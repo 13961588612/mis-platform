@@ -1,0 +1,233 @@
+{
+  "connection_id": 1792061562063,
+  "connection_name": "bg-data",
+  "parent_category": {
+    "code": "05",
+    "name": "门店经营",
+    "create_if_missing": false
+  },
+  "source": [
+    "docs/ai-fusion/bgbh-analyst/planning/03_WrenAI样本问题树.md §S1",
+    "docs/ai-fusion/bgbh-analyst/planning/01_百购商场分析体系.md §主题一/口径字典",
+    "docs/ai-fusion/bgbh-analyst/planning/02_WrenAI语义规则与建模建议.md §mall_sale/whole_sale"
+  ],
+  "notes": [
+    "分类按主题：总盘/排名/结构/坪效；时间粒度用问法变体覆盖，不拆日报周报月报",
+    "金额默认 sale_amt；去券 sale_uncpn_amt；去税 sale_uncpn_taxout_amt",
+    "sale_avg_price=件单价，不是客单价；毛利率用金额加权或预计算列",
+    "日期 T+1；stats_date 按 yyyy-MM-dd 字符串比较",
+    "经营模式只做 GROUP BY，不做未签字枚举等值过滤",
+    "source_dialect=mysql；native_sql=wren_sql",
+    "门店号样本用 store_id（示例 0027，平台核对清单用号）；与 store_name 样本成对，勿混用店名过滤"
+  ],
+  "categories": [
+    {
+      "code": "0501",
+      "name": "总盘",
+      "sort_order": 1
+    },
+    {
+      "code": "0502",
+      "name": "排名",
+      "sort_order": 2
+    },
+    {
+      "code": "0503",
+      "name": "结构",
+      "sort_order": 3
+    },
+    {
+      "code": "0504",
+      "name": "坪效",
+      "sort_order": 4
+    }
+  ],
+  "pairs": [
+    {
+      "category_code": "0501",
+      "remark": "[S1-A1a] 昨日全店销售金额+笔数",
+      "question": "昨天百货销售额是多少？",
+      "wren_sql": "SELECT SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-A1b] 口语变体",
+      "question": "昨天卖了多少",
+      "wren_sql": "SELECT SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-A1c] 业绩说法变体",
+      "question": "昨日全店销售业绩",
+      "wren_sql": "SELECT SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-A3] 去券去税口径·周",
+      "question": "上周销售去券去税金额",
+      "wren_sql": "SELECT SUM(sale_uncpn_taxout_amt) AS 去券去税金额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 7 DAY), '%Y-%m-%d') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-A2s] 本月累计（含券）",
+      "question": "本月累计销售额是多少",
+      "wren_sql": "SELECT SUM(sale_amt) AS 本月累计销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-01') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-uncpn] 去券金额口径·日",
+      "question": "昨天去券销售额是多少",
+      "wren_sql": "SELECT SUM(sale_uncpn_amt) AS 去券销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d')"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-E1] 日环比",
+      "question": "昨天销售环比前日是涨是跌？",
+      "wren_sql": "SELECT SUM(IF(stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d'), sale_amt, 0)) AS 昨日, SUM(IF(stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 2 DAY), '%Y-%m-%d'), sale_amt, 0)) AS 前日, SUM(IF(stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d'), sale_amt, 0)) / NULLIF(SUM(IF(stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 2 DAY), '%Y-%m-%d'), sale_amt, 0)), 0) - 1 AS 环比 FROM ads_trd_mall_sale_d_df WHERE stats_date IN (DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d'), DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 2 DAY), '%Y-%m-%d'))"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-E2] 月度峰值",
+      "question": "今年哪个月销售额最高？",
+      "wren_sql": "SELECT DATE_FORMAT(stats_date, '%Y-%m') AS 月份, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date LIKE CONCAT(DATE_FORMAT(CURDATE(), '%Y'), '%') GROUP BY DATE_FORMAT(stats_date, '%Y-%m') ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-store-1] 单店昨日",
+      "question": "八佰伴镇江店昨天销售额是多少",
+      "wren_sql": "SELECT store_name, SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_name = '八佰伴镇江店' GROUP BY store_name"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-store-2] 单店本月累计",
+      "question": "八佰伴镇江店本月累计销售额",
+      "wren_sql": "SELECT store_name, SUM(sale_amt) AS 本月累计销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-01') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_name = '八佰伴镇江店' GROUP BY store_name"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-B1a] 门店销售排名·日",
+      "question": "昨天各门店销售金额排名",
+      "wren_sql": "SELECT store_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY store_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-B1b] 口语变体",
+      "question": "各门店销售排名",
+      "wren_sql": "SELECT store_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY store_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-B1c] 周变体",
+      "question": "这周各门店销售排名",
+      "wren_sql": "SELECT store_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 7 DAY), '%Y-%m-%d') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY store_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-cnt] 门店笔数排名",
+      "question": "昨天各门店销售笔数排名",
+      "wren_sql": "SELECT store_name, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY store_name ORDER BY 销售笔数 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-B6] 商户排名",
+      "question": "昨天各商户销售排名",
+      "wren_sql": "SELECT business_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY business_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-brand-rank] 品牌排名",
+      "question": "昨天各品牌销售金额排名",
+      "wren_sql": "SELECT brand_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY brand_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-B4] 折扣率金额加权",
+      "question": "昨天折扣率最高的五个品牌",
+      "wren_sql": "SELECT brand_name, SUM(sale_discount_amt) / NULLIF(SUM(sale_amt), 0) AS 加权折扣率 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY brand_name ORDER BY 加权折扣率 DESC"
+    },
+    {
+      "category_code": "0503",
+      "remark": "[S1-B5] 大类毛利·上月",
+      "question": "上个月各大类销售毛利和毛利率",
+      "wren_sql": "SELECT main_category_name, SUM(sale_gross_profit) AS 毛利, SUM(sale_gross_profit) / NULLIF(SUM(sale_amt), 0) AS 毛利率 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(DATE_SUB(CURDATE(), INTERVAL 1 DAY), INTERVAL 1 MONTH), '%Y-%m-01') AND DATE_FORMAT(LAST_DAY(DATE_SUB(DATE_SUB(CURDATE(), INTERVAL 1 DAY), INTERVAL 1 MONTH)), '%Y-%m-%d') GROUP BY main_category_name ORDER BY 毛利 DESC"
+    },
+    {
+      "category_code": "0503",
+      "remark": "[S1-mode] 经营模式构成",
+      "question": "昨天各经营模式销售额",
+      "wren_sql": "SELECT operate_mode, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY operate_mode ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0503",
+      "remark": "[S1-B7] HAVING 计数·上月",
+      "question": "上月销售额超过100万的品牌有几个？",
+      "wren_sql": "SELECT COUNT(*) AS 品牌数 FROM (SELECT brand_id FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(DATE_SUB(CURDATE(), INTERVAL 1 DAY), INTERVAL 1 MONTH), '%Y-%m-01') AND DATE_FORMAT(LAST_DAY(DATE_SUB(DATE_SUB(CURDATE(), INTERVAL 1 DAY), INTERVAL 1 MONTH)), '%Y-%m-%d') GROUP BY brand_id HAVING SUM(sale_amt) > 1000000) t"
+    },
+    {
+      "category_code": "0504",
+      "remark": "[S1-D1] 品类坪效；stats_period=year 待签字",
+      "question": "各门店女装品类坪效排名",
+      "wren_sql": "SELECT store_name, sales_per_square_meter AS 销售坪效 FROM ads_csmr_store_brand_whole_sale_df WHERE stats_period = 'year' AND mid_category_name = '女装' ORDER BY 销售坪效 DESC"
+    },
+    {
+      "category_code": "0504",
+      "remark": "[S1-D1b] 单店坪效",
+      "question": "八佰伴镇江店各品牌销售坪效",
+      "wren_sql": "SELECT brand_name, sales_per_square_meter AS 销售坪效, revenue_per_square_meter AS 营收坪效 FROM ads_csmr_store_brand_whole_sale_df WHERE stats_period = 'year' AND store_name = '八佰伴镇江店' ORDER BY 销售坪效 DESC"
+    },
+    {
+      "category_code": "0504",
+      "remark": "[S1-D2s] 毛利率/回款率",
+      "question": "八佰伴镇江店品牌销售毛利率和回款率",
+      "wren_sql": "SELECT brand_name, ord_sale_margin_rate AS 毛利率, ord_cod_rate AS 回款率 FROM ads_csmr_store_brand_whole_sale_df WHERE stats_period = 'year' AND store_name = '八佰伴镇江店' ORDER BY 毛利率 DESC"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-sid-1] 按门店号查昨日销售",
+      "question": "门店号0027昨天销售额是多少",
+      "wren_sql": "SELECT store_id, store_name, SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_id = '0027' GROUP BY store_id, store_name"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-sid-1b] 口语·店号",
+      "question": "店号0027昨天卖了多少",
+      "wren_sql": "SELECT store_id, store_name, SUM(sale_amt) AS 销售额, SUM(sale_cnt) AS 销售笔数 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_id = '0027' GROUP BY store_id, store_name"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-sid-2] 按门店号本月累计",
+      "question": "门店号0027本月累计销售额",
+      "wren_sql": "SELECT store_id, store_name, SUM(sale_amt) AS 本月累计销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-01') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_id = '0027' GROUP BY store_id, store_name"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-sid-3] 按门店号上周去券去税",
+      "question": "门店号0027上周销售去券去税金额",
+      "wren_sql": "SELECT store_id, store_name, SUM(sale_uncpn_taxout_amt) AS 去券去税金额 FROM ads_trd_mall_sale_d_df WHERE stats_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 7 DAY), '%Y-%m-%d') AND DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') AND store_id = '0027' GROUP BY store_id, store_name"
+    },
+    {
+      "category_code": "0501",
+      "remark": "[S1-sid-dim] 门店号反查店名",
+      "question": "门店号0027是哪家门店",
+      "wren_sql": "SELECT store_id, store_name, city, belong_area, store_type, business_name, status FROM dim_mall_chl_store_df WHERE store_id = '0027'"
+    },
+    {
+      "category_code": "0502",
+      "remark": "[S1-sid-rank] 排名结果带出门店号",
+      "question": "昨天各门店销售金额排名（含门店号）",
+      "wren_sql": "SELECT store_id, store_name, SUM(sale_amt) AS 销售额 FROM ads_trd_mall_sale_d_df WHERE stats_date = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') GROUP BY store_id, store_name ORDER BY 销售额 DESC"
+    },
+    {
+      "category_code": "0504",
+      "remark": "[S1-sid-D1] 按门店号查坪效",
+      "question": "门店号0027各品牌销售坪效",
+      "wren_sql": "SELECT store_id, store_name, brand_name, sales_per_square_meter AS 销售坪效, revenue_per_square_meter AS 营收坪效 FROM ads_csmr_store_brand_whole_sale_df WHERE stats_period = 'year' AND store_id = '0027' ORDER BY 销售坪效 DESC"
+    },
+    {
+      "category_code": "0504",
+      "remark": "[S1-sid-D2] 按门店号查毛利率回款率",
+      "question": "门店号0027品牌销售毛利率和回款率",
+      "wren_sql": "SELECT store_id, store_name, brand_name, ord_sale_margin_rate AS 毛利率, ord_cod_rate AS 回款率 FROM ads_csmr_store_brand_whole_sale_df WHERE stats_period = 'year' AND store_id = '0027' ORDER BY 毛利率 DESC"
+    }
+  ]
+}

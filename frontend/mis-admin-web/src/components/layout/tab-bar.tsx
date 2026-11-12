@@ -191,7 +191,9 @@ export function TabBar() {
               onClick={() => {
                 closeOthers(menu.id);
                 setMenu(null);
-                navigate(menu.id);
+                // id 可能因详情族合并 ≠ path，必须导航到保留 Tab 的 path
+                const kept = useTabStore.getState().tabs.find((t) => t.id === menu.id);
+                navigate(kept?.path ?? menu.id);
               }}
             >
               关闭其他

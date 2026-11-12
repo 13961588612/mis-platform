@@ -86,6 +86,9 @@ async def db_session_context() -> AsyncIterator[AsyncSession]:
 
 async def init_db() -> None:
     """创建所有表（仅用于开发 —— 生产环境请使用 Alembic）。"""
+    # 显式预加载未被主流程 import 的模型，保证 create_all 能建表。
+    from src.models.wecom_binding import WecomIdentityBinding  # noqa: F401
+
     engine: AsyncEngine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

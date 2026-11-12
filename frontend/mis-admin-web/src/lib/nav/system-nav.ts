@@ -56,6 +56,32 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     children: [
       { path: '/system/dict', title: '字典管理', icon: 'BookOpen' },
       { path: '/system/config', title: '系统参数', icon: 'Settings' },
+      // 业务分类（biz_category）：租户通用邻接树，流程 / 表单 / 消息 / 待办共用的业务类型载体，
+      // 与 APP 无关。菜单 95012 `biz:category:list`（V139 登记）。
+      { path: '/system/biz-category', title: '业务分类', icon: 'FolderTree' },
+    ],
+  },
+  {
+    kind: 'branch',
+    title: '流程中心',
+    icon: 'Workflow',
+    children: [
+      { path: '/system/workflow/definitions', title: '流程定义', icon: 'GitBranch' },
+      // ⚠️ 编排已 Dialog 化（在流程定义页里打开），designer-page 进来后立刻 `replace` 回
+      // /system/workflow/definitions，不留历史。
+      // V132 已删除旧菜单 95007，其下「取消发布」(95050) / 「PUT 更新定义」(95056) 两个
+      // sys_menu_api 改挂到菜单 95006（permission `workflow:definition:edit`）。
+      // designer-page 路由（keep-alive-outlet 的 PAGE_MAP）**仍保留**：仅为编排 Dialog 的历史兼容，
+      // 勿删路由或 PAGE_MAP 条目，否则 95006 相关接口回退 403。
+    ],
+  },
+  {
+    kind: 'branch',
+    title: '表单管理',
+    icon: 'FileStack',
+    children: [
+      { path: '/system/forms', title: '表单注册', icon: 'ListTree' },
+      { path: '/system/form-test', title: '测试表单', icon: 'ClipboardList' },
     ],
   },
   {
@@ -65,6 +91,8 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     children: [
       { path: '/monitor/login-log', title: '登录日志', icon: 'Activity' },
       { path: '/monitor/oper-log', title: '操作日志', icon: 'ClipboardList' },
+      { path: '/system/audit-op', title: '业务审计', icon: 'ClipboardCheck' },
+      { path: '/system/exec-monitor', title: '执行监控', icon: 'Activity' },
     ],
   },
 ];

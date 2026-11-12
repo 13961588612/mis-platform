@@ -1,0 +1,8 @@
+status=succeeded
+answer=查询返回 1 行结果。
+cols=['store_id', 'store_name', 'city']
+rows=[["1057", "无锡八佰伴城市超市", null]]
+searching done 462ms detail=语义模型
+generating done 4339ms detail=SQL 已生成
+lineage_check done 1ms detail=涉及 1 张表，全部在授权范围内
+executing done 933ms detail=返回 1 行

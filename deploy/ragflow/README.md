@@ -25,13 +25,15 @@ RAGFlow **不是**单进程 JAR，官方以 **Docker Compose** 运行。本目�
 
 | 组件 | 变量 | 版本 |
 |------|------|------|
-| RAGFlow | `RAGFLOW_IMAGE` | `infiniflow/ragflow:v0.26.4` |
+| RAGFlow | `RAGFLOW_IMAGE` | `infiniflow/ragflow:v0.27.2` |
 | MySQL | `MYSQL_IMAGE_TAG` | `8.0.39` |
 | MinIO | `MINIO_IMAGE_TAG` | `RELEASE.2023-12-20T01-00-02Z` |
 | Valkey | `VALKEY_IMAGE_TAG` | `8` |
 | Elasticsearch | `STACK_VERSION` | `8.11.3` |
 
 主机建议：≥4 核 / ≥16GB RAM / ≥50GB 盘（ES + 解析 worker 吃内存）。低配机可在 `.env` 调小 `ES_HEAP_SIZE`。
+
+**相对 v0.26.4 的 API 差异（mis-kb 已跟 0.27.2）：** 文档/库 `parser_config` **禁止**嵌套 `ext`，页码索引、图像上下文、overlap 等必须写在 `parser_config` 顶层，否则引擎返回 `ext is not supported`。历史 probe 文档仍按 0.26.4 实测留档，实现以 `RagflowClient` 为准。
 
 ## 3. 端口规划（已相对 MIS 开发栈偏移）
 

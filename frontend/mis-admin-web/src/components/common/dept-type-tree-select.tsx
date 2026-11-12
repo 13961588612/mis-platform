@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, Folder, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { listDeptTypeTree } from '@/lib/api/dept-types';
 import type { DeptTypeTreeNode } from '@/types/api';
 
@@ -108,6 +107,20 @@ export function DeptTypeTreeSelect({
     });
   };
 
+
+  // Click-outside handler for the dropdown panel (avoids Radix Portal + Dialog conflict)
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
   const selectNode = (node: DeptTypeTreeNode) => {
     onChange(node.id);
     setSelectedName(node.name);
@@ -184,25 +197,28 @@ export function DeptTypeTreeSelect({
         : '请选择部门类型（树形·仅末级）';
 
   return (
-    <Popover modal open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          className={cn(
-            'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-left shadow-none',
-            'flex items-center justify-between',
-            disabled && 'cursor-not-allowed opacity-60',
-          )}
+
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        className={cn(
+          'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-left shadow-none',
+          'flex items-center justify-between',
+          disabled && 'cursor-not-allowed opacity-60',
+        )}
+      >
+        <span className={cn('min-w-0 flex-1 truncate', selectedName ? 'text-foreground' : 'text-muted-foreground')}>
+          {selectedName || placeholder || defaultPlaceholder}
+        </span>
+        <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+      {open && (
+        <div
+          ref={dropdownRef}
+          className="absolute z-[9999] mt-1 max-h-72 w-80 overflow-auto rounded-md border border-border/60 bg-popover p-1 shadow-card-hover"
         >
-          <span className={cn('min-w-0 flex-1 truncate', selectedName ? 'text-foreground' : 'text-muted-foreground')}>
-            {selectedName || placeholder || defaultPlaceholder}
-          </span>
-          <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-80" align="start">
-        <div className="max-h-72 overflow-auto rounded-md border border-border/60 p-1">
           {mode === 'non-leaf' ? (
             <button
               type="button"
@@ -222,7 +238,7 @@ export function DeptTypeTreeSelect({
             renderNodes(tree, 0)
           )}
         </div>
-      </PopoverContent>
-    </Popover>
-  );
+      )}
+    </div>
+    );
 }

@@ -13,9 +13,10 @@
  *   ④ `V19__agent_ops_seed.sql` 的 sys_menu 种子（菜单文案 + permission 码）
  * 少改任何一处的表现是「菜单点了没反应」或「页面存在但侧栏不显示」。
  *
- * <p>本清单只含 **visible=1 的 12 个侧栏页面**。以下三条详情子路由
- * 在 V19 中是 `type=2 + visible=0`（不进侧栏、permission 仍生效），
- * 故**刻意不出现在这里**，由 `DYNAMIC_PAGES` 提供 Tab 标题：
+ * <p>本清单只含 **visible=1 的侧栏页面**（V154 起 Catalog `/agent/catalog` 已隐藏并入总览）。
+ * 以下三条详情子路由在 V19 中是 `type=2 + visible=0`（不进侧栏、permission 仍生效），
+ * 故**刻意不出现在这里**，由 `DYNAMIC_PAGES` 提供 Tab 标题；主 Tab 身份由
+ * `lib/workspace-tab-id.ts` 收成 `/agent/agents/:id`（避免切详情内 Tab 连开多项）：
  *   `/agent/agents/:id/skills`、`/agent/agents/:id/config`、`/agent/agents/:id/coordination`
  *
  * <p>icon 取值必须同步登记到 `lib/nav/icons.ts` 的 `ICON_MAP`，
@@ -30,9 +31,8 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/sessions', title: '会话管理', icon: 'History' },
   // 会话反馈（V43: 92046，icon MessageSquareWarning 已登记到 lib/nav/icons.ts）
   { kind: 'leaf', path: '/agent/feedback', title: '会话反馈', icon: 'MessageSquareWarning' },
-  // ui.md §2.2 智能体与调度（V19: 92034–92036）
+  // ui.md §2.2 智能体与调度（V19: 92034–92036；92035 Catalog 已并入总览，见 V154）
   { kind: 'leaf', path: '/agent/agents', title: 'Agent 总览', icon: 'Bot' },
-  { kind: 'leaf', path: '/agent/catalog', title: 'Worker Catalog', icon: 'Boxes' },
   { kind: 'leaf', path: '/agent/dispatch', title: '调度观测', icon: 'Route' },
   // ui.md §2.3 技能与工具（V19: 92037–92039）
   { kind: 'leaf', path: '/agent/skills', title: '技能池', icon: 'Sparkles' },
@@ -40,8 +40,12 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/mcp', title: 'MCP 管理', icon: 'Plug' },
   // ui.md §2.4 渠道与运维（V19: 92040–92042）
   { kind: 'leaf', path: '/agent/channels/wecom', title: '企微机器人', icon: 'MessagesSquare' },
-  { kind: 'leaf', path: '/agent/monitor', title: '系统监控', icon: 'Activity' },
-  { kind: 'leaf', path: '/agent/approvals', title: '审批中心', icon: 'ClipboardCheck' },
+  // T11：/agent/monitor、/agent/approvals 由 V19 sys_menu 种子提供，此处不重复登记。
+  // T10 用户侧迁移页（审批中心 / 系统监控；知识库问答与 Skill 管理已下线，改用 KB 门户与技能池）
+  { kind: 'leaf', path: '/ai/approvals', title: '审批中心', icon: 'ClipboardCheck' },
+  { kind: 'leaf', path: '/ai/monitor', title: '系统监控', icon: 'Activity' },
+  // W2 问数管理已迁至独立门户应用 iqd（V77）：/ai/iqd/* → /iqd/*，对应 IQD_NAV，
+  // 不再由 AGENT_NAV 承载（避免与 agent 的 /ai/* 命名空间混淆）。
 ];
 
 /** 展平为叶节点列表（AGENT_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

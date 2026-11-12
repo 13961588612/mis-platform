@@ -1,0 +1,67 @@
+# 选人：规则优先 → 未命中再 JEV（DECISION_MODEL_*）
+intent_router:
+  enabled: true
+  engine: rules_then_model
+  on_fail: fallback_primary
+  min_confidence: 0.6
+  max_context_turns: 3
+  max_context_msg_chars: 160
+  model:
+    name: decision-model-preview
+    timeout_ms: 2000
+  # 规则按序命中即停；日/周/月报优先于超市问数硬委派
+  rules:
+    - id: template_report_period_keywords
+      when:
+        type: keyword
+        any:
+          - 日报
+          - 周报
+          - 月报
+          - 经营日报
+          - 经营周报
+          - 经营月报
+          - 模板报告
+      then:
+        worker_id: template-report
+        intent: template_report
+    - id: template_report_open_regex
+      when:
+        type: regex
+        patterns:
+          - 打开.+(日|周|月)报
+          - 生成.+(日|周|月)报
+          - 出.+(日|周|月)报
+      then:
+        worker_id: template-report
+        intent: template_report
+  labels:
+    template_report:
+      worker_id: template-report
+      intent: template_report
+      description: >-
+        打开/生成/查看固定模板报告参数卡：门店经营日报、周报、月报、模板报告。
+        正例：打开门店经营日报、出周报、生成月报。
+        反例：昨天/前天某店销售额（自然语言问数）、门店列表、制度、会员。
+    spm_report:
+      worker_id: spm-report
+      intent: spm_report
+      description: >-
+        超市/大统华自然语言问数：门店列表、区域有哪些店、销售/毛利/客流/品类、
+        昨天/前天某店销售、区域跟问（金坛呢/溧阳呢）。
+        反例：打开/生成经营日报/周报/月报或模板报告（→ template_report）；制度；会员；闲聊。
+    rag:
+      worker_id: mis-rag
+      intent: rag
+      description: >-
+        仅制度/规章/政策/流程。严禁：门店清单、区域有哪些店、销售/毛利/报表数字。
+    crm:
+      worker_id: crm-assistant
+      intent: crm
+      description: >-
+        会员/积分/券/CRM。反例：门店报表、制度知识库。
+    chitchat:
+      worker_id: ""
+      intent: chitchat
+      description: >-
+        纯闲聊。短确认（需要/好的）须结合上文；上文是报表建议则不要选本标签。

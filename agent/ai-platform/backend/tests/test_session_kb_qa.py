@@ -14,11 +14,14 @@ from src.agent.mis_rag.qa_pipeline import (
     _session_title,
     format_kb_answer_for_chat,
     format_mis_rag_delegate_answer,
+    kb_sources_text_has_chunk,
     parse_kb_retrieve_tool_output,
+    should_append_pending_kb_sources_fence,
 )
-from src.models.retrieve import ChunkHit, QaAnswer, QaCitation
 from src.api.deps import get_agent_manager_dep, get_optional_current_user, get_session_manager_dep
 from src.api.routes.session import router
+from src.cluster.session_lock import LockAcquireResult
+from src.models.retrieve import ChunkHit, QaAnswer, QaCitation
 
 
 def test_session_title_truncates_long_question() -> None:
@@ -174,6 +177,27 @@ def test_parse_kb_retrieve_tool_output() -> None:
     assert hits[0].image_id == "x"
 
 
+def test_kb_sources_text_has_chunk_detects_snippet() -> None:
+    with_chunk = (
+        '答\n\n```kb-sources\n'
+        '[{"source":"手册","score":0.9,"chunk":"退货开关"}]\n```'
+    )
+    thin = '答\n\n```kb-sources\n[{"source":"手册","score":0.9}]\n```'
+    assert kb_sources_text_has_chunk(with_chunk) is True
+    assert kb_sources_text_has_chunk(thin) is False
+    assert kb_sources_text_has_chunk("无围栏") is False
+
+
+def test_should_append_pending_when_model_emitted_thin_fence() -> None:
+    pending = '```kb-sources\n[{"source":"手册","chunk":"完整片段"}]\n```'
+    thin = '答\n\n```kb-sources\n[{"source":"手册","score":0.9}]\n```'
+    rich = '答\n\n```kb-sources\n[{"source":"手册","chunk":"已有"}]\n```'
+    assert should_append_pending_kb_sources_fence(thin, pending) is True
+    assert should_append_pending_kb_sources_fence(rich, pending) is False
+    assert should_append_pending_kb_sources_fence("仅正文", pending) is True
+    assert should_append_pending_kb_sources_fence(thin, None) is False
+
+
 @pytest.fixture
 def kb_chat_client() -> tuple[TestClient, MagicMock, MagicMock]:
     """挂载 session 路由，注入会话 / Agent 替身。"""
@@ -196,6 +220,20 @@ def kb_chat_client() -> tuple[TestClient, MagicMock, MagicMock]:
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
+
+    class _NoopCtx:
+        async def __aenter__(self):
+            return LockAcquireResult(True)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _NoopLock:
+        def acquire(self, session_id):
+            return _NoopCtx()
+
+    router_mod = __import__("src.api.routes.session", fromlist=["get_shared_redis_session_lock"])
+    router_mod.get_shared_redis_session_lock = AsyncMock(return_value=_NoopLock())
     app.dependency_overrides[get_session_manager_dep] = lambda: session_manager
     app.dependency_overrides[get_agent_manager_dep] = lambda: agent_manager
     app.dependency_overrides[get_optional_current_user] = lambda: {"user_id": "1001"}
@@ -213,7 +251,9 @@ def test_send_message_mis_rag_uses_kb_pipeline(
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.closed = False
 
-        async def run(self, req: Any, ctx: Any, generate: Any, *, structured: bool = True) -> QaAnswer:
+        async def run(
+            self, req: Any, ctx: Any, generate: Any, *, structured: bool = True
+        ) -> QaAnswer:
             assert structured is False
             assert req.question == "年假怎么休"
             await generate("## 检索到的知识库片段\n...")

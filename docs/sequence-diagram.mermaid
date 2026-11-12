@@ -1,63 +1,182 @@
+%% ============================================================
+%% ① 表单分类 CRUD（kind=CATEGORY，复用 form_definition 表）
+%%    前端「分类管理」Tab → BFF → mis-taskflow 内部
+%% ============================================================
 sequenceDiagram
-    participant U as 用户
-    participant FE as 前端
-    participant GW as Gateway
-    participant BFF as AiProxyController
-    participant ENG as SkillExecutionEngine
-    participant DAG as DagBuilder
-    participant RES as ParameterResolver
-    participant LLM as AiPlatform/AiCapabilityTranslator
-    participant MCP as McpClient
-    participant MS as 微服务MCP Server
+    participant U as 管理员
+    participant P as 表单管理页(分类管理Tab)
+    participant B as BFF FormDefinitionController
+    participant W as TaskflowWebClient
+    participant S as FormDefinitionService
+    participant R as FormDefinitionRepository
+    participant DB as PostgreSQL
 
-    U->>FE: "把张三调到财务部"
-    FE->>FE: 解析自然语言 → 提取 skillId + userInput
-    FE->>GW: POST /api/v1/ai/skill/execute
-    GW->>BFF: 转发请求
-    BFF->>BFF: 校验权限 + 提取 userId/tenantId
+    U->>P: 打开「分类管理」Tab
+    P->>B: GET /api/v1/form-definitions/tree?tenantId=1&kind=CATEGORY
+    B->>W: formDefinitionTree(1)
+    W->>S: tree(1)  // 仅返回 kind=CATEGORY 子图
+    S->>R: findByTenantIdAndKindAndDeleted(1,'CATEGORY',0)
+    R->>DB: SELECT ... WHERE kind='CATEGORY'
+    DB-->>R: 分类节点
+    R-->>S: List
+    S-->>B: List<FormDefinitionVO>
+    B-->>P: 分类树（仅 CATEGORY）
 
-    BFF->>ENG: execute(skillId, userInput, pageContext)
-    ENG->>ENG: SkillLoader.loadSkill(skillId)
-    ENG->>DAG: build(outputSchema) → 构建依赖图
-    DAG->>DAG: topologicalSort() → [orgId, deptId, personId]
-    DAG-->>ENG: 返回执行顺序
+    U->>P: 新增子分类（name + folderCode，kind=CATEGORY）
+    P->>B: POST /api/v1/form-definitions  {kind:'CATEGORY',parentId,code,name}
+    B->>W: createFormDefinition(1,1,body)
+    W->>S: create(1,1,req)
+    S->>S: validateKindAndCode(req)  // CATEGORY: code 为文件夹 key；不校验组件
+    S->>R: save(CATEGORY 节点)
+    R->>DB: INSERT form_definition(kind='CATEGORY')
+    DB-->>R: id
+    S-->>B: id
+    B-->>P: 201 id
 
-    loop 按拓扑序遍历每个字段
-        ENG->>RES: resolve(fieldDef, userInput, pageContext, prevResults)
-        
-        alt ① LLM 抽取
-            RES->>LLM: 调用 extract 端点
-            LLM-->>RES: 返回抽取结果
-        else ② 上下文/默认值
-            RES-->>RES: 从 pageContext 或默认值填充
-        else ③ HITL 兜底
-            RES-->>ENG: 标记 needHITL
-        end
-
-        RES-->>ENG: resolvedParams
-
-        ENG->>MCP: callTool(toolName, resolvedParams, userId, tenantId)
-        MCP->>MS: JSON-RPC 2.0 POST /mcp/tools/call
-        MS->>MS: 执行 SQL（JOIN user_org 权限过滤）
-        MS-->>MCP: 返回 candidates 数组
-        
-        alt candidates == 1
-            MCP-->>ENG: 直接使用
-        else candidates > 1
-            ENG-->>BFF: 中断，返回 hitl_required
-            BFF-->>FE: SkillFillResult(status=hitl_required)
-            FE->>U: 弹窗展示候选
-            U->>FE: 用户选择
-            FE->>ENG: 回填用户选择
-            ENG->>ENG: 继续执行
-        else candidates == 0
-            ENG-->>BFF: 返回 manual_required
-            BFF-->>FE: 提示手动填写
-        end
+    U->>P: 删除分类
+    P->>B: DELETE /api/v1/form-definitions/{id}?tenantId=1
+    B->>W: deleteFormDefinition(id,1)
+    W->>S: delete(1)
+    S->>R: countByTenantIdAndKindAndParentIdAndDeleted(1,'CATEGORY',id,0)
+    alt 含子分类 或 该分类下挂有 FORM
+        R-->>S: >0
+        S-->>B: BusinessException(请先清理子项/表单)
+        B-->>P: 403/400 错误提示
+    else 干净
+        R-->>S: 0
+        S->>R: setDeleted(1)
+        R->>DB: UPDATE deleted=1
+        S-->>B: ok
+        B-->>P: 删除成功
     end
 
-    ENG->>ENG: assembleResult(all field results)
-    ENG-->>BFF: SkillFillResult(status=success, fields)
-    BFF-->>GW: Result~SkillFillResponse~
-    GW-->>FE: 返回填充结果
-    FE->>FE: 回填表单 + 记录映射学习
+%% ============================================================
+%% ② 表单定义选择组件下拉（决策 A：code 改下拉，数据源 listFormLoaderCodes）
+%% ============================================================
+sequenceDiagram
+    participant U as 管理员
+    participant D as 表单定义对话框(FormDefinitionDialog)
+    participant L as form-loaders.ts(前端)
+    participant B as BFF FormDefinitionController
+    participant S as FormDefinitionService
+    participant DB as PostgreSQL
+
+    U->>D: 点击「新增表单」
+    D->>L: listFormLoaderCodes()
+    L-->>D: ['PUR_FORM', ...]  // 前端已注册组件
+    D->>D: 渲染 <Select> 选项（仅这些 code 可选）
+    U->>D: 选择 PUR_FORM + 填名称
+    D->>D: 构造 UpsertFormDefinitionRequest{kind:'FORM',code:'PUR_FORM',name,...}
+    D->>B: POST /api/v1/form-definitions
+    B->>S: create(1,1,req)
+    S->>S: validateKindAndCode(req)  // FORM: code ∈ listFormLoaderCodes 由前端保证；后端仅校验 uk + 格式
+    S->>DB: INSERT(kind='FORM',code='PUR_FORM')
+    S-->>B: id
+    B-->>D: 201 id
+
+    Note over D,L: 编辑历史定义时若 code 不在 loaders（未注册组件），
+    D 额外渲染红色选项「（未注册组件：OLD_CODE）」避免丢失，并标红提示
+
+%% ============================================================
+%% ③ 流程分类 CRUD（新增 wf_category 表，独立管理）
+%%    前端「流程分类」Tab → BFF WfCategoryController → mis-taskflow
+%% ============================================================
+sequenceDiagram
+    participant U as 管理员
+    participant P as 流程定义页(流程分类Tab)
+    participant B as BFF WfCategoryController
+    participant W as TaskflowWebClient
+    participant S as WfCategoryService
+    participant R as WfCategoryRepository
+    participant DB as PostgreSQL
+
+    U->>P: 打开「流程分类」Tab
+    P->>B: GET /api/v1/workflow/categories/tree?tenantId=1
+    B->>W: wfCategoryTree(1)
+    W->>S: tree(1)
+    S->>R: findByTenantIdAndDeleted(1,0)
+    R->>DB: SELECT wf_category
+    DB-->>R: 节点
+    S-->>B: List<WfCategoryVO>
+    B-->>P: 分类树
+
+    U->>P: 新增子分类（name + code）
+    P->>B: POST /api/v1/workflow/categories {parentId,code,name}
+    B->>W: createWfCategory(1,1,body)
+    W->>S: create(1,1,req)
+    S->>R: save(wf_category)
+    R->>DB: INSERT wf_category
+    S-->>B: id
+    B-->>P: 201 id
+
+    U->>P: 删除分类
+    P->>B: DELETE /api/v1/workflow/categories/{id}?tenantId=1
+    B->>W: deleteWfCategory(id,1)
+    W->>S: delete(1)
+    S->>R: countByTenantIdAndParentIdAndDeleted(1,id,0)  // 子节点
+    S->>R: countByTenantIdAndCategoryIdAndDeleted(1,id,0) // 已关联 wf_definition
+    alt 含子节点 或 已关联定义
+        S-->>B: BusinessException(请先清理)
+    else 干净
+        S->>R: setDeleted(1)
+        R->>DB: UPDATE deleted=1
+        S-->>B: ok
+        B-->>P: 删除成功
+    end
+
+%% ============================================================
+%% ④ 删除 95007 的权限迁移执行顺序（V131 先、V132 后；Flyway 顺序）
+%% ============================================================
+sequenceDiagram
+    participant F as Flyway
+    participant DB as PostgreSQL
+    participant V131 as V131__form_wf_category.sql
+    participant V132 as V132__perm_merge_and_backfill.sql
+
+    Note over F: 启动按文件名顺序 V120..V130 → V131 → V132
+    F->>V131: 执行
+    V131->>DB: ALTER form_definition ADD kind (默认 'FORM') + 回填旧行 'FORM'
+    V131->>DB: CREATE TABLE wf_category (邻接树)
+    V131->>DB: ALTER wf_definition ADD category_id BIGINT NULL
+    Note over V131: 仅 DDL + kind 回填；不动任何历史迁移
+
+    F->>V132: 执行
+    V132->>DB: 登记 wf_category 端点 sys_api 95060-95065 并绑 95006
+    V132->>DB: UPDATE sys_menu SET permission='workflow:definition:edit' WHERE id=95006
+    V132->>DB: DELETE sys_menu_api WHERE menu_id=95007  // 95032/95033/95050/95056/95057/95058/95059
+    V132->>DB: INSERT sys_menu_api 95032/95033/95050/95056/95057/95058/95059 → 95006
+    V132->>DB: INSERT sys_menu_api 95052 → 95006（编排需表单清单，原仅 95011）
+    V132->>DB: DELETE sys_role_permission WHERE perm_type='menu' AND target_id=95007  // 95006 已含 role-1 授权
+    V132->>DB: DELETE sys_menu WHERE id=95007
+    V132->>DB: 数据回填：建默认 wf_category「未分类」，wf_definition.category_id 指向它（旧 category 保留）
+
+%% ============================================================
+%% ⑤ 流程定义归属分类（新建/编辑时选 category_id；跨分类移动仅改 category_id）
+%% ============================================================
+sequenceDiagram
+    participant U as 管理员
+    participant P as 流程定义页(流程定义Tab)
+    participant D as 流程定义对话框(DefinitionDialog)
+    participant B as BFF WorkflowController
+    participant W as TaskflowWebClient
+    participant S as WfDefinitionService
+    participant R as WfDefinitionRepository
+    participant DB as PostgreSQL
+
+    U->>P: 新建流程定义
+    P->>D: 打开对话框
+    D->>B: GET /api/v1/workflow/categories/tree?tenantId=1
+    B-->>D: 分类树（用于 category_id 下拉）
+    U->>D: 选分类 + 填其余字段
+    D->>B: POST /api/v1/workflow/definitions {code,name,categoryId,supportedFormCodes,...}
+    B->>W: createWorkflowDefinition(1,1,body)
+    W->>S: create(1,1,req)
+    S->>S: validateSupportedForms(tenantId, codes)  // 既有白名单强校验
+    S->>R: save(wf_definition)  // 写入 category_id；旧 category 字段保留不动
+    R->>DB: INSERT wf_definition(category_id=?)
+    S-->>B: id
+    B-->>P: 201 id
+
+    Note over P,R: 跨分类移动：编辑流程定义仅改 categoryId →
+    PUT /api/v1/workflow/definitions/{id}；已发起实例的 definition_id 不变，不跟随。
+    Note over DB: 旧 category VARCHAR 列保留但新代码不再写入业务含义（废弃）。

@@ -1,0 +1,120 @@
+classDiagram
+    direction TB
+
+    %% ===== Python Worker (ai-platform) =====
+    class IqdCli {
+        -str _bin
+        -float _timeout
+        +context_build(mdl_dir, sql_pairs, instructions, allow_write) dict  "已就绪"
+        +memory_index() dict  "NEW P0-3"
+    }
+    class SyncCoordinator {
+        -dict _locks  "connection_id -> in-flight Future"
+        -int _coalesce_window_sec
+        +trigger(connection_id, wait) SyncResult  "P1-2 合并窗口"
+    }
+    class IqdAskService {
+        +trigger_build_index(connection_id, wait) SyncResult  "NEW 编排 build+index+回填"
+        -_parse_mdl_hash(stdout) str
+    }
+    class IqdConfigClient {
+        +get_sql_pairs(connection_id) list~dict~
+        +get_knowledge(connection_id) list~dict~
+        +backfill_enhancement_sync(payload) dict  "NEW"
+        +report_sync_job(payload) dict  "NEW"
+    }
+    class IqdEnhanceRouter {
+        +POST /iqd/enhance/sync  "NEW 接收 BFF→ai-platform"
+    }
+
+    %% ===== mis-iqd (Java) =====
+    class IqdAdminService {
+        +backfillEnhancementSync(connectionId, wrenRefId, status, syncedAt, sqlPairIds, knowledgeIds) int  "NEW"
+        +reportSyncJob(payload) IqdSyncJob  "NEW"
+        +getLatestSyncJob(connectionId) IqdSyncJobVO  "NEW"
+        +syncCatalogFromMdl(...) int  "EXTEND 解析 cube/measure/metric/dimension/view"
+        +saveSqlPair(...) / +saveKnowledge(...)  "已有 syncStatus=pending"
+    }
+    class IqdSyncJob {
+        +BIGINT id
+        +str connection_id
+        +str build_status
+        +str build_mdl_hash
+        +str index_status
+        +datetime build_at
+        +datetime index_at
+        +int synced_sql_pair_count
+        +int synced_knowledge_count
+        +text build_error
+        +text index_error
+    }
+    class IqdSyncJobRepository
+    class IqdSyncJobVO
+    class IqdInternalController {
+        +POST /internal/v1/iqd/enhance/backfill  "NEW"
+        +POST /internal/v1/iqd/enhance/sync-job  "NEW"
+    }
+    class IqdController {
+        +GET /api/v1/iqd/enhance/sync-status  "NEW"
+    }
+    class IqdCatalogItem {
+        +bool editable  "NEW 二期前向占位, 一期全 false"
+    }
+
+    %% ===== BFF (Java) =====
+    class AiPlatformClient {
+        +syncEnhancements(body) Map  "NEW → ai-platform /iqd/enhance/sync"
+    }
+    class IqdClient {
+        +syncEnhancements(connectionId) Map  "NEW → mis-iqd /enhance/sync"
+        +getEnhancementSyncStatus(connectionId) Map  "NEW"
+    }
+    class IqdFacadeService {
+        +syncEnhancements(connectionId, wait) Map  "NEW"
+        +getEnhancementSyncStatus(connectionId) Map  "NEW"
+        +saveSqlPair(...) / +saveKnowledge(...)  "已有 → 持久化后触发 sync(wait=false)"
+    }
+    class IqdAclController {
+        +POST /iqd/enhance/sync  "NEW 前端入口"
+        +GET /iqd/enhance/sync-status  "NEW"
+    }
+
+    %% ===== Frontend =====
+    class IqdApiModule {
+        +syncIqdEnhancements(connectionId, wait)
+        +getIqdEnhancementSyncStatus(connectionId)
+    }
+    class IqdInstructionPage {
+        +CRUD 指令(kind=instruction)
+        +下发按钮 -> syncIqdEnhancements
+    }
+    class SyncStatusBar {
+        +展示 build/index 最近执行
+        +重试按钮
+    }
+    class IqdCatalogPage {
+        +cube/measure KIND_LABEL + 树分组
+    }
+
+    %% ===== relations =====
+    IqdEnhanceRouter --> IqdAskService : 调用
+    IqdAskService --> SyncCoordinator : 经协调器
+    IqdAskService --> IqdCli : context_build / memory_index
+    IqdAskService --> IqdConfigClient : 拉物料 + 回填 + 报作业
+    SyncCoordinator ..> IqdAskService : 复用同一编排
+    IqdConfigClient ..> IqdInternalController : /internal/v1/iqd/enhance/backfill
+    IqdConfigClient ..> IqdInternalController : /internal/v1/iqd/enhance/sync-job
+    IqdInternalController --> IqdAdminService : backfill / report
+    IqdController --> IqdAdminService : getLatestSyncJob
+    IqdController --> IqdSyncJobRepository
+    IqdAdminService ..> IqdSyncJob : 读写
+    IqdAdminService ..> IqdCatalogItem : editable
+    AiPlatformClient ..> IqdEnhanceRouter : /api/v1/iqd/enhance/sync
+    IqdClient ..> IqdController : /api/v1/iqd/enhance/sync-status
+    IqdFacadeService --> AiPlatformClient : 触发 build+index
+    IqdFacadeService --> IqdClient : 读同步状态
+    IqdAclController --> IqdFacadeService
+    IqdApiModule ..> IqdAclController : /iqd/enhance/sync
+    IqdInstructionPage --> IqdApiModule
+    SyncStatusBar --> IqdApiModule
+    IqdCatalogPage ..> IqdCatalogItem : 展示 cube/measure

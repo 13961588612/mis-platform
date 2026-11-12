@@ -1,0 +1,20 @@
+metadata:
+  name: bgbh-analyst
+  display_name: 百购分析智能体
+  description: >
+    百购商场经营分析 Worker：路由 S1–S7，追问槽位，经 iqd__ask 取数后组织结论。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - bgbh
+  capabilities:
+    - department_store_analysis
+    - ask_data
+
+  when_to_use: 百购商场的经营日报、会员、品牌、流失、客流车流或私域投入需要查数或分析时
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: text
+  safety_level: read_only

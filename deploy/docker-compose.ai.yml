@@ -9,28 +9,27 @@
 #    可直接以服务名 postgres / redis / nacos 互通（DEP-0）。
 #  - 复用主栈 postgres（ai_platform 库）、redis（db 2 + aip: 前缀），不另起实例（DEP-1/DEP-2）。
 #  - 删除 ai-platform 独立 nginx/postgres/redis（infra/docker-compose.yml）；
-#    新增共享边缘 nginx edge-nginx（DEP-3），并承担 H5 静态托管 + /api、/ws 反代（DEP-6）。
-#  - qdrant / embedding / outbound-proxy / gateway / backend / frontend 进入本文件（DEP-4）。
+#    新增共享边缘 nginx edge-nginx（DEP-3），承担 /api、/ws 反代（DEP-6）。
+#    注：T11 agent/frontend 退役后 H5 静态托管下线（唯一前端 = mis-admin-web /embed/*）。
+#  - qdrant / embedding / outbound-proxy / gateway / backend 进入本文件（DEP-4）。
 #
 # 说明：ai-platform-gateway 暂用 development target（tsx 直跑，免 tsc 构建），
 # 因其存在与融合无关的既有基线类型错误（见交付说明）。待网关侧修复后改为 production。
 # =============================================================================
 
 services:
-  # ===== 共享边缘 nginx（H5 静态 + 通路 B 反代）===== DEP-3 / DEP-6
+  # ===== 共享边缘 nginx（/api、/ws 反代到 TS gateway）===== DEP-3 / DEP-6
+  # T11：agent/frontend 退役后不再托管 H5 静态产物，仅保留通路 B 反代职责。
   edge-nginx:
     image: nginx:1.25-alpine
     container_name: ai-edge-nginx
     depends_on:
-      ai-platform-frontend:
-        condition: service_completed_successfully
       ai-platform-gateway:
         condition: service_healthy
     ports:
       - "${EDGE_NGINX_PORT:-80}:80"
     volumes:
       - ./nginx/edge.conf:/etc/nginx/conf.d/default.conf:ro
-      - ai-h5-static:/usr/share/nginx/html:ro
     restart: unless-stopped
 
   # ===== Qdrant 向量库 ===== DEP-4
@@ -202,32 +201,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # ===== H5 前端（构建静态产出 → ai-h5-static 卷，由 edge-nginx 托管）===== DEP-4 / DEP-6 / O4
-  # 生产形态：仅构建静态包并写入共享卷，不保留 H5 常驻容器。
-  ai-platform-frontend:
-    image: node:22-alpine
-    container_name: ai-platform-frontend-build
-    working_dir: /app
-    restart: "no"
-    environment:
-      NODE_ENV: production
-      # 相对路径，反代由 edge-nginx 完成（R6：勿改绝对地址）
-      VITE_API_BASE_URL: /api
-      VITE_WS_BASE_URL: /ws
-    volumes:
-      - ../agent/ai-platform/frontend:/app
-      - ai-h5-static:/h5
-    # 构建门禁放宽（open item #1）：容器构建跳过 tsc 类型检查，直接 vite build。
-    # 说明：package.json 的 build 脚本仍保留 "tsc -b && vite build" 供本地 IDE/CI 类型检查；
-    # 仅容器内产出静态产物时跳过 tsc（既有 13 处类型错误与融合无关，已登记技术债），
-    # 以保证 edge-nginx 能拉起 H5（DEP-6）。
-    command: >
-      sh -c "npm ci --ignore-scripts && npx vite build && cp -rf dist/* /h5/ && echo 'H5 static built into /h5'"
-
-# ===== Named Volumes =====
+  # ===== Named Volumes =====
 volumes:
-  ai-h5-static:
-    driver: local
   ai-platform-qdrant_data:
     driver: local
   ai-platform-embedding_models:

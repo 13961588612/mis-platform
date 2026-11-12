@@ -3,9 +3,11 @@ package com.mis.adminbff.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
+import com.mis.adminbff.dto.iqd.IqdFeedbackRequest;
 import com.mis.adminbff.service.agentops.AgentOpsFacadeService;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,7 +16,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -225,12 +229,25 @@ public class AgentOpsController {
     public Result<JsonNode> listSessions(
             @RequestParam(required = false) String agent_id,
             @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String user_id,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to,
+            @RequestParam(required = false) Boolean include_empty,
+            @RequestParam(required = false) Boolean include_worker_sessions,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer page_size) {
-        SessionQuery query = new SessionQuery(agent_id, channel, keyword, from, to, page, page_size);
+        SessionQuery query = new SessionQuery(
+                agent_id,
+                channel,
+                user_id,
+                keyword,
+                from,
+                to,
+                include_empty,
+                include_worker_sessions,
+                page,
+                page_size);
         return Result.ok(facade.listSessions(query));
     }
 
@@ -244,6 +261,12 @@ public class AgentOpsController {
     @GetMapping("/sessions/{id}/messages")
     public Result<JsonNode> sessionMessages(@PathVariable String id, @RequestParam Map<String, String> query) {
         return Result.ok(facade.sessionMessages(id, query));
+    }
+
+    /** 追加会话 transcript（模板报告等旁路结果；不跑 Agent）。 */
+    @PostMapping("/sessions/{id}/transcript")
+    public Result<JsonNode> appendTranscript(@PathVariable String id, @RequestBody JsonNode body) {
+        return Result.ok(facade.appendTranscript(id, body));
     }
 
     /** #30 删除会话。 */
@@ -341,6 +364,24 @@ public class AgentOpsController {
         return Result.ok(facade.batchProcessFeedback(body));
     }
 
+    /**
+     * 用户端评价提交（点赞/点踩，评价写入链 BFF 入口）。
+     *
+     * <p>复用 {@code ai:chat:use}（用户已具备对话能力，不新增权限码；注册表 V76 登记）。
+     * body {@code {rating: up|down, comment?, message_id?, content?}}（IqdFeedbackRequest，
+     * 与 ai-platform MessageFeedbackRequest 同构）；透传下游写入 agent_feedback 表
+     * （唯一约束幂等：重复提交同 message 覆盖写）。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param request   评价请求体
+     */
+    @PostMapping("/sessions/{session_id}/feedback")
+    public Result<JsonNode> submitFeedback(
+            @PathVariable("session_id") String sessionId,
+            @Valid @RequestBody IqdFeedbackRequest request) {
+        return Result.ok(facade.submitFeedback(sessionId, request));
+    }
+
     /** #32 新建对话会话（注意路径是 {@code /chat/sessions}，与列表 {@code /sessions} 不同）。 */
     @PostMapping("/chat/sessions")
     public Result<JsonNode> createChatSession(@RequestBody JsonNode body) {
@@ -351,6 +392,35 @@ public class AgentOpsController {
     @PostMapping("/chat/sessions/{id}/messages")
     public Result<JsonNode> sendChatMessage(@PathVariable String id, @RequestBody JsonNode body) {
         return Result.ok(facade.sendChatMessage(id, body));
+    }
+
+    /**
+     * P0-1 附件上传（薄转发 ai-platform {@code /api/v1/files/upload}）。
+     *
+     * <p>「先传后引」两段式第一段：BFF 不做存储，仅把 multipart 透传下游，拿回
+     * {@code fileId/url} 由前端放入消息 {@code metadata.attachments} 再经 WS 上行。
+     * 权限码走注册表 {@code agent:chat:use}（与对话同族），路径必须与
+     * {@code sys_api} 注册表逐字一致（见本类文件头 {@code deny-unmapped:true}），
+     * 新增端点需同步登记，否则上线即 403。
+     *
+     * @param file 待上传文件（字段名 {@code file}）
+     * @return 下游上传结果（透传 {@code {fileId,name,mimeType,size,url}}）
+     */
+    @PostMapping(value = "/files/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Result<JsonNode> uploadFile(@RequestPart("file") MultipartFile file) {
+        return Result.ok(facade.uploadFile(file));
+    }
+
+    /**
+     * Copilot 语音转写（薄转发 ai-platform {@code /api/v1/speech/transcribe}）。
+     *
+     * <p>音频不落会话附件。权限 {@code agent:chat:use}，路径须与 sys_api 一致。
+     */
+    @PostMapping(value = "/speech/transcribe", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Result<JsonNode> transcribeSpeech(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "duration_ms", required = false) Integer durationMs) {
+        return Result.ok(facade.transcribeSpeech(file, durationMs));
     }
 
     // ---------------------------------------------------------------- MCP #34–#42

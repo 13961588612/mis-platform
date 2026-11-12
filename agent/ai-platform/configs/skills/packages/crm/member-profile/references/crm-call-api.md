@@ -12,5 +12,5 @@
 
 ## 身份字段默认约定
 
-- 11 位数字且未说明类型 → `getMemberProfileByMobile`
+- 未说明类型时优先这样理解（查不到可换一种再试）：11 位且以 1 开头（如 139）→ `getMemberProfileByMobile`；以 8 开头 → `getMemberProfileByMemberCardNo`
 - 明确会员编号 / 卡号 / 车牌 → 见 SKILL.md 映射表

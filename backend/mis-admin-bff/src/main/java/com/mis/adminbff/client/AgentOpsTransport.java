@@ -124,6 +124,51 @@ abstract class AgentOpsTransport extends AbstractDownstreamClient {
         return exchange(gateway, normalTimeout, HttpMethod.GET, uri, null, downstream);
     }
 
+    /**
+     * 文件上传专用：multipart/form-data 转发下游，登录上下文头透传。
+     *
+     * <p>Copilot 附件「先传后引」两段式第一段（P0-1）：ai-platform
+     * {@code POST /api/v1/files/upload} 接收名为 {@code file} 的 multipart 字段，
+     * 返回 {@code {fileId,name,mimeType,size,url}}。本方法复用 {@link #agentOpsHeaders()}
+     * 透传 X-User-Id / Authorization 等，下游鉴权与既有端点一致；超时用常规
+     * {@code normalTimeout}（上传非 LLM 推理，无 chat 量级耗时）。
+     *
+     * @param uri       下游 URI 构造（相对 backend baseUrl）
+     * @param body      已装好 {@code file} 字段的 multipart body
+     * @param downstream 调试标识（如 "POST /api/v1/files/upload"）
+     * @return 下游返回的 JsonNode（透传）
+     */
+    protected JsonNode postMultipart(
+            Function<UriBuilder, URI> uri,
+            Object body,
+            String downstream) {
+        try {
+            ResponseEntity<String> entity = backend.post()
+                    .uri(uri)
+                    .headers(this::agentOpsHeaders)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .bodyValue(body)
+                    .retrieve()
+                    .onStatus(status -> true, response -> Mono.empty())
+                    .toEntity(String.class)
+                    .retryWhen(Retry.max(1)
+                            .filter(AgentOpsTransport::isTransientConnectFailure)
+                            .doBeforeRetry(signal -> log.warn(
+                                    "agent-ops 下游连接失败，重试一次: {} — {}",
+                                    downstream,
+                                    rootMessage(signal.failure()))))
+                    .block(normalTimeout);
+            return interpret(entity, downstream);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("agent-ops 下游不可达: {} — {}", downstream, ex.toString());
+            throw new BusinessException(
+                    AgentOpsErrorCodes.DOWNSTREAM_UNAVAILABLE,
+                    "下游不可达：" + downstream + " — " + rootMessage(ex));
+        }
+    }
+
     // ------------------------------------------------------------------
     // 核心
     // ------------------------------------------------------------------

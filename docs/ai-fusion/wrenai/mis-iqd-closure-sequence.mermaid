@@ -1,0 +1,65 @@
+sequenceDiagram
+    autonumber
+    actor Admin as 数据管理员(前端)
+    participant FE as IqdInstructionPage/IqdEnhancePage
+    participant ACL as BFF IqdAclController
+    participant FAC as BFF IqdFacadeService
+    participant IC as BFF IqdClient(mis-iqd)
+    participant APC as BFF AiPlatformClient
+    participant AP as ai-platform /iqd/enhance/sync
+    participant SC as SyncCoordinator
+    participant SVC as IqdAskService
+    participant CLI as IqdCli(wren CLI)
+    participant CFG as IqdConfigClient
+    participant MIQ as mis-iqd API
+
+    Note over Admin,MIQ: A. 保存物料 → 自动触发下发 (wait=false)
+    Admin->>FE: 保存指令/样本对/知识
+    FE->>ACL: POST /iqd/knowledge 或 /iqd/sql-pairs
+    ACL->>FAC: saveKnowledge / saveSqlPair(dto)
+    FAC->>IC: saveKnowledge / saveSqlPair → 持久化
+    IC->>MIQ: POST /api/v1/iqd/knowledge (落库)
+    MIQ-->>IC: VO(sync_status=pending)
+    IC-->>FAC: VO
+    FAC->>APC: syncEnhancements({connectionId, wait:false})
+    APC->>AP: POST /api/v1/iqd/enhance/sync {connectionId, wait:false}
+    AP-->>APC: {accepted:true, coalesced:bool}
+    APC-->>FAC: Map(accepted)
+    FAC-->>ACL: VO(物料)
+    ACL-->>FE: 保存成功
+    FE->>FE: 刷新列表 + 状态条转「同步中」
+
+    Note over Admin,MIQ: B. ai-platform 后台执行 build+index+回填 (同一 Worker 链路)
+    AP->>SC: trigger(connectionId, wait=false)
+    SC->>SVC: 窗口内首个 → 执行编排(合并多次保存)
+    SVC->>CFG: get_sql_pairs / get_knowledge(connectionId)
+    CFG->>MIQ: GET /internal/v1/iqd/get-sql-pairs, get-knowledge
+    MIQ-->>CFG: 待下发物料(pending + enabled)
+    CFG-->>SVC: sql_pairs + instructions(含 kind=instruction)
+    SVC->>CLI: context_build(sql_pairs, instructions, allow_write=true)
+    CLI->>CLI: wren context build --sql-pairs --instructions --allow-write
+    CLI-->>SVC: {stdout 含 mdl_hash}
+    SVC->>SVC: 解析 mdl_hash → wren_ref_id
+    SVC->>CLI: memory_index()
+    CLI->>CLI: wren memory index
+    CLI-->>SVC: {stdout}
+    SVC->>CFG: backfill_enhancement_sync({connectionId, wrenRefId, status:'synced', ids...})
+    CFG->>MIQ: POST /internal/v1/iqd/enhance/backfill
+    MIQ->>MIQ: backfillEnhancementSync → 批量更新 wren_ref_id / sync_status=synced / synced_at
+    MIQ-->>CFG: {updated:n}
+    SVC->>CFG: report_sync_job({connectionId, build_status, build_mdl_hash, index_status, counts, errors})
+    CFG->>MIQ: POST /internal/v1/iqd/enhance/sync-job
+    MIQ->>MIQ: reportSyncJob → 写 iqd_sync_job
+    MIQ-->>CFG: IqdSyncJob
+
+    Note over Admin,MIQ: C. 状态条回查 (P1-1)
+    FE->>ACL: GET /iqd/enhance/sync-status?connectionId=
+    ACL->>FAC: getEnhancementSyncStatus(connectionId)
+    FAC->>IC: getEnhancementSyncStatus(connectionId)
+    IC->>MIQ: GET /api/v1/iqd/enhance/sync-status
+    MIQ->>MIQ: getLatestSyncJob(connectionId)
+    MIQ-->>IC: IqdSyncJobVO
+    IC-->>FAC: Map
+    FAC-->>ACL: Map
+    ACL-->>FE: 最近 build/index 状态+时间+失败原因
+    FE->>FE: 渲染 SyncStatusBar(含重试按钮)

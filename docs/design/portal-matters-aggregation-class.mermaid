@@ -1,0 +1,56 @@
+classDiagram
+    class PortalMatterVO {
+      +String kind
+      +String id
+      +String instanceId
+      +String sysTaskId
+      +String title
+      +String subtitle
+      +String bizType
+      +String appCode
+      +String initiatorName
+      +String assigneeName
+      +String status
+      +LocalDateTime createdAt
+      +String category
+    }
+    class TaskController_tf {
+      +matters(tenantId,userId,keyword,initiatorName,participantName,appCode,scope,page,size)
+    }
+    class WfProcessController_tf {
+      +myInitiated(tenantId,initiatorId,status,keyword,appCode,scope,initiatorName,participantName,page,size)
+    }
+    class PortalMattersService {
+      +matters(...) PageResult~PortalMatterVO~
+    }
+    class PortalMattersRepository {
+      +findMatters(...) List~Object[]~
+      +countMatters(...) long
+    }
+    class TaskService
+    class ProcessService
+    class SysTaskRepository
+    class WfInstanceRepository
+    class AppScope {
+      +normalizeScope(scope) String
+    }
+    class TaskflowWebClient {
+      +matters(...) PageResult~PortalMatterVO~
+      +myTasks(...initiatorName,participantName...)
+      +myProcesses(...initiatorName,participantName...)
+    }
+    class TaskController_bff
+    class WorkflowController_bff
+    class PortalMatterVO_bff
+
+    TaskController_tf --> PortalMattersService : calls
+    TaskController_tf --> TaskService
+    WfProcessController_tf --> ProcessService
+    PortalMattersService --> PortalMattersRepository
+    PortalMattersService --> AppScope
+    TaskService --> SysTaskRepository
+    ProcessService --> WfInstanceRepository
+    PortalMattersRepository ..> PortalMatterVO : maps
+    TaskController_bff --> TaskflowWebClient
+    WorkflowController_bff --> TaskflowWebClient
+    TaskflowWebClient --> PortalMatterVO_bff : mirror

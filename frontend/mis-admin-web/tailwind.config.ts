@@ -64,6 +64,7 @@ const config: Config = {
         'table-row': 'hsl(var(--table-row))',
         'table-stripe': 'hsl(var(--table-stripe))',
         'table-hover': 'hsl(var(--table-hover))',
+        'dialog-header': 'hsl(var(--dialog-header-bg))',
       },
       borderRadius: {
         lg: 'var(--radius)',

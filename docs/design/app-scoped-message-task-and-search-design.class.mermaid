@@ -1,0 +1,68 @@
+classDiagram
+    direction LR
+
+    class SysApp {
+        +BIGINT id
+        +BIGINT tenant_id
+        +String code  «一等身份»
+        +String name
+        +String base_path
+        +String kind
+        +String runtime
+        +String portal_group
+        +int status
+        +uk(tenant_id, code)
+    }
+
+    class SysMessage {
+        +BIGINT id
+        +BIGINT tenant_id
+        +String msg_type
+        +String category
+        +String title
+        +Long reference_task_id
+        +Long instance_id
+        +String app_code  «NEW, NULL=平台级»
+        +String app_name  «派生, 不落库»
+    }
+
+    class SysTask {
+        +BIGINT id
+        +BIGINT tenant_id
+        +String task_type
+        +String biz_type
+        +String biz_ref_id
+        +String status
+        +String app_code  «NEW, NULL=平台级»
+        +String app_name  «派生, 不落库»
+    }
+
+    class WfInstance {
+        +BIGINT id
+        +BIGINT tenant_id
+        +String business_type
+        +String business_id
+        +String definition_code
+    }
+
+    class SysAppBizBinding {
+        <<NEW 推导表>>
+        +BIGINT tenant_id
+        +String biz_type
+        +String app_code
+        +pk(tenant_id, biz_type)
+    }
+
+    class PlatformLevel {
+        <<view / 概念>>
+        app_code IS NULL
+    }
+
+    SysApp "1" --> "0..*" SysMessage : app_code 归属 (NULL=平台级)
+    SysApp "1" --> "0..*" SysTask : app_code 归属 (NULL=平台级)
+    SysAppBizBinding "0..*" --> "1" SysApp : app_code
+    SysAppBizBinding ..> SysTask : biz_type 推导 app_code
+    WfInstance "1" --> "0..*" SysMessage : instance_id 软引用
+    WfInstance ..> SysAppBizBinding : business_type 推导
+    SysMessage "0..1" --> "0..1" SysTask : reference_task_id
+    SysApp ..> PlatformLevel : app_code=NULL 即平台级

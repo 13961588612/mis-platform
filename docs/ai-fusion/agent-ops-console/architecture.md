@@ -101,7 +101,20 @@ host App 维护 Bot 配置 → BFF → Gateway/Backend
 企微回调 → Gateway /wecom/bot/callback/{botId} → 入站会话
 ```
 
+
+### 4.4 企微用户身份绑定（新增）
+
+```text
+企微 userid → corp_id + wecom_user_id → wecom_identity_bindings → mis_user_id → ACL
+首次未绑定 → 按需查企微通讯录手机号 → MIS BFF tenantId+phone exact-one → 落绑定
+```
+
+机器人长连接使用 BotID + Secret；读取手机号/通讯录需要按 `corp_id` 配置企微应用或通讯录凭证，二者不能混用。
+
+详见：[wecom-user-binding-design.md](wecom-user-binding-design.md)。
+
 ---
+
 
 ## 5. 与业务对话双路径
 

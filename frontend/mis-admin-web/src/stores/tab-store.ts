@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_TAB_APP_CODE } from '@/lib/tabs-config';
+import { resolveWorkspaceTabId } from '@/lib/workspace-tab-id';
 
 export interface WorkspaceTab {
   id: string;
@@ -18,8 +19,10 @@ interface TabState {
   lastActivePathByApp: Record<string, string>;
   openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
   activateTab: (id: string) => void;
+  /** 关闭后返回下一激活 Tab 的 **path**（供 navigate）；无则 null。 */
   closeTab: (id: string) => string | null;
   closeOthers: (id: string) => void;
+  /** 关闭全部后返回仍保留的 pinned Tab 的 **path**；无则 null。 */
   closeAll: () => string | null;
   setActiveByPath: (path: string) => void;
   /** 该 APP 上次打开且仍存在的 tab path；没有则 null。 */
@@ -27,7 +30,13 @@ interface TabState {
 }
 
 function tabId(path: string) {
-  return path;
+  return resolveWorkspaceTabId(path);
+}
+
+/** 取下一激活 Tab 的导航 path（id 可能因详情族合并而不等于 path）。 */
+function pathOf(tabs: WorkspaceTab[], id: string | null): string | null {
+  if (!id) return null;
+  return tabs.find((t) => t.id === id)?.path ?? id;
 }
 
 function tabAppCode(tab: Pick<WorkspaceTab, 'appCode'> | undefined): string {
@@ -62,14 +71,20 @@ export const useTabStore = create<TabState>()((set, get) => ({
     set((state) => {
       const exists = state.tabs.find((t) => t.id === id);
       const appCode = tab.appCode ?? tabAppCode(exists);
+      // 同族旧 Tab（修复前按完整 path 开出的残留）一并清掉，避免顶栏仍挂着多余项
+      const withoutFamilyDupes = state.tabs.filter(
+        (t) => t.id === id || resolveWorkspaceTabId(t.path) !== id,
+      );
       if (exists) {
         return {
           activeId: id,
-          lastActivePathByApp: withLastActive(state.lastActivePathByApp, appCode, exists.path),
-          tabs: state.tabs.map((t) =>
+          lastActivePathByApp: withLastActive(state.lastActivePathByApp, appCode, tab.path),
+          tabs: withoutFamilyDupes.map((t) =>
             t.id === id
               ? {
                   ...t,
+                  // 详情二级 Tab 切 URL 时复用同一主 Tab，path 必须跟着走
+                  path: tab.path,
                   title: tab.title || t.title,
                   icon: tab.icon ?? t.icon,
                   pinned: tab.pinned ?? t.pinned,
@@ -81,7 +96,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
       }
       return {
         tabs: [
-          ...state.tabs,
+          ...withoutFamilyDupes,
           {
             ...tab,
             id,
@@ -110,7 +125,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
   closeTab: (id) => {
     const { tabs, activeId, lastActivePathByApp } = get();
     const target = tabs.find((t) => t.id === id);
-    if (!target || target.pinned) return activeId;
+    if (!target || target.pinned) return pathOf(tabs, activeId);
     const idx = tabs.findIndex((t) => t.id === id);
     const nextTabs = tabs.filter((t) => t.id !== id);
     let nextActive = activeId;
@@ -130,7 +145,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
       }
     }
     set({ tabs: nextTabs, activeId: nextActive, lastActivePathByApp: nextLast });
-    return nextActive;
+    return pathOf(nextTabs, nextActive);
   },
 
   closeOthers: (id) => {
@@ -161,15 +176,19 @@ export const useTabStore = create<TabState>()((set, get) => ({
       nextLast[tabAppCode(t)] = t.path;
     }
     set({ tabs: pinned, activeId: next, lastActivePathByApp: nextLast });
-    return next;
+    return pathOf(pinned, next);
   },
 
   setActiveByPath: (path) => {
-    const hit = get().tabs.find((t) => t.path === path);
+    const id = resolveWorkspaceTabId(path);
+    const hit =
+      get().tabs.find((t) => t.path === path) ?? get().tabs.find((t) => t.id === id) ?? null;
     if (!hit) return;
     set((state) => ({
       activeId: hit.id,
-      lastActivePathByApp: withLastActive(state.lastActivePathByApp, tabAppCode(hit), hit.path),
+      lastActivePathByApp: withLastActive(state.lastActivePathByApp, tabAppCode(hit), path),
+      // 按 path 激活时若命中同族主 Tab，同步 path（深链进 skills 等）
+      tabs: state.tabs.map((t) => (t.id === hit.id ? { ...t, path } : t)),
     }));
   },
 
@@ -177,7 +196,17 @@ export const useTabStore = create<TabState>()((set, get) => ({
     const { lastActivePathByApp, tabs } = get();
     const last = lastActivePathByApp[appCode];
     if (!last) return null;
-    const stillOpen = tabs.some((t) => t.path === last && tabAppCode(t) === appCode);
-    return stillOpen ? last : null;
+    const stillOpen = tabs.some(
+      (t) =>
+        tabAppCode(t) === appCode &&
+        (t.path === last || resolveWorkspaceTabId(t.path) === resolveWorkspaceTabId(last)),
+    );
+    if (!stillOpen) return null;
+    const hit = tabs.find(
+      (t) =>
+        tabAppCode(t) === appCode &&
+        (t.path === last || resolveWorkspaceTabId(t.path) === resolveWorkspaceTabId(last)),
+    );
+    return hit?.path ?? last;
   },
 }));

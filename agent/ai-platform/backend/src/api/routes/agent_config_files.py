@@ -87,7 +87,9 @@ async def put_config_file(
         from urllib.parse import unquote
 
         rel_path: str = unquote(file_path)
-        result: dict[str, Any] = file_service.write_config_file(agent_id, rel_path, req.content)
+        result: dict[str, Any] = await file_service.write_config_file(
+            agent_id, rel_path, req.content
+        )
         return success(data=result, message="Config file saved")
     except ConfigPathError as exc:
         return error_response(exc.code, exc.message, status.HTTP_400_BAD_REQUEST)

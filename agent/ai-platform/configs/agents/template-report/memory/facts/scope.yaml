@@ -1,0 +1,2 @@
+scope: >
+  仅处理 mis-ai-template-report 可见的模板报告；不替代 spm-report 自然语言问数。

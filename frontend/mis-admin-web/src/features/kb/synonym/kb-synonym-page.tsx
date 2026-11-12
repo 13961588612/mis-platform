@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -76,11 +76,11 @@ function highlight(text: string, keyword: string): ReactNode {
   const lower = kw.toLowerCase();
   return text.split(new RegExp(`(${escaped})`, 'gi')).map((part, i) =>
     part.toLowerCase() === lower ? (
-      <mark key={i} className="rounded bg-warning/25 px-0.5 text-foreground">
+      <mark key={`hl-${i}`} className="rounded bg-warning/25 px-0.5 text-foreground">
         {part}
       </mark>
     ) : (
-      <span key={i}>{part}</span>
+      <span key={`nl-${i}`}>{part}</span>
     ),
   );
 }
@@ -609,7 +609,7 @@ export function KbSynonymPage() {
                               matchedKey != null && normalizeSynonymTerm(t.term) === matchedKey;
                             return (
                               <span
-                                key={`${g.id}-${t.term}-${i}`}
+                                key={g.id + "-" + t.term + "-" + i}
                                 className={
                                   hit
                                     ? 'rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs text-foreground'

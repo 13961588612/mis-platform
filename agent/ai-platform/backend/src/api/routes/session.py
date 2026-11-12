@@ -5,6 +5,7 @@
 - GET    /api/v1/sessions/{session_id}    — 获取会话详情
 - DELETE /api/v1/sessions/{session_id}    — 关闭 / 删除会话
 - POST   /api/v1/sessions/{session_id}/messages — 发送消息（非流式）
+- POST   /api/v1/sessions/{session_id}/transcript — 只落库追加消息（不跑 Agent）
 - POST   /api/v1/sessions/{session_id}/feedback — 对助手回答点赞 / 吐槽
 - GET    /api/v1/sessions/{session_id}/messages — 获取会话消息
 - POST   /api/v1/sessions/route           — 路由请求（AgentRouter）
@@ -20,11 +21,9 @@ PG 查不到时会自动回落 Redis，保证「刚建的会话点不开详情�
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
-
 import uuid
-
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field
@@ -39,6 +38,7 @@ from src.agent.session_store import (
     SessionListQuery,
     SessionPage,
 )
+from src.agent.session_timing import RedisTimingStore
 from src.api.deps import (
     _prepare_acl_context,
     get_agent_manager_dep,
@@ -49,11 +49,10 @@ from src.api.deps import (
     get_trace_id,
     resolve_request_mis_user_id,
 )
-from src.agent.session_timing import RedisTimingStore
 from src.api.response import error_response, success
+from src.cluster.session_lock import get_shared_redis_session_lock
 from src.config import get_settings
 from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
-from src.skills.acl import SkillAclDenied, get_skill_acl_guard
 from src.models.agent_feedback import (
     FEEDBACK_RATING_DOWN,
     FEEDBACK_RATING_UP,
@@ -63,6 +62,7 @@ from src.models.agent_feedback import (
 )
 from src.router.agent_router import AgentRouter
 from src.router.models import RouteResult, UserRequest
+from src.skills.acl import SkillAclDenied, get_skill_acl_guard
 from src.utils.exceptions import (
     AgentNotFoundError,
     FeedbackNotFoundError,
@@ -114,7 +114,7 @@ def _parse_iso_datetime(value: str | None, field_name: str) -> datetime | None:
     except ValueError as exc:
         raise ValueError(f"Invalid datetime for '{field_name}': {value}") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -169,6 +169,31 @@ class SendMessageRequest(BaseModel):
     content: str = Field(..., description="消息内容")
     role: str = Field(default="user", description="消息角色：user | system")
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TranscriptMessageItem(BaseModel):
+    """只落库、不跑 Agent 的单条会话消息。"""
+
+    role: str = Field(..., description="user | assistant | system")
+    content: str = Field(..., description="消息正文")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    message_id: str | None = Field(default=None, description="可选消息 UUID")
+
+
+class AppendTranscriptRequest(BaseModel):
+    """追加会话 transcript（模板报告模拟结果等旁路写入）。"""
+
+    messages: list[TranscriptMessageItem] = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        description="按序追加的消息列表",
+    )
+    agent_id: str = Field(
+        default="mis-copilot",
+        description="会话不存在时 ensure 用的 Agent（前端本地 sid 尚未经 WS 建会话）",
+    )
+    channel: str = Field(default="web", description="ensure 时的渠道")
 
 
 class RouteRequest(BaseModel):
@@ -323,19 +348,28 @@ async def list_sessions(
         default=None, description="关键字，匹配标题 / session_id / user_id"
     ),
     time_from: str | None = Query(
-        default=None, alias="from", description="创建时间下界（ISO 8601）"
+        default=None, alias="from", description="更新时间下界（ISO 8601）"
     ),
     time_to: str | None = Query(
-        default=None, alias="to", description="创建时间上界（ISO 8601）"
+        default=None, alias="to", description="更新时间上界（ISO 8601）"
+    ),
+    include_empty: bool = Query(
+        default=False,
+        description="为 true 时包含 message_count=0 的空会话；默认隐藏",
+    ),
+    include_worker_sessions: bool = Query(
+        default=False,
+        description="为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿；默认隐藏",
     ),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """#27 会话列表：分页 + 按 Agent / 渠道 / 用户 / 关键字 / 时间范围过滤。
+    """#27 会话列表：分页 + 按 Agent / 渠道 / 用户 / 关键字 / 更新时间过滤。
 
     数据来自 PostgreSQL ``agent_session``（Redis 无分页与范围查询能力）。
     查询参数名与前端 ``SessionQuery`` 完全一致，其中 ``from`` 是 Python 关键字，
-    故用 ``alias`` 映射到 ``time_from``。
+    故用 ``alias`` 映射到 ``time_from``。``from``/``to`` 按 ``updated_at`` 过滤。
+    默认不返回无消息空会话，也不返回 Worker/旁路子会话。
 
     Returns:
         ``AgentPage<Session>`` 形状：``{items, total, page, page_size}``。
@@ -368,6 +402,8 @@ async def list_sessions(
         keyword=(keyword or "").strip() or None,
         time_from=parsed_from,
         time_to=parsed_to,
+        min_message_count=0 if include_empty else 1,
+        include_worker_sessions=bool(include_worker_sessions),
     )
 
     try:
@@ -857,6 +893,89 @@ async def close_session(
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@router.post("/{session_id}/transcript")
+async def append_transcript(
+    session_id: str,
+    req: AppendTranscriptRequest,
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    current_user: dict[str, Any] | None = Depends(get_optional_current_user),
+    mis_user_id: int | None = Depends(resolve_request_mis_user_id),
+) -> dict[str, Any]:
+    """只落库追加消息，不触发 Agent（供模板报告 execute 旁路结果写入会话管理）。
+
+    Copilot 的 sessionId 多为前端本地生成，若用户尚未经 WS 发过话，Redis/PG
+    尚无该会话；此处对齐 Gateway ``ensure_session``，按给定 sid 惰性建壳后再写消息。
+    """
+    try:
+        allowed = {"user", "assistant", "system"}
+        user_id = ""
+        user_name = ""
+        if isinstance(current_user, dict):
+            user_id = str(
+                current_user.get("user_id")
+                or current_user.get("username")
+                or current_user.get("sub")
+                or ""
+            )
+            user_name = str(
+                current_user.get("display_name")
+                or current_user.get("username")
+                or user_id
+                or ""
+            )
+        if not user_id and mis_user_id is not None:
+            user_id = str(mis_user_id)
+        if not user_id:
+            user_id = "anonymous"
+
+        agent_id = (req.agent_id or "").strip() or "mis-copilot"
+        channel = (req.channel or "").strip() or "web"
+        await session_manager.ensure_session(
+            session_id=session_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            channel=channel,
+            mis_user_id=mis_user_id,
+            user_name=user_name,
+        )
+
+        saved: list[dict[str, Any]] = []
+        for item in req.messages:
+            role = (item.role or "").strip().lower()
+            if role not in allowed:
+                return error_response(
+                    4000,
+                    f"非法 role: {item.role}",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+            content = (item.content or "").strip()
+            if not content:
+                return error_response(4000, "消息 content 不能为空", status.HTTP_400_BAD_REQUEST)
+            msg = await session_manager.add_message(
+                session_id=session_id,
+                role=role,
+                content=content,
+                metadata=item.metadata or {},
+                message_id=item.message_id,
+            )
+            saved.append(
+                {
+                    "id": msg.id,
+                    "role": msg.role,
+                    "content": msg.content,
+                }
+            )
+        return success(
+            data={"session_id": session_id, "appended": len(saved), "messages": saved},
+            message="Transcript appended",
+        )
+    except SessionNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to append transcript", error=str(exc), session_id=session_id)
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @router.get("/{session_id}/messages")
 async def get_messages(
     session_id: str,
@@ -1030,101 +1149,83 @@ async def send_message(
     x_app_id: str = Header(default="", alias="X-App-Id"),
     trace_id: str = Depends(get_trace_id),
 ) -> dict[str, Any]:
-    """
-    向会话发送消息并获取非流式响应。
-
-    目标 Agent 为 ``mis-rag`` 时走知识库检索管线（与 ``/ai/rag`` 同源），
-    否则保持原有通用 Agent 流程。流式响应请使用 WebSocket 端点。
-    """
+    """Send a message to a session and collect the non-streaming response."""
     try:
         from src.agent.mis_rag import is_kb_qa_request
         from src.agent.session import Message
         from src.runtime.events import AgentEventType
 
-        # 获取会话
         session = await session_manager.get_session(session_id)
+        lock = await get_shared_redis_session_lock()
+        async with lock.acquire(session_id) as lock_result:
+            if not lock_result.locked:
+                return error_response(4090, "Session is busy", status.HTTP_409_CONFLICT)
 
-        # 添加用户消息
-        user_msg: Message = await session_manager.add_message(
-            session_id=session_id,
-            role=req.role,
-            content=req.content,
-            metadata=req.metadata,
-        )
-
-        # 确保 Agent 已注册并处于 RUNNING（支持启动时未同步的懒加载）
-        instance: AgentInstance = await agent_manager.ensure_agent_ready(session.agent_id)
-
-        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库，
-        # 落库时复用同一 id，使前端能按 message.id 逐条映射耗时。
-        # 放在 if/else 之前，保证 KB 与非 KB 两条分支都能拿到该 id（否则 KB 分支
-        # 走到下方 add_message(message_id=assistant_id) 时会 NameError）。
-        assistant_id: str = str(uuid.uuid4())
-        if is_kb_qa_request(session.agent_id, req.metadata):
-            response_text, runtime_error, tool_errors = await _run_session_kb_qa(
-                session=session,
-                instance=instance,
-                req=req,
-                current_user=current_user,
-                authorization=authorization if isinstance(authorization, str) else "",
-                tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
-                app_id=x_app_id if isinstance(x_app_id, str) else "",
-                trace_id=trace_id if isinstance(trace_id, str) else "",
-            )
-        else:
-            # 收集 runtime 流式事件
-            response_parts: list[str] = []
-            runtime_error: str | None = None
-            tool_errors: list[str] = []
-            async for event in instance.process_message(
-                session=session,
-                message=Message(role=req.role, content=req.content, metadata=req.metadata),
-                assistant_message_id=assistant_id,
-            ):
-                if event.type == AgentEventType.TEXT_DELTA and event.content:
-                    response_parts.append(event.content)
-                elif event.type == AgentEventType.TOOL_RESULT and event.result:
-                    err: Any | None = event.result.get("error")
-                    if err:
-                        tool_errors.append(f"{event.tool_name}: {err}")
-                elif event.type == AgentEventType.ERROR:
-                    runtime_error = event.message or "Agent runtime error"
-
-            response_text = "".join(response_parts)
-
-        # 工具失败已转为 tool.result，不应中断；仅无有效回复时的致命错误返回 500
-        if runtime_error and not response_text.strip():
-            return error_response(
-                9000,
-                runtime_error,
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if runtime_error:
-            logger.warning(
-                "Agent completed with runtime warning",
+            user_msg: Message = await session_manager.add_message(
                 session_id=session_id,
-                error=runtime_error,
-                tool_errors=tool_errors,
+                role=req.role,
+                content=req.content,
+                metadata=req.metadata,
             )
+            instance: AgentInstance = await agent_manager.ensure_agent_ready(session.agent_id)
+            assistant_id: str = str(uuid.uuid4())
 
-        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
-        await session_manager.add_message(
-            session_id=session_id,
-            role="assistant",
-            content=response_text,
-            message_id=assistant_id,
-        )
+            if is_kb_qa_request(session.agent_id, req.metadata):
+                response_text, runtime_error, tool_errors = await _run_session_kb_qa(
+                    session=session,
+                    instance=instance,
+                    req=req,
+                    current_user=current_user,
+                    authorization=authorization if isinstance(authorization, str) else "",
+                    tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
+                    app_id=x_app_id if isinstance(x_app_id, str) else "",
+                    trace_id=trace_id if isinstance(trace_id, str) else "",
+                )
+            else:
+                response_parts: list[str] = []
+                runtime_error: str | None = None
+                tool_errors: list[str] = []
+                async for event in instance.process_message(
+                    session=session,
+                    message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                    assistant_message_id=assistant_id,
+                ):
+                    if event.type == AgentEventType.TEXT_DELTA and event.content:
+                        response_parts.append(event.content)
+                    elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                        err: Any | None = event.result.get("error")
+                        if err:
+                            tool_errors.append(f"{event.tool_name}: {err}")
+                    elif event.type == AgentEventType.ERROR:
+                        runtime_error = event.message or "Agent runtime error"
+                response_text = "".join(response_parts)
 
-        return success(
-            data={
-                "message_id": user_msg.id,
-                "response": response_text,
-                "session_id": session_id,
-                "warnings": [runtime_error] if runtime_error else [],
-                "tool_errors": tool_errors,
-            },
-            message="Message processed",
-        )
+            if runtime_error and not response_text.strip():
+                return error_response(9000, runtime_error, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            if runtime_error:
+                logger.warning(
+                    "Agent completed with runtime warning",
+                    session_id=session_id,
+                    error=runtime_error,
+                    tool_errors=tool_errors,
+                )
+
+            await session_manager.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=response_text,
+                message_id=assistant_id,
+            )
+            return success(
+                data={
+                    "message_id": user_msg.id,
+                    "response": response_text,
+                    "session_id": session_id,
+                    "warnings": [runtime_error] if runtime_error else [],
+                    "tool_errors": tool_errors,
+                },
+                message="Message processed",
+            )
     except SessionNotFoundError as exc:
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
     except AgentNotFoundError as exc:

@@ -1,7 +1,7 @@
 /**
  * botConfigSource.ts — 企微多 Bot 配置来源（T04 O1f-1）
  *
- * 配置来源从 `WECOM_BOT_*` 环境变量改为「启动时从 backend 拉取」
+ * 配置来源从 `WECOM_BOT_*` 环境变量改为「启动时从 backend 拉取」；长连接 endpoint 固定为企微官方 openws。
  * （impl-plan §9.4）：
  *
  * 1. **主来源**：`GET {AGENT_CORE_API_URL}/api/v1/channels/wecom/bots/runtime?enabled=true`
@@ -40,6 +40,17 @@ export interface BotRuntimeConfig extends WecomBotAdapterConfig {
   enabled: boolean;
   /** 绑定的 Agent ID；为空表示走默认路由 */
   boundAgentId?: string;
+  /**
+   * 企微官方 BotID —— 长连接 `aibot_subscribe` 的鉴权主体。
+   *
+   * 与 {@link WecomBotClientConfig.botId}（平台内部 ID，用作注册表键、sessionId、
+   * 与 backend `bot_id` 对齐）**是两回事**：前者是企微后台生成的官方标识，后者是
+   * 本平台创建的记录 ID。混用会让订阅鉴权失败 ⇒ 连接永远 `disconnected`。
+   *
+   * **必填，且不从 `botId` 回落**：backend 路径缺 `bot_secret_id` 时该 Bot 会被
+   * 跳过（:meth:`toRuntimeConfig` 返回 null）而非降级，避免静默用错鉴权身份。
+   */
+  subscribeBotId: string;
 }
 
 /** backend `/channels/wecom/bots/runtime` 的单条回包（snake_case） */
@@ -47,7 +58,7 @@ interface RuntimeBotWire {
   bot_id?: string;
   name?: string;
   enabled?: boolean;
-  ws_url?: string;
+  bot_secret_id?: string;
   secret?: string;
   bound_agent_id?: string;
 }
@@ -74,7 +85,7 @@ export interface BotConnectionDefaults {
   maxReconnectDelayMs: number;
   reconnectBackoffMultiplier: number;
   subscribeTimeoutMs: number;
-  /** 默认 WS 地址（backend 未配置 ws_url 时使用） */
+  /** 企微官方长连接 endpoint；可通过环境变量覆盖（一般不要配置）。 */
   defaultWsUrl: string;
   /** 卡片来源名 */
   sourceName: string;
@@ -93,7 +104,7 @@ export interface BotConfigSourceOptions {
   /** 连接参数默认值 */
   defaults: BotConnectionDefaults;
   /** 环境变量兜底 Bot（botId/secret 任一为空表示无兜底） */
-  envFallback: { botId: string; secret: string; wsUrl: string };
+  envFallback: { botId: string; secret: string };
 }
 
 // ============================================================================
@@ -383,13 +394,23 @@ export class BotConfigSource {
     }
 
     const d = this.options.defaults;
-    const wsUrl = asString(wire.ws_url);
     const boundAgentId = asString(wire.bound_agent_id);
+    // 企微官方 BotID（鉴权主体）。**缺失即跳过该 Bot，绝不回落平台 botId** ——
+    // 回落会让 aibot_subscribe 用错身份静默失败（正是本处修复的缺陷）。
+    const subscribeBotId = asString(wire.bot_secret_id);
+    if (subscribeBotId.length === 0) {
+      logger.warn(
+        { botId },
+        'Skip wecom bot without bot_secret_id (official BotID required for subscribe)',
+      );
+      return null;
+    }
 
     return {
       botId,
+      subscribeBotId,
       secret,
-      wsUrl: wsUrl.length > 0 ? wsUrl : d.defaultWsUrl,
+      wsUrl: d.defaultWsUrl,
       name: asString(wire.name) || botId,
       enabled: wire.enabled !== false,
       ...(boundAgentId.length > 0 ? { boundAgentId } : {}),
@@ -411,7 +432,7 @@ export class BotConfigSource {
    * @returns 长度 0 或 1 的配置数组
    */
   private loadFromEnv(): BotRuntimeConfig[] {
-    const { botId, secret, wsUrl } = this.options.envFallback;
+    const { botId, secret } = this.options.envFallback;
     if (botId.length === 0 || secret.length === 0) {
       return [];
     }
@@ -420,8 +441,11 @@ export class BotConfigSource {
     return [
       {
         botId,
+        // 环境变量兜底路径的 WECOM_BOT_ID 填的本就是企微官方 BotID
+        // （与 backend 的 bot_secret_id 同源语义），故显式并列声明。
+        subscribeBotId: botId,
         secret,
-        wsUrl: wsUrl.length > 0 ? wsUrl : d.defaultWsUrl,
+        wsUrl: d.defaultWsUrl,
         name: `${botId} (env)`,
         enabled: true,
         heartbeatIntervalSec: d.heartbeatIntervalSec,
@@ -468,7 +492,6 @@ export function createBotConfigSourceFromEnv(agentCoreApiUrl: string): BotConfig
     envFallback: {
       botId: process.env['WECOM_BOT_ID'] ?? '',
       secret: process.env['WECOM_BOT_SECRET'] ?? '',
-      wsUrl: process.env['WECOM_BOT_WS_URL'] ?? '',
     },
   });
 }

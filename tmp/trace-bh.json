@@ -1,0 +1,81 @@
+{
+  "id": 1792061563795,
+  "q": "无锡八佰伴 门店编号多少",
+  "lat": 61803,
+  "err": "未能生成有效查询: wren MCP 工具失败: dry_run -> unhandled errors in a TaskGroup (1 sub-exception)",
+  "sql": "SELECT store_id, store_name, store_shotr_name, city FROM dim_mall_chl_store_df WHERE store_name LIKE '%无锡八佰伴%' OR store_shotr_name LIKE '%八佰伴%'",
+  "steps": [
+    {
+      "seq": 1,
+      "sql": null,
+      "code": "scope_check",
+      "label": "校验可问数据范围",
+      "detail": "命中 61 张授权表",
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 2,
+      "sql": null,
+      "code": "understanding",
+      "label": "理解你的问题",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 3,
+      "sql": null,
+      "code": "searching",
+      "label": "检索相关语义模型",
+      "detail": "语义上下文不可得，已降级：wren MCP 工具失败: get_context -> unhandled errors in a TaskGroup (1 sub-exception)",
+      "status": "skipped",
+      "duration_ms": 5013
+    },
+    {
+      "seq": 4,
+      "sql": "SELECT store_id, store_name, store_shotr_name, city FROM dim_mall_chl_store_df WHERE store_name LIKE '%无锡八佰伴%' OR store_shotr_name LIKE '%八佰伴%'",
+      "code": "generating",
+      "label": "生成查询",
+      "detail": "SQL 已生成",
+      "status": "done",
+      "duration_ms": 46754
+    },
+    {
+      "seq": 5,
+      "sql": null,
+      "code": "lineage_check",
+      "label": "复核查询涉及的数据范围",
+      "detail": "涉及 1 张表，全部在授权范围内",
+      "status": "done",
+      "duration_ms": 1
+    },
+    {
+      "seq": 6,
+      "sql": null,
+      "code": "executing",
+      "label": "执行并汇总结果",
+      "detail": "SQL 预检失败",
+      "status": "failed",
+      "duration_ms": 5015
+    },
+    {
+      "seq": 7,
+      "sql": null,
+      "code": "masking",
+      "label": "敏感字段处理",
+      "detail": null,
+      "status": "running",
+      "duration_ms": 0
+    },
+    {
+      "seq": 8,
+      "sql": null,
+      "code": "finished",
+      "label": "完成",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    }
+  ]
+}

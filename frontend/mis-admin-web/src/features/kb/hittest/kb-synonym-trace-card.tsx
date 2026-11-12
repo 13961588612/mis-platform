@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+﻿import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Copy, Info } from 'lucide-react';
 import { toast } from 'sonner';
@@ -47,11 +47,11 @@ function renderExpandedQuery(expanded: string, canonicalTerms: string[]): ReactN
   const lowerSet = new Set(canonicalTerms.map((c) => c.toLowerCase()));
   return expanded.split(re).map((part, i) =>
     lowerSet.has(part.toLowerCase()) ? (
-      <mark key={i} className="rounded bg-success/15 px-0.5 text-success">
+      <mark key={`hl-${i}`} className="rounded bg-success/15 px-0.5 text-success">
         {part}
       </mark>
     ) : (
-      <span key={i}>{part}</span>
+      <span key={`nl-${i}`}>{part}</span>
     ),
   );
 }

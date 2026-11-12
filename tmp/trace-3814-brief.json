@@ -1,0 +1,46 @@
+{
+  "id": 1792061563814,
+  "question": "大统华溧阳城东店 4月销售情况",
+  "latency_ms": 8715,
+  "error_code": "45205",
+  "error_message": "未能生成有效查询",
+  "summary": "未能生成有效查询",
+  "sql_text": null,
+  "steps": [
+    {
+      "code": "scope_check",
+      "status": "done",
+      "ms": 0,
+      "detail": "命中 61 张授权表",
+      "sql": null
+    },
+    {
+      "code": "searching",
+      "status": "done",
+      "ms": 456,
+      "detail": "语义模型",
+      "sql": null
+    },
+    {
+      "code": "generating",
+      "status": "failed",
+      "ms": 8098,
+      "detail": "未能生成有效查询",
+      "sql": null
+    },
+    {
+      "code": "lineage_check",
+      "status": "running",
+      "ms": 0,
+      "detail": null,
+      "sql": null
+    },
+    {
+      "code": "executing",
+      "status": "running",
+      "ms": 0,
+      "detail": null,
+      "sql": null
+    }
+  ]
+}

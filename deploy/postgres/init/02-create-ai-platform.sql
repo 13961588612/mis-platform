@@ -10,7 +10,7 @@
 -- =============================================================================
 
 -- 1) 角色（最小权限，不复用 postgres 超级用户）
-SELECT 'CREATE ROLE aiplatform WITH LOGIN PASSWORD ''aiplatform_dev_password'''
+SELECT 'CREATE ROLE ai_platform WITH LOGIN PASSWORD ''aiplatform#1014'''
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform')
 \gexec
 

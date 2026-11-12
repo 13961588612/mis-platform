@@ -2,12 +2,14 @@
  * Agent 运营台「本地对话」专用 HTTP 客户端。
  *
  * <p>与全局 {@code lib/api/client.ts}（15s）分离：§4.3 #32/#33 背后是完整 LLM 推理，
- * 且可能经 Coordinator→Worker 多跳，BFF {@code mis.agent-ops.chat-timeout-ms} 已放宽到 180s，
+ * 且可能经 Coordinator→Worker 多跳，BFF {@code mis.agent-ops.chat-timeout-ms} 已放宽到 1800s，
  * 前端必须对齐，否则浏览器先断。其它 agent-ops 接口仍走默认 15s 客户端，互不影响。
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
-import type { ApiResult, TokenResponse } from '@/types/api';
+import type { ApiResult } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { recordAuthKick } from '@/lib/auth/auth-kick-log';
+import { getLastRefreshError, refreshAccessToken } from '@/lib/auth/refresh-token';
 import { listSkills } from './agent-ops-api';
 import type {
   Session,
@@ -18,7 +20,7 @@ import type {
 } from '../types';
 
 /** 与 BFF {@code mis.agent-ops.chat-timeout-ms} 对齐（毫秒）。 */
-export const AGENT_CHAT_TIMEOUT_MS = 180_000;
+export const AGENT_CHAT_TIMEOUT_MS = 1_800_000;
 
 const chatApi = axios.create({
   baseURL: '/api/v1',
@@ -34,31 +36,6 @@ chatApi.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
-let refreshPromise: Promise<string | null> | null = null;
-
-async function refreshAccessToken(): Promise<string | null> {
-  if (!refreshPromise) {
-    refreshPromise = chatApi
-      .post<ApiResult<TokenResponse>>('/auth/refresh', {})
-      .then((res) => {
-        if (res.data.code !== 0 || !res.data.data) {
-          throw new Error(res.data.message || 'refresh failed');
-        }
-        const { accessToken, expiresIn } = res.data.data;
-        useAuthStore.getState().setAccessToken(accessToken, expiresIn);
-        return accessToken;
-      })
-      .catch(() => {
-        useAuthStore.getState().clearSession();
-        return null;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-  return refreshPromise;
-}
-
 chatApi.interceptors.response.use(
   (response) => response,
   async (error: AxiosError<ApiResult<unknown>>) => {
@@ -73,8 +50,24 @@ chatApi.interceptors.response.use(
       return Promise.reject(error);
     }
     (original as InternalAxiosRequestConfig & { _retry?: boolean })._retry = true;
+    console.warn('[auth-kick] chat 收到 401/40101，尝试 refresh', {
+      url: original.url,
+      method: original.method,
+      status,
+      code,
+      message: error.response?.data?.message,
+    });
     const newToken = await refreshAccessToken();
     if (!newToken) {
+      recordAuthKick({
+        client: 'chat',
+        triggerUrl: original.url,
+        triggerMethod: original.method?.toUpperCase(),
+        httpStatus: status,
+        bizCode: code,
+        bizMessage: error.response?.data?.message,
+        refreshError: getLastRefreshError() ?? undefined,
+      });
       window.location.href = '/login';
       return Promise.reject(error);
     }

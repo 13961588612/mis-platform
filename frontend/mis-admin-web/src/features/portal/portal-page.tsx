@@ -1,303 +1,67 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useTheme } from 'next-themes';
-import {
-  Activity,
-  AlertCircle,
-  ArrowRight,
-  ClipboardList,
-  LayoutDashboard,
-  LogOut,
-  Moon,
-  Sun,
-  UserRound,
-  Users,
-} from 'lucide-react';
-import { fetchApps } from '@/lib/api/platform';
-import { registerIframeApps } from '@/lib/nav/iframe-apps';
-import { logout } from '@/lib/api/auth';
-import { useAuthStore } from '@/stores/auth-store';
-import { useAiStore } from '@/stores/ai-store';
-import type { AppItem } from '@/types/api';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import { resolveNavIcon } from '@/lib/nav/icons';
-import { resolveAppEntry } from '@/lib/nav/host-apps';
-import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
-import { HeaderToolkit } from '@/components/layout/header-toolkit';
-import {
-  CommandPalette,
-  useCommandPaletteHotkey,
-} from '@/components/layout/command-palette';
-import { CopilotPanel } from '@/components/layout/copilot-panel';
-import { StatCard } from '@/components/common/stat-card';
+import { PortalHomeTab } from './tabs/portal-home-tab';
+import { PortalTodoTab } from './tabs/portal-todo-tab';
+import { PortalMessageTab } from './tabs/portal-message-tab';
+import { PORTAL_TAB_PANEL_ID } from '@/components/layout/portal-tab-switcher';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
 
-const FILTERS = [
-  { key: 'all', label: '全部' },
-  { key: 'governance', label: '管理与治理' },
-  { key: 'operations', label: '业务与运营' },
-  { key: 'platform', label: '协同与平台' },
-  { key: 'ai', label: 'AI助手' },
-] as const;
-
+/**
+ * 门户工作台容器（三 Tab 骨架）。
+ *
+ * <p><b>为什么不用路由 / URL 承载 Tab</b>：`/portal` 由 `keep-alive-outlet.tsx` 的
+ * `PAGE_MAP['/portal']` 以 `<Comp/>` 直挂渲染，**不在任何 `<Route>` 上下文内**
+ * （`useParams` 恒空）——若把 Tab 做成路由段，会同时撞上 `PAGE_MAP` 精确匹配与
+ * `useParams` 恒空两个坑；改成 query 又会踩「切了 URL 但常驻实例不重渲染」。
+ * 故三 Tab **不进 URL、不新增路由、不触碰 router/keep-alive**，激活态放在
+ * {@link usePortalTabStore} 全局 store 里：顶栏 tab 写它，本容器订阅它，两侧只依赖
+ * `stores/`，不产生跨 feature 依赖。
+ *
+ * <p><b>为什么不再用 Radix `Tabs`</b>（本轮结构改动的核心）：Radix 的 `TabsList` 与
+ * `TabsContent` **必须在同一个 `Tabs` root 内**才能拿到同一份上下文。本轮把 tab 条搬到
+ * 顶栏（`components/layout/portal-tab-switcher.tsx`）后，tab 条与本内容区处在
+ * **两棵不同的 React 树**（顶栏在 `AppLayout`，内容区在 `KeepAliveOutlet` 主槽），
+ * 上下文本就连通不了。因此：
+ * <ul>
+ *   <li>本容器**移除** `Tabs` / `TabsList` / `TabsContent` 包装，直接订阅 `activeTab`
+ *       **按值条件渲染**对应 Tab 组件；条件渲染天然只挂载激活的那一个，与原来
+ *       `data-[state=inactive]:!hidden` 的语义等价（非激活面板同样不进 DOM、不进布局）；</li>
+ *   <li>顶栏那三个 tab 是普通 `button`（手写 `role="tab"`），点击只写 `setActiveTab`。</li>
+ * </ul>
+ * 数据源唯一 = {@link usePortalTabStore}，没有第二处真相。
+ *
+ * <p>抽屉/详情态**仍归各 Tab / Board 自持**（组件内 `useState`，关闭即销毁、
+ * **不入 URL**）。容器层不持有任何抽屉状态——切 Tab 时非激活面板被卸载，
+ * 其抽屉随之关闭，这是期望语义。
+ *
+ * <p>外壳（顶栏 / 命令面板 / Copilot）由 `AppLayout` 提供；`/portal` 下由
+ * `AppLayout` 隐藏左栏（见 `app-layout.tsx` 的 `hideSidebar`），主区自然占满宽度。
+ *
+ * <p>布局契约（本轮一字未动）：根容器 `flex h-full flex-col`，内容区
+ * `min-h-0 flex-1`，页内**不加内层 padding**（外距由 AppLayout 主槽 `p-4 md:p-6`
+ * 提供），**单层滚动**交回各 Tab 自持（首页 `portal-shell … overflow-auto`
+ * 为门户唯一滚动层）。`role="tabpanel"` + `id` 供顶栏 tab 的 `aria-controls` 引用。
+ * 🔴 tab 栏**顶部不放任何工具栏**（参考图没有「返回门户 / 工作台⌄」那一行），
+ * 本组件也不要新增——顶栏由 `AppLayout` 提供，门户页自己再加一条就是重复导航。
+ */
 export function PortalPage() {
-  const [apps, setApps] = useState<AppItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [cmdOpen, setCmdOpen] = useState(false);
-  const [groupFilter, setGroupFilter] = useState<string>('all');
-  const user = useAuthStore((s) => s.user);
-  const currentApp = useAuthStore((s) => s.app);
-  const clearSession = useAuthStore((s) => s.clearSession);
-  const copilotOpen = useAiStore((s) => s.copilotOpen);
-  const setCopilotOpen = useAiStore((s) => s.setCopilotOpen);
-  const navigate = useNavigate();
-  const { setTheme, resolvedTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  const openCommand = useCallback(() => setCmdOpen(true), []);
-  useCommandPaletteHotkey(openCommand);
-
-  // Copilot 热键：Cmd/Ctrl+J（与 AppLayout 对齐；Cmd+K 已被命令面板占用）
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
-        e.preventDefault();
-        setCopilotOpen(!useAiStore.getState().copilotOpen);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [setCopilotOpen]);
-
-  useEffect(() => setMounted(true), []);
-
-  useEffect(() => {
-    void fetchApps()
-      .then((data) => {
-        setApps(data);
-        registerIframeApps(data);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : '加载失败'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filteredApps = useMemo(() => {
-    if (groupFilter === 'all') return apps;
-    return apps.filter((a) => (a.portalGroup || 'governance') === groupFilter);
-  }, [apps, groupFilter]);
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, AppItem[]>();
-    for (const app of filteredApps) {
-      const key = app.portalGroup || 'governance';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(app);
-    }
-    return map;
-  }, [filteredApps]);
-
-  const recent = useMemo(() => apps.filter((a) => a.enterable).slice(0, 4), [apps]);
-
-  const enterApp = (app: AppItem) => {
-    if (!app.enterable) return;
-    if (app.runtime === 'iframe' && app.basePath) {
-      navigate(`/iframe/${app.code}`);
-      return;
-    }
-    if (app.runtime === 'remote') {
-      navigate(`/remote/${app.code}`);
-      return;
-    }
-    if (app.code === 'system' || app.runtime === 'host') {
-      navigate(resolveAppEntry(app.code, app.basePath));
-    }
-  };
-
-  const handleLogout = async () => {
-    await logout();
-    clearSession();
-    navigate('/login', { replace: true });
-  };
+  const activeTab = usePortalTabStore((s) => s.activeTab);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4 md:px-6">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-            M
-          </span>
-          <span className="font-semibold tracking-tight">MIS Platform</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <HeaderToolkit onOpenCommand={openCommand} />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => mounted && setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-            aria-label="切换主题"
-          >
-            {mounted && resolvedTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
-          <div className="relative">
-            <button
-              type="button"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
-              onClick={() => setUserMenuOpen((v) => !v)}
-              aria-label="用户菜单"
-            >
-              {(user?.realName ?? user?.username ?? '?').slice(0, 1)}
-            </button>
-            {userMenuOpen ? (
-              <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-md border bg-popover p-1 shadow-card">
-                <div className="flex items-center gap-2 border-b px-2.5 py-2">
-                  <UserRound className="h-4 w-4 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{user?.realName ?? user?.username}</div>
-                    <div className="truncate text-xs text-muted-foreground">{user?.username}</div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm text-destructive hover:bg-accent"
-                  onClick={() => void handleLogout()}
-                >
-                  <LogOut className="h-4 w-4" />
-                  退出登录
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
-        <section
-          className="rounded-lg border px-6 py-5 shadow-card"
-          style={{ backgroundImage: 'var(--portal-gradient)' }}
-        >
-          <h1 className="text-xl font-semibold">你好，{user?.realName ?? user?.username}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">选择子系统进入工作台</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1 text-sm font-medium text-warning">
-              <AlertCircle className="h-3.5 w-3.5" />
-              今日待办 8
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-info/10 px-3 py-1 text-sm font-medium text-info">
-              <ClipboardList className="h-3.5 w-3.5" />
-              待审 3
-            </span>
-          </div>
-        </section>
-
-        <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="子系统总数" value={apps.length || '—'} icon={LayoutDashboard} description="全部业务域" />
-          <StatCard label="在线用户" value="—" icon={Users} description="接入后展示" />
-          <StatCard label="今日操作" value="—" icon={Activity} description="接入后展示" />
-          <StatCard label="待办事项" value={8} icon={ClipboardList} description="演示占位" />
-        </div>
-
-        {recent.length > 0 ? (
-          <section>
-            <h2 className="mb-2 text-sm font-medium text-muted-foreground">最近访问</h2>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {recent.map((app) => {
-                const Icon = resolveNavIcon(app.icon);
-                return (
-                  <button
-                    key={app.id}
-                    type="button"
-                    onClick={() => enterApp(app)}
-                    className="inline-flex shrink-0 items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm shadow-card hover:bg-accent"
-                  >
-                    <Icon className="h-3.5 w-3.5 text-[hsl(var(--icon-badge-fg))]" />
-                    {app.name}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-
-        <nav className="flex items-center gap-6 overflow-x-auto border-b border-border">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              className={cn(
-                'shrink-0 border-b-2 pb-2 text-sm transition',
-                groupFilter === f.key
-                  ? 'border-primary font-medium text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-              onClick={() => setGroupFilter(f.key)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </nav>
-
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {loading ? <p className="text-sm text-muted-foreground">加载子系统…</p> : null}
-
-        {[...grouped.entries()].map(([group, list]) => (
-          <section key={group} className="space-y-3">
-            <div className="mb-1 flex items-center gap-2">
-              <span className="h-4 w-1 rounded-full bg-[hsl(var(--portal-card-accent))]" />
-              <h2 className="text-base font-semibold">{APP_GROUP_LABEL[group] ?? group}</h2>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {list.map((app) => {
-                const Icon = resolveNavIcon(app.icon);
-                const active = currentApp?.code === app.code;
-                return (
-                  <button
-                    key={app.id}
-                    type="button"
-                    disabled={!app.enterable}
-                    onClick={() => enterApp(app)}
-                    className={cn(
-                      'group relative flex items-center gap-3 rounded-lg border bg-card px-3.5 py-3 text-left shadow-card transition',
-                      app.enterable
-                        ? 'hover:-translate-y-px hover:border-primary/35 hover:bg-primary/5 hover:shadow-card-hover'
-                        : 'cursor-not-allowed opacity-60',
-                      active && 'border-primary/40 bg-primary/5 ring-1 ring-primary/20',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'absolute bottom-2 left-0 top-2 w-[3px] origin-center rounded-r-full bg-primary transition',
-                        active
-                          ? 'scale-y-100'
-                          : 'scale-y-0 group-hover:scale-y-100 group-focus-visible:scale-y-100',
-                      )}
-                    />
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[hsl(var(--icon-badge-bg))] text-[hsl(var(--icon-badge-fg))]">
-                      <Icon className="h-5 w-5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{app.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {app.description || app.code}
-                      </span>
-                    </span>
-                    {app.enterable ? (
-                      <ArrowRight className="h-4 w-4 text-primary opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">即将上线</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </main>
-
-      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
-      <CopilotPanel open={copilotOpen} onOpenChange={setCopilotOpen} />
+    <div className="flex h-full flex-col">
+      <div
+        id={PORTAL_TAB_PANEL_ID}
+        role="tabpanel"
+        aria-label="门户内容"
+        className="flex min-h-0 flex-1 flex-col"
+        data-testid="portal-tab-panel"
+      >
+        {activeTab === 'todo' ? (
+          <PortalTodoTab />
+        ) : activeTab === 'message' ? (
+          <PortalMessageTab />
+        ) : (
+          <PortalHomeTab />
+        )}
+      </div>
     </div>
   );
 }

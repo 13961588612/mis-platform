@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ComponentType } from 'react';
+import { lazy, Suspense, useCallback, useEffect, type ComponentType } from 'react';
 import { useLocation } from 'react-router-dom';
 import microApp from '@micro-zoe/micro-app';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,8 @@ import {
   useRemoteRegistryVersion,
 } from '@/lib/nav/remote-apps';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
+// P0-5：/portal 归位进 AppLayout 后，门户页面也由本组件渲染（与 /task/* 同构）
+import { PortalPage } from '@/features/portal/portal-page';
 import {
   AppManagePage,
   ConfigPage,
@@ -26,6 +28,18 @@ import { RoleListPage } from '@/features/system/role/role-list-page';
 import { MenuManagePage } from '@/features/system/menu/menu-manage-page';
 import { DictManagePage } from '@/features/system/dict/dict-manage-page';
 import { LoginLogListPage, OperLogListPage } from '@/features/monitor/log-pages';
+import { TaskMySentPage } from '@/features/taskflow/my-sent-page';
+import { TaskMyProcessedPage } from '@/features/taskflow/my-processed-page';
+import { InboxPage } from '@/features/taskflow/inbox-page';
+import { TaskListPage } from '@/features/taskflow/task-list-page';
+import { ProcessDetailPage } from '@/features/taskflow/process-detail-page';
+import { FormTestPage } from '@/features/taskflow/form-test-page';
+import { AuditOpPage } from '@/features/system/audit/audit-op-page';
+import { ExecMonitorPage } from '@/features/system/exec-monitor/exec-monitor-page';
+import { WorkflowDesignerPage } from '@/features/system/workflow-designer/designer-page';
+import { WorkflowDefinitionPage } from '@/features/system/workflow-designer/definitions-page';
+import { BizCategoryManagePage } from '@/features/system/biz-category/biz-category-manage-page';
+import { FormDefinitionManagePage } from '@/features/biz/forms/form-definition-manage-page';
 import { KbOverviewPage } from '@/features/kb/kb-overview-page';
 import { KbCategoryPage } from '@/features/kb/category/kb-category-page';
 import { KbLibraryPage } from '@/features/kb/library/kb-library-page';
@@ -53,9 +67,46 @@ import {
   AgentSkillsPermissionsPage,
   AgentWecomPage,
 } from '@/features/agent/pages';
+import { TerminalsPage } from '@/features/finance/bank-account/pos-account/terminals-page';
+import { SktPage } from '@/features/finance/bank-account/pos-account/skt-page';
+import { ReconcilePage } from '@/features/finance/bank-account/pos-account/reconcile-page';
+import { MarksPage } from '@/features/finance/bank-account/pos-account/marks-page';
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
 import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
+import { flattenIqdNavLeaves } from '@/lib/nav/iqd-nav';
+import { flattenFinanceNavLeaves } from '@/lib/nav/finance-nav';
+import { flattenTaskNavLeaves } from '@/lib/nav/task-nav';
+
+// ---------------------------------------------------------------------------
+// T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
+// 页面文件默认导出组件；chunk 首访进入时才拉取。
+// ---------------------------------------------------------------------------
+const LazyDataQueryPage = lazy(() => import('@/features/agent/ai/data-query-page'));
+const LazyApprovalCenterPage = lazy(() => import('@/features/agent/ai/approval-center-page'));
+const LazyMonitorDashboardPage = lazy(() => import('@/features/agent/ai/monitor-dashboard-page'));
+// W2 问数管理（/iqd/*，懒加载；V77 路由前缀由 /ai/iqd 迁至 /iqd）
+// v1.11（Q2=是）：问数域目录由 features/agent/ai/iqd 迁移至 features/agent/iqd（命名边界对齐）
+const LazyIqdConfigPage = lazy(() => import('@/features/agent/iqd/iqd-config-page'));
+const LazyIqdCatalogPage = lazy(() => import('@/features/agent/iqd/iqd-catalog-page'));
+const LazyIqdScopePage = lazy(() => import('@/features/agent/iqd/iqd-scope-page'));
+const LazyIqdTestChatPage = lazy(() => import('@/features/agent/iqd/iqd-test-chat-page'));
+const LazyIqdTracePage = lazy(() => import('@/features/agent/iqd/iqd-trace-page'));
+const LazyIqdEnhancePage = lazy(() => import('@/features/agent/iqd/iqd-enhance-page'));
+const LazyIqdReportAdminPage = lazy(() => import('@/features/agent/iqd/iqd-report-admin-page'));
+const LazyIqdInstructionPage = lazy(() => import('@/features/agent/iqd/iqd-instruction-page'));
+// v1.11 建模台主页（MR-S1，T01 仅页面壳；三栏与画布在 T02 补全）
+const LazyIqdModelingPage = lazy(() => import('@/features/agent/iqd/iqd-modeling-page'));
+const LazyIqdMappingPage = lazy(() => import('@/features/agent/iqd/iqd-mapping-page'));
+
+/** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
+function LazyPageFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
+      页面加载中…
+    </div>
+  );
+}
 
 export { registerIframeApps } from '@/lib/nav/iframe-apps';
 
@@ -121,6 +172,7 @@ function RemotePage({ code }: { code: string }) {
 }
 
 const PAGE_MAP: Record<string, ComponentType> = {
+  '/portal': PortalPage,
   '/dashboard': DashboardPage,
   '/403': ForbiddenPage,
   '/system/user': UserListPage,
@@ -134,8 +186,27 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/system/menu': MenuManagePage,
   '/system/dict': DictManagePage,
   '/system/config': ConfigPage,
+  // 业务分类（biz_category）：租户通用邻接树，租户通用业务类型载体（与 APP 无关）
+  '/system/biz-category': BizCategoryManagePage,
   '/monitor/login-log': LoginLogListPage,
   '/monitor/oper-log': OperLogListPage,
+  '/system/audit-op': AuditOpPage,
+  '/system/exec-monitor': ExecMonitorPage,
+  // 任务流：流程维度（工作台）+ 管理维度（流程中心）
+  '/task/inbox': InboxPage,
+  // 注：流程详情 `/task/process/:id` 是动态路径，登记在下方 DYNAMIC_PAGES（前缀匹配），
+  // 放进PAGE_MAP 会被 `PAGE_MAP[path]` 精确匹配miss ⇒ 落到「页面不存在」。
+  '/task/pending': TaskListPage,
+  '/task/my-sent': TaskMySentPage,
+  '/task/my-processed': TaskMyProcessedPage,
+  '/system/form-test': FormTestPage,
+  // 编排已 Dialog 化：本路由保留为重定向壳（进来后 replace 回流程定义页），
+  // 但 **不能注销** —— V123 的 sys_menu 95007 与 V128 绑在它上面的两个 sys_menu_api
+  //（取消发布 / PUT 更新定义）都还指着这个 path，注销会让菜单解析不到页面。
+  '/system/workflow/designer': WorkflowDesignerPage,
+  '/system/workflow/definitions': WorkflowDefinitionPage,
+  // 业务 · 表单注册（对齐 system-nav 的「表单管理」branch 叶子 /system/forms）
+  '/system/forms': FormDefinitionManagePage,
   // 知识库子系统（路径与 V13__kb_seed.sql / V17__kb_hittest_perms.sql 的 sys_menu.path 一一对应）
   '/kb/overview': KbOverviewPage,
   '/kb/categories': KbCategoryPage,
@@ -161,13 +232,38 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/channels/wecom': AgentWecomPage,
   '/agent/monitor': AgentMonitorPage,
   '/agent/approvals': AgentApprovalsPage,
+  // T10：存量页迁移（审批中心 / 系统监控；知识库问答与 Skill 管理已下线）
+  '/ai/approvals': LazyApprovalCenterPage,
+  '/ai/monitor': LazyMonitorDashboardPage,
+  // W2：问数管理（V77 独立门户应用 iqd，路由迁 /iqd/*；组件不变）
+  '/iqd/data-query': LazyDataQueryPage,
+  '/iqd/config': LazyIqdConfigPage,
+  '/iqd/catalog': LazyIqdCatalogPage,
+  '/iqd/scope': LazyIqdScopePage,
+  '/iqd/mapping': LazyIqdMappingPage,
+  '/iqd/test-chat': LazyIqdTestChatPage,
+  '/iqd/traces': LazyIqdTracePage,
+  '/iqd/enhance': LazyIqdEnhancePage,
+  '/iqd/reports': LazyIqdReportAdminPage,
+  '/iqd/instruction': LazyIqdInstructionPage,
+  // v1.11 建模台主页（V87 sys_menu 92600 / IQD_NAV 同步登记）
+  '/iqd/modeling': LazyIqdModelingPage,
+  // V86：财务辅助 · POS 对账
+  '/finance/bank-account/pos-account/terminals': TerminalsPage,
+  '/finance/bank-account/pos-account/skt': SktPage,
+  '/finance/bank-account/pos-account/reconcile': ReconcilePage,
+  '/finance/bank-account/pos-account/marks': MarksPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
-  [...flattenSystemNavLeaves(), ...flattenKbNavLeaves(), ...flattenAgentNavLeaves()].map((i) => [
-    i.path,
-    { title: i.title, icon: i.icon },
-  ]),
+  [
+    ...flattenSystemNavLeaves(),
+    ...flattenKbNavLeaves(),
+    ...flattenAgentNavLeaves(),
+    ...flattenIqdNavLeaves(),
+    ...flattenFinanceNavLeaves(),
+    ...flattenTaskNavLeaves(),
+  ].map((i) => [i.path, { title: i.title, icon: i.icon }]),
 );
 
 /**
@@ -200,9 +296,18 @@ const DYNAMIC_PAGES: DynamicPageRule[] = [
     title: '知识库详情',
     icon: 'Database',
   },
+  // 任务流 · 流程详情（不进侧栏）。门户卡片 / 我的待办 / 我发起的 / 我审批的 共 7 处跳转
+  // 都指向 `/task/process/{实例ID}`，必须走前缀匹配；单段 ID 故maxSegments 缺省 1。
+  {
+    prefix: '/task/process/',
+    component: ProcessDetailPage,
+    title: '流程详情',
+    icon: 'Workflow',
+  },
   // 智能体运营控制台：Agent 详情子路由（V19: type=2 + visible=0，不进侧栏）。
   // 覆盖 `/agent/agents/:id` 与 `/agent/agents/:id/{skills|config|coordination}`，
   // 故 maxSegments = 2；更深的路径仍不误吞。
+  // 顶栏主 Tab 去重见 `lib/workspace-tab-id.ts`（同 agent 二级 Tab 共用一个主 Tab）。
   {
     prefix: '/agent/agents/',
     component: AgentAgentDetailPage,
@@ -298,8 +403,8 @@ export function KeepAliveOutlet() {
             <div
               key={path}
               className={cn(
-                'absolute inset-0 flex flex-col',
-                isActive ? 'z-10' : 'pointer-events-none invisible z-0',
+                'absolute inset-0 flex flex-col bg-background',
+                isActive ? 'z-10' : 'pointer-events-none z-0 hidden',
               )}
               aria-hidden={!isActive}
             >
@@ -331,12 +436,17 @@ export function KeepAliveOutlet() {
             key={path}
             className={cn(
               // 铺满主区；overflow-auto 作为无内部滚动区页面的兜底（有内部 overflow-auto 时优先滚内层）
-              'absolute inset-0 flex min-h-0 flex-col overflow-auto',
-              isActive ? 'z-10' : 'pointer-events-none invisible z-0',
+              // bg-background：避免透明页透出 Keep-alive 下层（如建模台 ReactFlow）
+              'absolute inset-0 min-h-0 flex-col overflow-auto bg-background',
+              // inactive 用 hidden（display:none）：仅 invisible 时 ReactFlow 高 z-index 节点仍可能透到前台 Tab
+              isActive ? 'z-10 flex' : 'pointer-events-none z-0 hidden',
             )}
             aria-hidden={!isActive}
           >
-            <Comp />
+            {/* Suspense 包裹：懒加载路由（存量页 /ai/*）chunk 拉取时展示占位 */}
+            <Suspense fallback={<LazyPageFallback />}>
+              <Comp />
+            </Suspense>
           </div>
         );
       })}

@@ -155,7 +155,7 @@ services:
 
   # ===== RAGFlow 应用（API + Web + 解析 worker）=====
   ragflow:
-    image: ${RAGFLOW_IMAGE:-infiniflow/ragflow:v0.26.4}
+    image: ${RAGFLOW_IMAGE:-infiniflow/ragflow:v0.27.2}
     container_name: mis-ragflow
     depends_on:
       mysql:

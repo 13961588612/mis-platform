@@ -9,6 +9,7 @@
 * ``GET    /api/v1/sessions``              — #27 列表：分页 + agent/channel/keyword 过滤
 * ``GET    /api/v1/sessions/{id}``         — #28 详情：PG 命中 + Redis 兜底
 * ``GET    /api/v1/sessions/{id}/messages``— #29 消息：扁平数组，PG + 兜底
+* ``POST   /api/v1/sessions/{id}/transcript``— 只落库追加（不跑 Agent）
 * ``DELETE /api/v1/sessions/{id}``         — #30 软删除 + Redis 清理，幂等
 * ``POST   /api/v1/sessions/batch-delete`` — #31 批量删除，幂等
 
@@ -52,6 +53,8 @@ SESSION_WIRE_KEYS: frozenset[str] = frozenset(
         "message_count",
         "created_at",
         "updated_at",
+        "parent_session_id",
+        "worker_sessions",
     }
 )
 
@@ -81,6 +84,8 @@ def _session_wire(
         "message_count": 3,
         "created_at": "2025-07-01T00:00:00+00:00",
         "updated_at": "2025-07-01T00:05:00+00:00",
+        "parent_session_id": None,
+        "worker_sessions": [],
     }
 
 
@@ -112,6 +117,8 @@ def session_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, MagicMo
     manager.list_sessions = AsyncMock()
     manager.get_session_record = AsyncMock()
     manager.list_session_messages = AsyncMock()
+    manager.add_message = AsyncMock()
+    manager.ensure_session = AsyncMock()
     manager.delete_sessions = AsyncMock()
 
     app = FastAPI()
@@ -174,6 +181,7 @@ def test_list_sessions_wire_shape_and_pagination(
     query = manager.list_sessions.await_args.args[0]
     assert query.page == 1
     assert query.page_size == 20
+    assert query.min_message_count == 1
 
 
 def test_list_sessions_filters_flow_into_query(
@@ -194,6 +202,46 @@ def test_list_sessions_filters_flow_into_query(
     assert query.channel == "wecom"
     assert query.keyword == "报销"
     assert query.user_id == "u9"
+    assert query.min_message_count == 1
+
+
+def test_list_sessions_include_empty_sets_min_message_count_zero(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions?include_empty=true")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.min_message_count == 0
+
+
+def test_list_sessions_include_worker_sessions_defaults_false(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.include_worker_sessions is False
+
+
+def test_list_sessions_include_worker_sessions_true(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions?include_worker_sessions=true")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.include_worker_sessions is True
 
 
 def test_list_sessions_rejects_unsupported_channel(
@@ -462,6 +510,64 @@ async def test_manager_list_messages_both_empty_returns_empty_page(
 
     assert result.total == 0
     assert result.items == []
+
+
+# ===========================================================================
+# POST /api/v1/sessions/{id}/transcript —— 只落库追加，不跑 Agent
+# ===========================================================================
+
+
+def test_append_transcript_ok(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.add_message.side_effect = [
+        SimpleNamespace(id="u1", role="user", content="查销售日报"),
+        SimpleNamespace(id="a1", role="assistant", content="| 门店 | 金额 |"),
+    ]
+
+    resp = client.post(
+        "/api/v1/sessions/web-1/transcript",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "查销售日报",
+                    "metadata": {"kind": "ai_report_submit"},
+                },
+                {
+                    "role": "assistant",
+                    "content": "| 门店 | 金额 |",
+                    "metadata": {"kind": "ai_report_result"},
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["appended"] == 2
+    assert manager.add_message.await_count == 2
+    manager.ensure_session.assert_awaited_once()
+    ensure_kwargs = manager.ensure_session.await_args.kwargs
+    assert ensure_kwargs["session_id"] == "web-1"
+    assert ensure_kwargs["agent_id"] == "mis-copilot"
+
+
+def test_append_transcript_rejects_bad_role(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+
+    resp = client.post(
+        "/api/v1/sessions/web-1/transcript",
+        json={"messages": [{"role": "tool", "content": "x"}]},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 4000
+    manager.add_message.assert_not_awaited()
 
 
 # ===========================================================================

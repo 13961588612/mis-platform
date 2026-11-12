@@ -56,6 +56,14 @@ import type {
   SkillStats,
   WecomBot,
   WecomBotPayload,
+  WecomCorp,
+  WecomCorpPayload,
+  WecomCorpTestResult,
+  WecomCorpUpdatePayload,
+  WecomUserBindPayload,
+  WecomUserBinding,
+  WecomUserBindingPage,
+  WecomUserBindingQuery,
   WorkerCatalog,
   WorkerCatalogWorker,
 } from '../types';
@@ -115,11 +123,34 @@ function segPath(path: string): string {
  *
  * <p>仍然兼容裸数组：万一后端某天改回不分页，前端不至于再崩一次。
  */
+async function listSkillsPage(params: Record<string, string | number>): Promise<Skill[]> {
+  const pageSize = 100;
+  const all: Skill[] = [];
+  let page = 1;
+  let total = Number.POSITIVE_INFINITY;
+  while (all.length < total && page <= 50) {
+    const res = await api.get<ApiResult<AgentPage<Skill> | Skill[]>>('/agent-ops/skills', {
+      params: { ...params, page, page_size: pageSize },
+    });
+    const payload = unwrap(res, '获取技能列表失败');
+    if (Array.isArray(payload)) return payload;
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    total = typeof payload.total === 'number' ? payload.total : items.length;
+    all.push(...items);
+    if (items.length === 0 || items.length < pageSize) break;
+    page += 1;
+  }
+  return all;
+}
+
 export async function listSkills(): Promise<Skill[]> {
-  const res = await api.get<ApiResult<AgentPage<Skill> | Skill[]>>('/agent-ops/skills');
-  const payload = unwrap(res, '获取技能列表失败');
-  if (Array.isArray(payload)) return payload;
-  return Array.isArray(payload.items) ? payload.items : [];
+  // 下游分页且 page_size 上限 100；翻页拉全，避免 MCP 等靠后条目被截断。
+  return listSkillsPage({});
+}
+
+/** 仅 MCP 动态发现技能（``source=mcp``），供 Agent 绑定页与全局池合并。 */
+export async function listSkillsMcpOnly(): Promise<Skill[]> {
+  return listSkillsPage({ source: 'mcp' });
 }
 
 /** §4.3 #2 — agent:skill:list */
@@ -271,41 +302,97 @@ export async function getAgentHealth(id: string): Promise<AgentHealth> {
 
 // ------------------------------------------------------------------ Agent 技能绑定（§4.3 #20–#21）
 
+/** #20 绑定快照：启用 ID + 注册表内可选池（含 MCP）。 */
+export interface AgentSkillsSnapshot {
+  bindings: AgentSkillBinding[];
+  /** 下游 `pool[]`（registry.list_active），用于补全 listSkills 分页遗漏。 */
+  pool: Skill[];
+}
+
+function mapWireStatus(raw: string | undefined): Skill['status'] {
+  // 后端还有 inactive/deprecated/missing；绑定页统一归为 disabled 以便置灰
+  return raw === 'active' ? 'active' : 'disabled';
+}
+
+/** 是否为 MCP 动态发现技能（skill_id = mcp-{server}-{tool}）。 */
+export function isMcpSkillId(skillId: string): boolean {
+  return skillId.startsWith('mcp-');
+}
+
 /**
  * #20 — agent:agent:skills。
  *
- * <p>**下游返回的是对象而不是数组**：ai-platform `GET /agents/{id}/skills` 回的是
- * `{agent_id, enabled_skill_ids, pool[]}`。这里把 `enabled_skill_ids` 摊平成
- * `AgentSkillBinding[]`（`{skill_id, enabled: true}`），页面零改动即可继续消费。
+ * <p>下游 `{agent_id, enabled_skill_ids, pool[]}`：绑定 ID 摊平为 bindings，
+ * 同时带回 pool，避免「仅绑定存在、全局 listSkills 分页未覆盖」的假缺失。
  */
-export async function getAgentSkills(id: string): Promise<AgentSkillBinding[]> {
-  const res = await api.get<ApiResult<{ agent_id: string; enabled_skill_ids?: string[] }>>(
-    `/agent-ops/agents/${seg(id)}/skills`,
-  );
+export async function getAgentSkills(id: string): Promise<AgentSkillsSnapshot> {
+  const res = await api.get<
+    ApiResult<{
+      agent_id: string;
+      enabled_skill_ids?: string[];
+      pool?: Array<{
+        skill_id: string;
+        name: string;
+        description?: string;
+        category?: string;
+        status?: string;
+      }>;
+    }>
+  >(`/agent-ops/agents/${seg(id)}/skills`);
   const wire = unwrap(res, '获取 Agent 技能绑定失败');
   const ids = Array.isArray(wire.enabled_skill_ids) ? wire.enabled_skill_ids : [];
-  return ids.map((skill_id) => ({ skill_id, enabled: true }));
+  const pool: Skill[] = (Array.isArray(wire.pool) ? wire.pool : []).map((p) => ({
+    skill_id: p.skill_id,
+    name: p.name || p.skill_id,
+    description: p.description ?? '',
+    status: mapWireStatus(p.status),
+    category: p.category,
+    updated_at: '',
+    source: p.skill_id.startsWith('mcp-') ? 'mcp' : p.status === 'missing' ? 'mcp' : undefined,
+    // 透传原始 status，供绑定页区分「真删除」与「MCP 未再发现」
+    ...(p.status ? { tags: p.status === 'missing' ? ['registry_missing'] : undefined } : {}),
+  }));
+  return {
+    bindings: ids.map((skill_id) => ({ skill_id, enabled: true })),
+    pool,
+  };
+}
+
+/** #21 保存结果：绑定列表 + 热重载是否成功（失败仍表示已落盘）。 */
+export interface SaveAgentSkillsResult {
+  bindings: AgentSkillBinding[];
+  reload_ok: boolean;
+  reload_warning?: string | null;
 }
 
 /**
  * #21 — agent:agent:skills:save。
  *
  * <p>下游 `PUT /agents/{id}/skills` 只收 `{skill_ids: string[]}`（启用集合），
- * 没有「已绑定但停用」的概念。这里把 `bindings` 压缩成启用 id 列表，
- * 页面零改动即可继续提交。
+ * 没有「已绑定但停用」的概念。这里把 `bindings` 压缩成启用 id 列表。
+ * 响应含 `reload_ok` / `reload_warning`：落盘成功但热重载失败时前端需 warning。
  */
 export async function saveAgentSkills(
   id: string,
   bindings: AgentSkillBinding[],
-): Promise<AgentSkillBinding[]> {
+): Promise<SaveAgentSkillsResult> {
   const skillIds = bindings.filter((b) => b.enabled).map((b) => b.skill_id);
-  const res = await api.put<ApiResult<{ agent_id: string; enabled_skill_ids?: string[] }>>(
-    `/agent-ops/agents/${seg(id)}/skills`,
-    { skill_ids: skillIds },
-  );
+  const res = await api.put<
+    ApiResult<{
+      agent_id: string;
+      enabled_skill_ids?: string[];
+      reload_ok?: boolean;
+      reload_warning?: string | null;
+    }>
+  >(`/agent-ops/agents/${seg(id)}/skills`, { skill_ids: skillIds });
   const wire = unwrap(res, '保存 Agent 技能绑定失败');
   const ids = Array.isArray(wire.enabled_skill_ids) ? wire.enabled_skill_ids : [];
-  return ids.map((skill_id) => ({ skill_id, enabled: true }));
+  return {
+    bindings: ids.map((skill_id) => ({ skill_id, enabled: true })),
+    // 旧后端无该字段时视为成功，避免误报
+    reload_ok: wire.reload_ok !== false,
+    reload_warning: wire.reload_warning ?? null,
+  };
 }
 
 // ------------------------------------------------------------------ 配置文件（§4.3 #22–#24）
@@ -392,6 +479,28 @@ export async function getSession(id: string): Promise<Session> {
 export async function listSessionMessages(id: string): Promise<SessionMessage[]> {
   const res = await api.get<ApiResult<SessionMessage[]>>(`/agent-ops/sessions/${seg(id)}/messages`);
   return unwrap(res, '获取会话消息失败');
+}
+
+/** 追加会话 transcript（只落库，不跑 Agent；模板报告 execute 旁路结果）。 */
+export async function appendSessionTranscript(
+  sessionId: string,
+  messages: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    metadata?: Record<string, unknown>;
+    message_id?: string;
+  }>,
+  opts?: { agentId?: string; channel?: string },
+): Promise<{ session_id: string; appended: number }> {
+  const res = await api.post<ApiResult<{ session_id: string; appended: number }>>(
+    `/agent-ops/sessions/${seg(sessionId)}/transcript`,
+    {
+      messages,
+      agent_id: opts?.agentId || 'mis-copilot',
+      channel: opts?.channel || 'web',
+    },
+  );
+  return unwrap(res, '写入会话记录失败');
 }
 
 /** §4.3 #30 — agent:session:delete */
@@ -492,6 +601,31 @@ export async function batchProcessAgentFeedback(
     { ids, ...payload },
   );
   return unwrap(res, '批量标记反馈失败');
+}
+
+/** 用户端评价提交的结果（下游 ai-platform `set_message_feedback` 返回，BFF 透传）。 */
+export interface SessionFeedbackResult {
+  message_id?: string;
+  rating?: 'up' | 'down';
+  comment?: string | null;
+  updated_at?: string;
+}
+
+/**
+ * 用户端评价提交（点赞/点踩，feedback-enhance §2.2）。
+ *
+ * <p>复用 {@code ai:chat:use}（BFF 透传 ai-platform `agent_feedback`，唯一约束幂等）。
+ * body `{rating, comment?, message_id?}`；down 必须带 comment（前端校验 + 服务端 4001 兜底）。
+ */
+export async function submitSessionFeedback(
+  sessionId: string,
+  payload: { rating: 'up' | 'down'; comment?: string; message_id?: string },
+): Promise<SessionFeedbackResult> {
+  const res = await api.post<ApiResult<SessionFeedbackResult>>(
+    `/agent-ops/sessions/${seg(sessionId)}/feedback`,
+    payload,
+  );
+  return unwrap(res, '提交反馈失败');
 }
 
 // ------------------------------------------------------------------ 本地对话（§4.3 #32–#33）
@@ -759,6 +893,142 @@ export async function getWecomBotsHealth(): Promise<Record<string, WecomBot['hea
     '/agent-ops/channels/wecom/bots/health',
   );
   return unwrap(res, '获取企微机器人健康状态失败');
+}
+
+// ------------------------------------------------------------------ 企微用户身份绑定（§11 #59–#62）
+
+/** §11 #59 — agent:wecom:user:list */
+export async function listWecomBindings(
+  query: WecomUserBindingQuery = {},
+): Promise<WecomUserBindingPage> {
+  const res = await api.get<ApiResult<WecomUserBindingPage>>(
+    '/agent-ops/channels/wecom/users',
+    { params: cleanParams(query as Record<string, unknown>) },
+  );
+  const payload = unwrap(res, '获取企微用户绑定列表失败');
+  // 兼容「扁平数组」与「分页对象」两种下游形态。
+  if (Array.isArray(payload)) {
+    return { items: payload, total: payload.length, page: 1, page_size: payload.length };
+  }
+  return payload;
+}
+
+/** §11 #60 — agent:wecom:user:manage */
+export async function bindWecomUser(
+  corpId: string,
+  wecomUserId: string,
+  payload: WecomUserBindPayload,
+): Promise<WecomUserBinding> {
+  const res = await api.post<ApiResult<WecomUserBinding>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/bind`,
+    payload,
+  );
+  return unwrap(res, '人工绑定企微用户失败');
+}
+
+/** §11 #61 — agent:wecom:user:manage */
+export async function unbindWecomUser(corpId: string, wecomUserId: string): Promise<void> {
+  const res = await api.post<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/unbind`,
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '解绑企微用户失败');
+}
+
+/** §11 #62 — agent:wecom:user:manage */
+export async function verifyWecomUser(
+  corpId: string,
+  wecomUserId: string,
+): Promise<WecomUserBinding> {
+  const res = await api.post<ApiResult<WecomUserBinding>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/verify`,
+  );
+  return unwrap(res, '校验企微用户绑定失败');
+}
+
+
+/** §11 #63 — agent:wecom:user:manage。P5 同步回填（按通讯录批量发现未绑定用户）。 */
+export interface WecomBackfillCorpReport {
+  corp_id: string;
+  entries: number;
+  bound: number;
+  skipped: number;
+  conflict: number;
+  unmatched: number;
+}
+
+export interface WecomBackfillResult {
+  corps: WecomBackfillCorpReport[];
+}
+
+/** §11 #63 — 触发一次同步回填；`corpId` 缺省时处理全部已配置 corp。 */
+export async function syncBackfillWecomBindings(corpId?: string): Promise<WecomBackfillResult> {
+  const res = await api.post<ApiResult<WecomBackfillResult>>(
+    '/agent-ops/channels/wecom/users/sync-backfill',
+    undefined,
+    { params: cleanParams({ corp_id: corpId }) },
+  );
+  return unwrap(res, '同步回填企微绑定失败');
+}
+
+// ------------------------------------------------------------------ 企微企业配置（方案 B §64–#70）
+
+/** §64 — agent:wecom:manage */
+export async function listWecomCorps(): Promise<WecomCorp[]> {
+  const res = await api.get<ApiResult<WecomCorp[]>>('/agent-ops/channels/wecom/corps');
+  const payload = unwrap(res, '获取企微企业列表失败');
+  return Array.isArray(payload) ? payload : [];
+}
+
+/** §65 — agent:wecom:manage */
+export async function createWecomCorp(payload: WecomCorpPayload): Promise<WecomCorp> {
+  const res = await api.post<ApiResult<WecomCorp>>('/agent-ops/channels/wecom/corps', payload);
+  return unwrap(res, '新增企微企业失败');
+}
+
+/** §66 — agent:wecom:manage */
+export async function updateWecomCorp(
+  corpId: string,
+  payload: WecomCorpUpdatePayload,
+): Promise<WecomCorp> {
+  const res = await api.put<ApiResult<WecomCorp>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}`,
+    payload,
+  );
+  return unwrap(res, '更新企微企业失败');
+}
+
+/** §67 — agent:wecom:manage。deleteSecret=true 时一并清理密钥。 */
+export async function deleteWecomCorp(corpId: string, deleteSecret = false): Promise<void> {
+  const res = await api.delete<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}`,
+    { params: cleanParams({ delete_secret: deleteSecret ? 'true' : undefined }) },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除企微企业失败');
+}
+
+/** §68 — agent:wecom:manage。corpsecret 只写不读。 */
+export async function setWecomCorpSecret(corpId: string, corpsecret: string): Promise<void> {
+  const res = await api.put<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/secret`,
+    { corpsecret },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '配置企业密钥失败');
+}
+
+/** §69 — agent:wecom:manage */
+export async function deleteWecomCorpSecret(corpId: string): Promise<void> {
+  const res = await api.delete<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/secret`,
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除企业密钥失败');
+}
+
+/** §70 — agent:wecom:manage */
+export async function testWecomCorp(corpId: string): Promise<WecomCorpTestResult> {
+  const res = await api.post<ApiResult<WecomCorpTestResult>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/test`,
+  );
+  return unwrap(res, '企业连通性测试失败');
 }
 
 // ------------------------------------------------------------------ 监控 / 审批（§4.3 #55–#58）

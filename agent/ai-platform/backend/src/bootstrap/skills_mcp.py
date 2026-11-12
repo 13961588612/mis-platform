@@ -43,7 +43,8 @@ async def initialize_skills_and_mcp() -> dict[str, Any]:
         indexer=VectorIndexer(),
         cache=HotSkillCache(),
     )
-    skills_loaded: int = await load_skills_from_files(registry, enabled_only=True)
+    # 技能池 = packages 全量；Agent 绑定由各 agent 的 enabled-skills.yaml 约束，不在此过滤。
+    skills_loaded: int = await load_skills_from_files(registry, enabled_only=False)
     # Q3：启动重载 custom 技能正文（文件系统），保证进程重启后正文不丢。
     custom_loaded: int = await load_custom_skills_from_disk(registry)
     set_registry(registry)

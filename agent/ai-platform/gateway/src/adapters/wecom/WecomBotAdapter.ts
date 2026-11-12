@@ -234,6 +234,9 @@ export class WecomBotAdapter {
       traceId: randomUUID(),
       timestamp: new Date().toISOString(),
       metadata: {
+        // 企微身份绑定（方案 §6）：带上本 Bot 标识，
+        // Core 据此反查 Bot 配置的 corp_id/tenant_id 做身份绑定。
+        botId: this.config.botId,
         botCmd: botMessage.cmd,
         botMsgType: botMessage.msgType,
         botReqId: botMessage.reqId,

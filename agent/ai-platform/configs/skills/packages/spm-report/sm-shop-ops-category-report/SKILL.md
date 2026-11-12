@@ -1,0 +1,125 @@
+---
+name: sm-shop-ops-category-report
+skill_id: sm-shop-ops-category-report
+description: 门店品类管理主题报告。独立服务：结构/四象限/ABC/生命周期等。不调用其它 ops-report。门店促销全文走 promo；门店库存全文走 inventory。
+version: "1.3.1"
+category: supermarket
+tags:
+  - 超市
+  - 品类管理
+  - 主题分析
+  - sm-shop-ops-category-report
+source: package
+status: active
+timeout: 30
+requires_approval: false
+required_permissions:
+  - spm:report:read
+---
+
+# 品类管理主题分析（sm-shop-ops-category-report）
+
+独立主题服务。用户要「品类管理 / 结构 / 四象限 / ABC」时加载。  
+**禁止** `skill` 其它 ops-report。门店促销全文 → promo；门店库存总览 → inventory。P2～P4 轻量留在本 Skill。
+
+- 槽位齐后：`skill(sm-shop-category-sale)` → 按意图选用表 apiName，对照一期，并行。
+- 日粒度不写 P7、禁止改查 week。成文后禁止再 MCP。
+
+### 取数 → 章节对照（只写已有结果的节）
+
+| 已取 apiName | 成文章节 |
+|--------------|----------|
+| `getShopCategoryOverview` | § 品类结构概览 |
+| `getShopCategoryRoleMatrix` | § 类目角色四象限 |
+| `getShopCategoryAbc` | § 类目 ABC |
+| `getShopCategoryProductLifecycleMix` 或门店 `getProductLifecycleMix` | § 生命周期结构 |
+| `getShopCategoryVentureStructure` 或门店 `getVentureStructure` | § 经营方式结构 |
+| `getShopCategoryInventoryOverview` | § 品类库存要点（仅周月；**日粒度不写、禁止改查 week**） |
+| P2～P4 折扣/出清/分担 | **轻量节或一句**（默认本 Skill；**勿转 promo**） |
+
+默认级别：**大类**（角色/ABC 尤其如此）；标题写明级别或父类下钻口径。
+
+---
+
+## 1. 数字单位（强制）
+
+| 类型 | 展示 |
+|------|------|
+| **金额** | 元÷10000 → **万元**，**2 位小数**，后缀 `万元` |
+| 占比 / 毛利率 | 百分数，1 位小数 + `%`（0～1 则 ×100） |
+| 排名 / 计数 | 整数 |
+
+禁止 HTML；勿对用户说 apiName / 字段名；勿说损耗「吃毛利」。
+
+---
+
+## 2. 版式骨架
+
+```markdown
+## {店名} · {时间标签} · 品类管理（{大类|中类|…}）
+
+### 品类结构概览
+| 类目 | 主营销售 | 店内占比 | 前台毛利率（去税） | 损耗率 | 促销销售占比 |
+|------|----------|----------|--------------------|--------|--------------|
+| … | **xx.xx 万元** | **x.x%** | **x.x%** | … | … |
+
+> 按**主营销售**占比降序，**最多 TOP10**；其余「另有 N 个类目未展开」。无 overview 则整省。本表只有利率、不加前台毛利额列。
+
+### 类目角色四象限
+| 角色 | 类目数 | 主营销售合计 | 代表类目（≤3） |
+|------|--------|--------------|----------------|
+| 利润品 / 客流品 / 结构品 / 问题品 | … | … | … |
+
+> 划线：本店中位数（`shareMedian` / `marginRateMedian`）。角色划分跟接口；合计金额按各类目 `mainSaleAmt` 加总。无 RoleMatrix 则整省。
+
+### 类目 ABC
+| 分级 | 类目数 | 主营销售累计占比 | 代表类目（≤3） |
+|------|--------|------------------|----------------|
+| A / B / C | … | … | … |
+
+> **必写局限一句**：类目级非单品；动销率/供应商集中度不覆盖。无 Abc 则整省。
+
+### 生命周期 / 经营方式 / 品类库存（有数才写）
+各用小表或 3～5 行要点。
+
+### AI 诊断小结
+2～4 句；最多 3 个「核心关注」。
+```
+
+---
+
+## 3. 内部字段对照（勿对用户说出）
+
+以 **`sm-shop-category-sale`** 为准：
+
+| 章节 | 主要字段 |
+|------|----------|
+| 结构概览 | `categoryName` / `mainSaleAmt` / 店内占比（主营自算） / `frontMarginRateExTax` / `lossRateAbs` / `promoSalesRatio` |
+| 四象限 | `role`（接口划分）/ 主营销售合计（P1 `mainSaleAmt` 按角色加总）/ `shareMedian` / `marginRateMedian` / `summary.roleCounts` |
+| ABC | 按 P1 `mainSaleAmt` 降序自算累计占比；`abcClass` 仅作对照 |
+| 生命周期 | `newMainSaleAmt` / `newMainShare` / `key*` / `top*` / `clear*` |
+| 经营方式 | `venture*` / `joint*` / `rent*` |
+| 品类库存 | 同门店库存字段 + `categoryId` / `categoryName` |
+
+---
+
+## 4. 关注点（草稿）
+
+| 关注 | 说明 |
+|------|------|
+| 客流品毛利率偏低 | 控损耗、盯周转；勿空喊砍品 |
+| 问题品双低 | 汰换/移位候选，需业务确认 |
+| A 类过度集中 | 供给风险（非单品集中度） |
+| 结构品低曝光 | 可试陈列；勿编造未取数细节 |
+
+阈值待业务确认；未确认不喊「异常」。
+
+---
+
+## 5. 自检
+
+- [ ] 未查数；未编造未取到章节；日粒度未写品类库存、未改查 week  
+- [ ] 金额万元 2 位；占比已换算  
+- [ ] 标题含店名 · 时间 · 品类管理 · 级别  
+- [ ] TOP≤10；ABC 已声明类目级局限  
+- [ ] 未说损耗吃毛利  

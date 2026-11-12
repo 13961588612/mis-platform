@@ -13,11 +13,14 @@
  * 不做流式打字机、消息编辑。
  */
 import type { ReactElement, ReactNode } from 'react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { KbChatSourceFigures, KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
+import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
+import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
+import { A2UI_ERROR_CODES, type A2uiClientAction, type BffActionResult } from '@/lib/a2ui/types';
 import { formatTime } from '../types';
 import type {
   MessageRole,
@@ -26,6 +29,7 @@ import type {
   SubStageMap,
   SubStages,
   ToolCallSubStage,
+  TurnTimingStep,
 } from '../types';
 
 /** 每种 role 的呈现规格：标签 + 配色 + 图标。 */
@@ -179,6 +183,11 @@ export interface AgentMessageStreamProps {
   messages: SessionMessage[];
   /** 按轮耗时 map（key = assistant 消息 id）。2.1：逐条内联展示，缺失显示「—」。 */
   timingByMessageId?: Record<string, SessionTiming>;
+  /**
+   * 运营回放：assistant 消息 id → 已 hydrate 的 A2UI surfaceId。
+   * 有值时在正文下方只读渲染表格/卡片（不写回 Gateway）。
+   */
+  a2uiSurfaceByMessageId?: Record<string, string>;
   /** 空态文案。 */
   emptyText?: string;
   /** 挂在列表末尾的内容（如"正在生成…"指示器）。 */
@@ -188,11 +197,121 @@ export interface AgentMessageStreamProps {
   className?: string;
 }
 
+/** 运营回放只读：吞掉用户操作，禁止调 BFF。 */
+const OPS_READ_ONLY_BFF = async (): Promise<BffActionResult> => ({
+  ok: false,
+  error: {
+    code: A2UI_ERROR_CODES.POLICY_UNMAPPED,
+    message: '会话回放为只读，不支持操作',
+    missingPermissions: [],
+    permissionDenied: true,
+  },
+});
+
 /** 毫秒 → 可读串（2.1 内联耗时）。null 表示阶段未发生，显示「—」。 */
 function fmtMs(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '—';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/** 从本条助手消息往前找最近一条 user，算墙钟耗时（A2UI 无 Redis 采样时的兜底）。 */
+function wallClockMsBefore(messages: SessionMessage[], assistantIndex: number): number | null {
+  const assistant = messages[assistantIndex];
+  if (!assistant || assistant.role !== 'assistant') return null;
+  const end = Date.parse(assistant.timestamp);
+  if (!Number.isFinite(end)) return null;
+  for (let i = assistantIndex - 1; i >= 0; i -= 1) {
+    const prev = messages[i];
+    if (prev.role !== 'user') continue;
+    const start = Date.parse(prev.timestamp);
+    if (!Number.isFinite(start) || end < start) return null;
+    return Math.round(end - start);
+  }
+  return null;
+}
+
+/** 问数 AskResponse.plan 单步（落在 assistant JSON 正文里）。 */
+interface IqdPlanStep {
+  seq?: number;
+  code?: string;
+  label: string;
+  status?: string;
+  duration_ms?: number | null;
+  detail?: string | null;
+}
+
+/** 从助手正文尝试解析问数 plan 步骤（失败返回 null）。 */
+function parseIqdPlanSteps(content: string): IqdPlanStep[] | null {
+  const raw = (content || '').trim();
+  if (!raw.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(raw) as { plan?: unknown };
+    if (!Array.isArray(parsed.plan) || parsed.plan.length === 0) return null;
+    const steps: IqdPlanStep[] = [];
+    for (const item of parsed.plan) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      const label =
+        typeof row.label === 'string' && row.label.trim()
+          ? row.label.trim()
+          : typeof row.code === 'string'
+            ? row.code
+            : '';
+      if (!label) continue;
+      const duration =
+        typeof row.duration_ms === 'number'
+          ? row.duration_ms
+          : row.duration_ms === null
+            ? null
+            : undefined;
+      steps.push({
+        seq: typeof row.seq === 'number' ? row.seq : undefined,
+        code: typeof row.code === 'string' ? row.code : undefined,
+        label,
+        status: typeof row.status === 'string' ? row.status : undefined,
+        duration_ms: duration,
+        detail: typeof row.detail === 'string' ? row.detail : null,
+      });
+    }
+    return steps.length > 0 ? steps : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 问数业务步骤耗时条（与平台 5 阶段 TimingBlock 并存）。 */
+function IqdPlanTimingBlock({ steps }: { steps: IqdPlanStep[] }): ReactElement {
+  const total = steps.reduce(
+    (s, step) => s + (typeof step.duration_ms === 'number' ? step.duration_ms : 0),
+    0,
+  );
+  return (
+    <div className="mb-2 rounded-md border border-dashed bg-muted/30 px-2 py-1 text-[0.7rem]">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="text-muted-foreground">问数步骤</span>
+        <span className="font-medium text-foreground">{fmtMs(total)}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {steps.map((step, idx) => (
+          <span
+            key={`${step.code ?? step.label}-${idx}`}
+            className="inline-flex items-center rounded bg-card px-1.5 py-0.5"
+            title={step.detail || step.status || step.label}
+          >
+            <span className="text-muted-foreground">
+              {step.seq != null ? `${step.seq}.` : ''}
+              {step.label}
+            </span>
+            <span className="ml-1 font-medium text-foreground">{fmtMs(step.duration_ms)}</span>
+            {step.status ? (
+              <span className="ml-1 text-[0.6rem] opacity-60">{step.status}</span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** 单阶段耗时单元格（2.1 内联）。可点击展开子阶段下钻。 */
@@ -305,9 +424,77 @@ function ToolCallDrill({ tcs }: { tcs: ToolCallSubStage }): ReactElement {
   );
 }
 
+function isSummaryStep(name: string): boolean {
+  return /本轮汇总|route_timing/i.test(name);
+}
+
+/** 逐步时间线（与日志「对话步骤」同源；有数据时默认展开）。 */
+function TurnStepsBlock({
+  steps,
+  totalMs,
+}: {
+  steps: TurnTimingStep[];
+  totalMs: number | null;
+}): ReactElement {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-1.5 border-t border-border/60 pt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-center gap-1.5 text-left text-[0.7rem] text-muted-foreground hover:text-foreground"
+        title="与运行时日志「对话步骤」同源：含 JEV / 各轮 LLM / Skill / MCP 等"
+      >
+        <span className="font-medium text-foreground">逐步耗时（对齐日志）</span>
+        <span className="font-medium text-foreground">{steps.length} 步</span>
+        {totalMs != null ? (
+          <>
+            <span className="text-border">·</span>
+            <span className="font-medium text-foreground">端到端 {fmtMs(totalMs)}</span>
+          </>
+        ) : null}
+        <span className="ml-auto text-[0.6rem] opacity-60">{open ? '▾' : '▸'}</span>
+      </button>
+      <p className="mt-0.5 text-[0.6rem] leading-snug text-muted-foreground/80">
+        与日志逐步同口径；上方「规划/工具/生成」为墙钟粗分（整段委派常算进「工具」），勿与逐步逐项相加对比。
+        「本轮汇总」为整轮汇总行，不是另一次耗时。
+      </p>
+      {open ? (
+        <ol className="mt-1 max-h-80 space-y-0.5 overflow-y-auto pl-0.5">
+          {steps.map((step, idx) => {
+            const summary = isSummaryStep(step.name);
+            return (
+              <li
+                key={`${step.name}-${idx}`}
+                className={cn(
+                  'flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-0.5 text-[0.65rem] hover:bg-muted/60',
+                  summary && 'opacity-70',
+                )}
+                title={step.detail || undefined}
+              >
+                <span className="w-4 shrink-0 tabular-nums text-muted-foreground/70">{idx + 1}</span>
+                <span className="min-w-0 flex-1 break-words text-foreground">{step.name}</span>
+                {step.agent_id ? (
+                  <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[0.6rem] text-muted-foreground">
+                    {step.agent_id}
+                  </span>
+                ) : null}
+                <span className="shrink-0 font-medium tabular-nums text-foreground">
+                  {fmtMs(step.duration_ms)}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 单轮耗时条 + 可折叠子阶段下钻（P1）。顶层 5 阶段保持不变，点击某阶段可展开其
  * 子阶段明细；并提供「展开全部耗时明细」开关（默认折叠）。
+ * v3：附加「逐步耗时」时间线（与日志对话步骤同源）。
  */
 function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
   const [expandAll, setExpandAll] = useState(false);
@@ -316,6 +503,8 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
   const stages = turn.stages;
   const sub = turn.sub_stages;
   const hasSub = sub != null;
+  const steps = Array.isArray(turn.steps) ? turn.steps.filter((s) => s?.name) : [];
+  const hasSteps = steps.length > 0;
 
   const items: {
     key: keyof NonNullable<SubStages>;
@@ -360,7 +549,7 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
             {expandAll ? '折叠明细' : '展开明细'}
           </button>
         ) : null}
-        {!hasSub ? (
+        {!hasSub && !hasSteps ? (
           <span className="ml-auto text-[0.65rem] text-muted-foreground">
             采样 {formatTime(turn.sampled_at)}
           </span>
@@ -390,6 +579,14 @@ function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
           采样 {formatTime(turn.sampled_at)}
         </div>
       ) : null}
+
+      {hasSteps ? <TurnStepsBlock steps={steps} totalMs={turn.total_ms} /> : null}
+      {!hasSteps ? (
+        <p className="mt-1 text-[0.6rem] text-muted-foreground/80">
+          本轮无「逐步耗时」采样（需 backend timing schema v3；仅新对话写入）。当前仅有墙钟五阶段，与日志
+          JEV/LLM/MCP 逐步不可直接对比。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -411,11 +608,16 @@ function SubStageDrillForStage({
 export function AgentMessageStream({
   messages,
   timingByMessageId,
+  a2uiSurfaceByMessageId,
   emptyText = '暂无消息',
   footer,
   showTurnIndex = false,
   className,
 }: AgentMessageStreamProps) {
+  const noopDispatch = useCallback((_action: A2uiClientAction) => {
+    /* 会话回放只读，不回传 Gateway */
+  }, []);
+
   if (messages.length === 0 && !footer) {
     return <p className="py-10 text-center text-sm text-muted-foreground">{emptyText}</p>;
   }
@@ -423,9 +625,9 @@ export function AgentMessageStream({
   // 会话内助手消息的 1-based 顺序号（对话编号），与反馈列表 turn_index 口径一致。
   let assistantTurn = 0;
 
-  return (
+  const stream = (
     <div className={cn('flex flex-col gap-2', className)}>
-      {messages.map((msg) => {
+      {messages.map((msg, idx) => {
         const isAssistant = msg.role === 'assistant';
         const turnIndex = isAssistant ? (assistantTurn += 1) : undefined;
         const spec = ROLE_SPECS[msg.role] ?? FALLBACK_SPEC;
@@ -436,6 +638,11 @@ export function AgentMessageStream({
         // 2.1：assistant 消息按 message.id 在按轮 map 中查本轮耗时。
         const turn = msg.role === 'assistant' ? timingByMessageId?.[msg.id] : undefined;
         const turnMissing = msg.role === 'assistant' && !turn;
+        const iqdPlan =
+          msg.role === 'assistant' && msg.content ? parseIqdPlanSteps(msg.content) : null;
+        // Redis 采样缺失/过期时：用上一轮用户→本条助手的墙钟差兜底（A2UI 与文本通道现均可写 timing）。
+        const wallClockMs =
+          turnMissing && !iqdPlan ? wallClockMsBefore(messages, idx) : null;
 
         return (
           <div key={msg.id} className={cn('min-w-0 overflow-hidden rounded-lg border p-3', spec.bubble)}>
@@ -460,17 +667,36 @@ export function AgentMessageStream({
               ) : null}
             </div>
 
-            {turn ? (
-              <TimingBlock turn={turn} />
-            ) : null}
-            {turnMissing ? (
-              <div className="mb-2 text-[0.7rem] text-muted-foreground">本轮耗时：—</div>
+            {turn ? <TimingBlock turn={turn} /> : null}
+            {iqdPlan ? <IqdPlanTimingBlock steps={iqdPlan} /> : null}
+            {turnMissing && !iqdPlan ? (
+              <div className="mb-2 text-[0.7rem] text-muted-foreground">
+                {wallClockMs != null ? (
+                  <>
+                    本轮耗时约 {fmtMs(wallClockMs)}
+                    <span className="opacity-70">（墙钟：用户提问→本条回复；Redis 阶段采样缺失或已过期）</span>
+                  </>
+                ) : (
+                  <>本轮平台耗时：—（调试态未采样或已过期，且无法从消息时间推算）</>
+                )}
+              </div>
             ) : null}
 
             {msg.content ? (
               msg.role === 'assistant' ? (
                 <>
-                  <AssistantMarkdown content={msg.content} />
+                  {iqdPlan ? (
+                    <details className="mb-2">
+                      <summary className="cursor-pointer text-[0.7rem] text-muted-foreground hover:text-foreground">
+                        查看问数原始 JSON
+                      </summary>
+                      <pre className="mt-1 max-h-56 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-card p-2 font-mono text-[0.7rem] leading-relaxed">
+                        {msg.content}
+                      </pre>
+                    </details>
+                  ) : (
+                    <AssistantMarkdown content={msg.content} />
+                  )}
                   {/* CF-02：assistant 消息的 feedback 结构化徽标（无反馈时渲染 null） */}
                   <FeedbackBadge meta={msg.metadata} />
                 </>
@@ -479,9 +705,15 @@ export function AgentMessageStream({
                   {msg.content}
                 </p>
               )
-            ) : (
+            ) : a2uiSurfaceByMessageId?.[msg.id] ? null : (
               <p className="text-sm italic text-muted-foreground">（空消息体）</p>
             )}
+
+            {isAssistant && a2uiSurfaceByMessageId?.[msg.id] ? (
+              <div className="mt-2 min-w-0" data-testid={`ops-a2ui-${msg.id}`}>
+                <SurfaceRenderer surfaceId={a2uiSurfaceByMessageId[msg.id]} />
+              </div>
+            ) : null}
 
             {/* tool 消息：先给一行入参摘要，完整 meta 收进 details 避免刷屏 */}
             {isTool && argsSummary ? (
@@ -509,4 +741,14 @@ export function AgentMessageStream({
       {footer}
     </div>
   );
+
+  // 有 A2UI 回放时包只读 Provider，供 DataTable 等组件取 context
+  if (a2uiSurfaceByMessageId && Object.keys(a2uiSurfaceByMessageId).length > 0) {
+    return (
+      <A2uiProvider dispatchAction={noopDispatch} executeBffAction={OPS_READ_ONLY_BFF}>
+        {stream}
+      </A2uiProvider>
+    );
+  }
+  return stream;
 }

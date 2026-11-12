@@ -58,6 +58,11 @@ class ModelConfig(BaseModel):
     fallback: str = Field(default="deepseek-v4-flash", description="回退模型")
     strategy: str = Field(default="default-primary", description="模型选择策略")
     gateway: str = Field(default="llm-gateway", description="LLM gateway 引用")
+    #: Qwen 等：``False`` 关闭思考链以降低时延；``None`` 用模型默认（常为开）。
+    enable_thinking: bool | None = Field(
+        default=None,
+        description="是否启用模型 thinking；False=关闭；None=不传参",
+    )
 
 
 class SkillRef(BaseModel):
@@ -66,6 +71,8 @@ class SkillRef(BaseModel):
     skill_id: str
     enabled: bool = True
     overrides: dict[str, Any] = Field(default_factory=dict)
+    #: 是否写入 OpenHarness ``# Available Skills``（缺省 True；router 模式下游可 false）
+    prompt_expose: bool = True
 
 
 class MCPServerConfig(BaseModel):
@@ -107,6 +114,9 @@ class MemoryConfig(BaseModel):
     collection: str = "agent_memory_index"
     top_k: int = 5
     write_back: bool = True
+    # Whether stable user-level memory promotion/write is allowed for this agent.
+    # Agents handling sensitive data can keep session-level memory only.
+    user_level: bool = True
     ttl_days: int = 30
     max_per_user: int = 200
 
@@ -208,11 +218,25 @@ class AgentConfig(BaseModel):
 
         # Parse model section
         model_data: dict[str, Any] = agent_section.get("model", data.get("model", {}))
+        enable_thinking_raw: Any = model_data.get("enable_thinking", model_data.get("enableThinking"))
+        enable_thinking: bool | None
+        if isinstance(enable_thinking_raw, bool):
+            enable_thinking = enable_thinking_raw
+        elif isinstance(enable_thinking_raw, str) and enable_thinking_raw.strip().lower() in {
+            "true",
+            "false",
+            "1",
+            "0",
+        }:
+            enable_thinking = enable_thinking_raw.strip().lower() in {"true", "1"}
+        else:
+            enable_thinking = None
         model: ModelConfig = ModelConfig(
             primary=model_data.get("primary", "qwen3.7-plus"),
             fallback=model_data.get("fallback", "deepseek-v4-flash"),
             strategy=model_data.get("strategy", "default-primary"),
             gateway=model_data.get("gateway", "llm-gateway"),
+            enable_thinking=enable_thinking,
         )
 
         # Parse routing section
@@ -235,6 +259,7 @@ class AgentConfig(BaseModel):
             collection=dynamic_data.get("collection", "agent_memory_index"),
             top_k=dynamic_data.get("top_k", 5),
             write_back=dynamic_data.get("write_back", True),
+            user_level=dynamic_data.get("user_level", True),
             ttl_days=dynamic_data.get("ttl_days", 30),
             max_per_user=dynamic_data.get("max_per_user", 200),
         )
@@ -253,7 +278,14 @@ class AgentConfig(BaseModel):
                 skill_id = item.strip()
                 if not skill_id:
                     continue
-                skills.append(SkillRef(skill_id=skill_id, enabled=True, overrides={}))
+                skills.append(
+                    SkillRef(
+                        skill_id=skill_id,
+                        enabled=True,
+                        overrides={},
+                        prompt_expose=True,
+                    )
+                )
                 continue
             if not isinstance(item, dict) or not item.get("skill_id"):
                 continue
@@ -262,6 +294,7 @@ class AgentConfig(BaseModel):
                     skill_id=item["skill_id"],
                     enabled=item.get("enabled", True),
                     overrides=item.get("overrides", {}),
+                    prompt_expose=item.get("prompt_expose", True),
                 )
             )
 

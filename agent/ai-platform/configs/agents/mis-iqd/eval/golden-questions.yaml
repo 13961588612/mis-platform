@@ -1,0 +1,84 @@
+# =============================================================================
+# mis-iqd — 黄金问句评测集（spec §9.1 第 8 项）
+# 至少 5 条；每条含「命中表 / 口径正确 / 前端无 SQL 泄漏」断言。
+# worker_id 期望 = mis-iqd；断言字段随评测管线扩展（B2 起联调）。
+# =============================================================================
+
+golden_questions:
+  - id: iqd-gq-001
+    worker_id: mis-iqd
+    question: 本月各渠道销售额是多少？
+    expect:
+      tables:
+        - pg_main.public.orders
+        - pg_main.public.channels
+      assertions:
+        - 命中表: orders + channels（渠道维表）
+        - 口径正确: 销售额=订单实付金额 SUM(orders.total_amount)，按 created_at 本月过滤
+        - 前端无 SQL 泄漏: view=user 响应不含 sql_text / sql 字段
+        - 行级范围: 仅返回当前用户可见渠道/部门/门店范围的行
+
+  - id: iqd-gq-002
+    worker_id: mis-iqd
+    question: 上个月各门店销量排名前十是哪些？
+    expect:
+      tables:
+        - pg_main.public.order_items
+        - pg_main.public.stores
+      assertions:
+        - 命中表: order_items + stores
+        - 口径正确: 销量=SUM(order_items.quantity)，按 store_id 分组，上月过滤，取 TOP 10
+        - 前端无 SQL 泄漏: 步骤化计划 plan 为自然语言阶段名，不含 SQL
+        - 行级范围: store 维度 ENUM，仅返回授权门店（X-Mis-Stores）
+
+  - id: iqd-gq-003
+    worker_id: mis-iqd
+    question: 各产品线的毛利和毛利率分别是多少？
+    expect:
+      tables:
+        - pg_main.public.order_items
+        - pg_main.public.products
+      assertions:
+        - 命中表: order_items + products
+        - 口径正确: 毛利=SUM(revenue-cost)，毛利率=毛利/营收，按产品线分组
+        - 前端无 SQL 泄漏: citations 仅含表/字段/知识片段，无 SQL 文本
+        - 脱敏: 命中敏感字段按 iqd_mask_rule 脱敏输出
+
+  - id: iqd-gq-004
+    worker_id: mis-iqd
+    question: 本季度每日下单用户数和订单量趋势如何？
+    expect:
+      tables:
+        - pg_main.public.orders
+        - pg_main.public.users
+      assertions:
+        - 命中表: orders + users（用户数去重 count(distinct user_id)）
+        - 口径正确: 下单用户数=COUNT(DISTINCT orders.user_id)，订单量=COUNT(*)，按日期分桶
+        - 前端无 SQL 泄漏: 响应 JSON 无 sql 键（类型级保险：前端组件不接受 sql prop）
+        - 行级范围: 未授权表数据不返回
+
+  - id: iqd-gq-005
+    worker_id: mis-iqd
+    question: 与去年同期相比，今年累计销售额的同比增速是多少？
+    expect:
+      tables:
+        - pg_main.public.orders
+      assertions:
+        - 命中表: orders（含时间维度过滤，同比跨年对比）
+        - 口径正确: 同比增速=(本期-去年同期)/去年同期，口径按平台指标定义
+        - 前端无 SQL 泄漏: plan 阶段含 generating/executing/masking 等，无 SQL
+        - 越权拒绝: 若命中未授权表/行级范围 → 45204 且不返回数据
+
+  - id: iqd-gq-006
+    worker_id: mis-iqd
+    question: 各区域的退货率和客单价分别是多少？
+    expect:
+      tables:
+        - pg_main.public.order_items
+        - pg_main.public.orders
+        - pg_main.public.stores
+      assertions:
+        - 命中表: order_items + orders + stores（区域维表）
+        - 口径正确: 退货率=退货订单量/总订单量，客单价=营收/订单数，按区域分组
+        - 前端无 SQL 泄漏: answer 仅含结论数字与口径说明
+        - 行级范围: dept 维度 PATH_PREFIX，仅返回本部门及下级（X-Mis-Dept-Scope）

@@ -13,14 +13,43 @@ export default defineConfig({
     host: true, // 同时监听 0.0.0.0 / ::，避免仅 [::1] 时 127.0.0.1 无响应
     port: 5174,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
+      // chat-core：SSE/REST 消息走 AI Platform Gateway（:3100），须写在通用 /api 之前。
+      // 用 127.0.0.1 避免 Windows 上 localhost→::1 而 Gateway 仅听 IPv4。
+      '/api/events': {
+        target: 'http://127.0.0.1:3100',
         changeOrigin: true,
+      },
+      '/api/messages': {
+        target: 'http://127.0.0.1:3100',
+        changeOrigin: true,
+      },
+      // 业务 REST → Spring mis-gateway → BFF
+      '/api': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      // chat-core 发送通道 /ws/chat → AI Gateway；需 ws:true 升级握手
+      '/ws': {
+        target: 'http://127.0.0.1:3100',
+        changeOrigin: true,
+        ws: true,
       },
       // micro-app 子应用（recon）在壳子内发起的 /internal 请求走壳子代理到 recon-service
       '/internal': {
         target: 'http://localhost:8110',
         changeOrigin: true,
+      },
+    },
+  },
+  // T07'：Vite 多页 admin/embed 双入口
+  // - index.html（管理后台，不静态 import 对话包）
+  // - embed.html（嵌入页，只含对话 + A2UI + 事件桥；外部系统 iframe 只拉 embed 包）
+  // 生产 nginx 需将 /embed/* rewrite 到 /embed.html（URL 保持 /embed/chat）；dev 直达 /embed.html
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        embed: fileURLToPath(new URL('./embed.html', import.meta.url)),
       },
     },
   },

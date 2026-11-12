@@ -12,39 +12,67 @@ JVM_XMS="${JVM_XMS:-256m}"
 JVM_XMX="${JVM_XMX:-512m}"
 JVM_XMN="${JVM_XMN:-128m}"
 NACOS_AUTH_ENABLE="${NACOS_AUTH_ENABLE:-false}"
+# Base64(≥32 bytes)。生产开启鉴权必填；2.3 JwtTokenManager 建 bean 时也会校验
+NACOS_AUTH_TOKEN="${NACOS_AUTH_TOKEN:-}"
+NACOS_AUTH_IDENTITY_KEY="${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}"
+NACOS_AUTH_IDENTITY_VALUE="${NACOS_AUTH_IDENTITY_VALUE:-}"
 MODE="${MODE:-standalone}"
 PREFER_HOST_MODE="${PREFER_HOST_MODE:-hostname}"
 SPRING_DATASOURCE_PLATFORM="${SPRING_DATASOURCE_PLATFORM:-}"
+
+if [[ "${NACOS_AUTH_ENABLE}" == "true" && -z "${NACOS_AUTH_TOKEN}" ]]; then
+  echo "ERROR: NACOS_AUTH_ENABLE=true 时必须设置 NACOS_AUTH_TOKEN（Base64，解码后 ≥32 字节）" >&2
+  echo "  生成: openssl rand -base64 32" >&2
+  echo "  文档: https://nacos.io/zh-cn/docs/v2/guide/user/auth.html" >&2
+  exit 1
+fi
 
 # JDK 17：用 G1，避免官方镜像里 CMS + Xmn≈Xmx 打满 CPU
 JAVA_OPT="-server -Xms${JVM_XMS} -Xmx${JVM_XMX} -Xmn${JVM_XMN}"
 JAVA_OPT="${JAVA_OPT} -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 JAVA_OPT="${JAVA_OPT} -Dnacos.standalone=true"
 JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.enabled=${NACOS_AUTH_ENABLE}"
+JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.system.type=nacos"
 JAVA_OPT="${JAVA_OPT} -Dnacos.preferHostnameOverIp=true"
 JAVA_OPT="${JAVA_OPT} -Dloader.path=${NACOS_HOME}/plugins"
 JAVA_OPT="${JAVA_OPT} -Dnacos.home=${NACOS_HOME}"
 JAVA_OPT="${JAVA_OPT} -Duser.timezone=${TZ:-Asia/Shanghai}"
 
+# JWT / 节点身份：优先环境变量（-D 覆盖 conf 里空值）
+if [[ -n "${NACOS_AUTH_TOKEN}" ]]; then
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.plugin.nacos.token.secret.key=${NACOS_AUTH_TOKEN}"
+fi
+if [[ -n "${NACOS_AUTH_IDENTITY_VALUE}" ]]; then
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.server.identity.key=${NACOS_AUTH_IDENTITY_KEY}"
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.server.identity.value=${NACOS_AUTH_IDENTITY_VALUE}"
+fi
+
+# PG 模式直接用 application-pg.properties，避免 cp 覆盖可能被 bind-mount 的 application.properties
+CONFIG_NAME=application
 if [[ "${SPRING_DATASOURCE_PLATFORM}" == "postgresql" ]]; then
   echo "Nacos storage: PostgreSQL (JDK 17 + PG plugin)"
   if [[ ! -f "${NACOS_HOME}/plugins/postgresql-42.7.3.jar" ]] \
-     || [[ ! -f "${NACOS_HOME}/plugins/nacos-datasource-plugin-postgresql-0.0.7.jar" ]]; then
+     || { ! compgen -G "${NACOS_HOME}/plugins/nacos-datasource-plugin-pg-*.jar" > /dev/null \
+          && ! compgen -G "${NACOS_HOME}/plugins/nacos-datasource-plugin-postgresql-*.jar" > /dev/null; }; then
     echo "ERROR: PG plugins missing under ${NACOS_HOME}/plugins" >&2
-    echo "Run: .\\scripts\\ensure-nacos-pg-plugins.ps1 then rebuild image" >&2
+    echo "Run: ensure-nacos-pg-plugins.sh <plugins_dir> <nacos_ver> then rebuild image" >&2
+    echo "  Nacos 2.3.2 → nacos-datasource-plugin-pg-0.0.3.jar；2.5.x → …-postgresql-0.0.5.jar" >&2
     exit 1
   fi
-  cp -f "${NACOS_HOME}/conf/application-pg.properties" \
-        "${NACOS_HOME}/conf/application.properties"
+  if [[ ! -f "${NACOS_HOME}/conf/application-pg.properties" ]]; then
+    echo "ERROR: missing ${NACOS_HOME}/conf/application-pg.properties" >&2
+    exit 1
+  fi
+  CONFIG_NAME=application-pg
 else
   echo "Nacos storage: embedded (standalone)"
 fi
 
-echo "Starting Nacos ${NACOS_VERSION:-2.3.2} MODE=${MODE} JAVA=$("${JAVA_HOME}/bin/java" -version 2>&1 | head -1)"
+echo "Starting Nacos ${NACOS_VERSION:-2.3.2} MODE=${MODE} config=${CONFIG_NAME} JAVA=$("${JAVA_HOME}/bin/java" -version 2>&1 | head -1)"
 
 # 前台运行（容器 PID 1）
 exec "${JAVA_HOME}/bin/java" ${JAVA_OPT} \
   -jar "${NACOS_HOME}/target/nacos-server.jar" \
   --spring.config.additional-location="file:${NACOS_HOME}/conf/" \
-  --spring.config.name=application \
+  --spring.config.name="${CONFIG_NAME}" \
   --server.max-http-header-size=524288

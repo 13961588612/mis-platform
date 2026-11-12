@@ -1,0 +1,12 @@
+{
+  "connection_id": 1792061562063,
+  "mcp_status": "running",
+  "host": "10.254.26.37",
+  "port": 9101,
+  "mcp_endpoint": "http://10.254.26.37:9101",
+  "agent_handle": "4d51d238664b4db385068c2985163e79",
+  "project_home": "/var/lib/mis-iqd/wren-projects/1792061562063",
+  "last_health_at": 1792384102.4586883,
+  "last_health_msg": "",
+  "remote": true
+}

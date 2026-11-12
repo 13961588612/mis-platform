@@ -23,6 +23,12 @@ interface RawBackendEvent {
   errorMessage?: string;
   token_usage?: { prompt: number; completion: number; total: number };
   tokenUsage?: { prompt: number; completion: number; total: number };
+  /** 评价锚点（done 使用）：assistant 消息 UUID（snake_case 源自 Backend） */
+  message_id?: string;
+  messageId?: string;
+  /** 评价锚点（done 使用）：平台会话 UUID（snake_case 源自 Backend） */
+  session_id?: string;
+  sessionId?: string;
   /** 委派轨迹（dispatch.trace，通道 C）；snake/camel 同形，单字 trace。 */
   trace?: Record<string, unknown>;
 }
@@ -67,6 +73,16 @@ export function parseBackendAgentEvent(eventJson: string): AgentEvent {
   const usage = raw.tokenUsage ?? raw.token_usage;
   if (usage != null) {
     event.tokenUsage = usage;
+  }
+  // 评价锚点（done 使用）：Backend snake_case message_id / session_id 透传，
+  // 前端 event-adapter 同时兼容 camelCase（messageId/sessionId）与 snake_case。
+  const messageId = raw.messageId ?? raw.message_id;
+  if (messageId != null) {
+    event.messageId = messageId;
+  }
+  const sessionId = raw.sessionId ?? raw.session_id;
+  if (sessionId != null) {
+    event.sessionId = sessionId;
   }
   // 通道 C：dispatch.trace 的委派轨迹原样透传，Gateway 不解析内部结构
   if (raw.trace != null) {

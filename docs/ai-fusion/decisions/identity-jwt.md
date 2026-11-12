@@ -243,3 +243,12 @@ graph TD
 | 4 | BFF 取数方式 | BFF **调 MIS IAM 补充 roles/departments 后再注入** `X-Mis-*` 头 | **T4 = BFF `AiPlatformClient` 先调 MIS IAM 取 roles+departments，再注入头**（`LoginUser` 本身不含 roles/departments，详见 §3.4）；非免费 enrichment |
 
 **备注（与 §3.4 一致）**：`LoginUser` 经 `LoginUserHeaderResolver` 仅含 `userId/tenantId/appId/employeeId/username`；`roles` 永远为空、`departments` 字段不存在、`permissions` 仅非 authOnly 端点有。因此 BFF 注入 `X-Mis-Roles` / `X-Mis-Depts` 前必须额外调一次 MIS IAM——这是路线 B 在本项目下的真实成本，已计入 T4。
+
+### Copilot WS / iframe 嵌入（与测试问数同一 enrichment）
+
+管理台 Copilot 与 `/embed/*` **不经过** `AiPlatformClient` 的 REST 头注入，而是 Gateway WS（瘦 JWT）。身份补全约定：
+
+1. 外部系统只调用 `POST /api/v1/embed/identity/exchange` 换 MIS JWT，**不要** postMessage 角色列表。
+2. Agent Core 入站用验签后的 `misUserId` 调 BFF `GET /internal/identity/ask-context`（`X-Platform-Token`），得到与测试问数相同的 `X-Mis-*`。
+3. 浏览器 / iframe / WS 自带的 `X-Mis-Roles` 与 `simulate_role_code` **一律丢弃**。
+4. `PAGE_CONTEXT.contextRef.connection_id` 仅为连接 hint，必须落在 enabled 连接内，否则回退默认 enabled 连接。

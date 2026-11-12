@@ -1,0 +1,57 @@
+# =============================================================================
+# spm-analyst — 超市分析智能体（MVP）
+# 规划：deliverables/超市数据分析体系/06_智能体协作架构设计.md
+# 供 mis-copilot 委派。取数只走 iqd__ask，不直连 WrenAI、不写 SQL。
+# 问数项目名：sm-data（已录样本/指令的连接）
+# =============================================================================
+
+agent:
+  name: spm-analyst
+  display_name: 超市分析智能体
+  description: >
+    超市业态经营分析：按用户视角问题域路由（经营日报/分类/生鲜/属性/促销/会员/毛利损耗/拒答），
+    补全槽位后经 iqd__ask 取数，再组织结论。不写 SQL，不直连库；百购问题拒答。
+  version: "0.1.0"
+  tags:
+    - mis
+    - spm
+    - supermarket
+    - analyst
+
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: true
+    priority: 26
+    keywords:
+      - 超市
+      - 生鲜
+      - 报损
+      - 损耗
+      - 宜兴城中店
+      - 门店营业额
+      - 去券销售额
+      - 新品占比
+      - 出清
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: false
+      collection: agent_memory_index
+      top_k: 3
+      write_back: false
+      user_level: false
+      ttl_days: 7
+      max_per_user: 50
+
+  push:
+    enabled: false
+    channels: []

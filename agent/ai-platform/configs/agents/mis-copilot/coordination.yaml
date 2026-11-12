@@ -1,15 +1,22 @@
+# 委派闸门（可派名单 / 硬委派 / 透传）
 role: coordinator
 routing_enabled: false
 delegation:
   spawn_tools_enabled: true
   enforce_task_brief: true
   max_depth: 1
-  timeout_seconds: 120
+  timeout_seconds: 1680
   emit_dispatch_trace: true
   forbid_self_invoke: true
-  # 硬约束（R4/R8）：mis-admin-helper 不进 copilot（后台操作员专属，fail-closed）。
-  # 旧 mis-extract / mis-summary 已灰度下线（enabled:false），由 mis-user-helper 承接。
   worker_ids:
-  - crm-assistant
-  - mis-rag
-  - mis-user-helper
+    - template-report
+    - crm-assistant
+    - mis-rag
+    - spm-report
+  passthrough_workers:
+    - template-report
+    - spm-report
+  hard_dispatch_workers:
+    # 日/周/月报规则或 JEV 命中 template-report 后直达开卡快路径（跳过选人 LLM）
+    - template-report
+    - spm-report
