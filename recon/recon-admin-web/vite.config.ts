@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
 // VITE_RECON_DIRECT=1 时 dev proxy 直连 recon-service（绕过平台 Gateway/BFF），仅本地独立联调用。
-// 默认走平台链路：Gateway(8080) → BFF(8081) → recon-service(8110)。
+// 默认走平台链路：Gateway(8080) → BFF(8081) → recon-service(8111)。
 const reconDirect = process.env.VITE_RECON_DIRECT === '1';
 
 export default defineConfig({
@@ -22,12 +22,12 @@ export default defineConfig({
       'Access-Control-Allow-Origin': '*',
     },
     proxy: {
-      // 方案 A′：默认统一走平台链路 Gateway(8080) → BFF(8081) → recon-service(8110)。
+      // 方案 A′：默认统一走平台链路 Gateway(8080) → BFF(8081) → recon-service(8111)。
       // VITE_RECON_DIRECT=1 直连兜底：把前端 /api/v1/recon 前缀改写为后端 /internal/v1/recon
       // （recon-service 已不自验 JWT，直连无需登录上下文）。
       '/api': reconDirect
         ? {
-            target: 'http://localhost:8110',
+            target: 'http://localhost:8111',
             changeOrigin: true,
             rewrite: (path) => path.replace(/^\/api\/v1\/recon/, '/internal/v1/recon'),
           }

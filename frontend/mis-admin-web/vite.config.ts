@@ -36,7 +36,7 @@ export default defineConfig({
       },
       // micro-app 子应用（recon）在壳子内发起的 /internal 请求走壳子代理到 recon-service
       '/internal': {
-        target: 'http://localhost:8110',
+        target: 'http://localhost:8111',
         changeOrigin: true,
       },
     },

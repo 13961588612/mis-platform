@@ -79,10 +79,23 @@ export function remoteCodeFromPath(pathname: string): string | null {
 }
 
 /**
- * 把 remote 子路径归一为应用根路径：/remote/recon/connections → /remote/recon。
- * 保证一个 remote 应用只占用一个 Tab、只挂载一个 <micro-app> 实例（micro-app 不允许同名多实例）。
+ * remote 子应用默认落地页（进入应用但无历史 Tab 时使用）。
+ *
+ * <p>直接落到与子应用首页一致的路由，避免先开一个 `/remote/{code}` 空 Tab、
+ * 再由子应用 `index → 首页` 重定向多开一个 Tab。
  */
-export function normalizeRemotePath(pathname: string): string {
-  const code = remoteCodeFromPath(pathname);
-  return code ? `/remote/${code}` : pathname;
+const DEV_DEFAULT_LANDING: Record<string, string> = {
+  recon: '/remote/recon/summary',
+};
+
+/**
+ * 解析 remote 应用入口路径：子应用默认落地页，未登记则回退应用根。
+ *
+ * <p>壳子不再为 remote 子应用记录 Tab（页内 Tab 由子应用自己管理），
+ * 故这里不再读壳子 tab store 的「上次激活路径」。
+ *
+ * @param code 应用编码（sys_app.code）
+ */
+export function resolveRemoteEntry(code: string): string {
+  return DEV_DEFAULT_LANDING[code] ?? `/remote/${code}`;
 }

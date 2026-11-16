@@ -1,6 +1,6 @@
 ﻿# recon 前后端启动脚本（与 backend\start-dev.ps1 同风格）
 # 用法:
-#   .\start-dev.ps1               # 启动后端(8110) + 前端(5176)
+#   .\start-dev.ps1               # 启动后端(8111) + 前端(5176)
 #   .\start-dev.ps1 -Backend      # 仅启动后端
 #   .\start-dev.ps1 -Frontend     # 仅启动前端
 #   .\start-dev.ps1 -Restart      # 端口已监听也强制重启
@@ -136,7 +136,7 @@ if ($Build) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-# ---------- 后端 recon-service (8110) ----------
+# ---------- 后端 recon-service (8111) ----------
 if ($wantBackend) {
     $parentDir = Join-Path $env:USERPROFILE '.m2\repository\com\mis\recon-parent\0.1.0-SNAPSHOT'
     if (-not (Test-Path $parentDir)) {
@@ -145,27 +145,27 @@ if ($wantBackend) {
     }
 
     $skipBackend = $false
-    if (Test-PortListening -Port 8110) {
+    if (Test-PortListening -Port 8111) {
         if ($Restart) {
-            Write-Host '  ~ recon-service :8110 占用中，先停止...' -ForegroundColor Yellow
+            Write-Host '  ~ recon-service :8111 占用中，先停止...' -ForegroundColor Yellow
             & (Join-Path $Root 'stop-dev.ps1') backend
-        } elseif (Test-HttpHealth -Port 8110) {
-            Write-Host '  = recon-service 已在 :8110 监听且 health 正常，跳过（需要重启用 -Restart）' -ForegroundColor Green
+        } elseif (Test-HttpHealth -Port 8111) {
+            Write-Host '  = recon-service 已在 :8111 监听且 health 正常，跳过（需要重启用 -Restart）' -ForegroundColor Green
             $skipBackend = $true
         } else {
-            Write-Host '  ! :8110 端口在听但 health 失败（可能是旧进程/错库），将停掉再启' -ForegroundColor Yellow
+            Write-Host '  ! :8111 端口在听但 health 失败（可能是旧进程/错库），将停掉再启' -ForegroundColor Yellow
             & (Join-Path $Root 'stop-dev.ps1') backend
         }
     }
 
     if (-not $skipBackend) {
         if (Test-Path $BackendLog) { Copy-Item $BackendLog ($BackendLog + '.prev') -Force -ErrorAction SilentlyContinue }
-        Write-Host "  -> 启动 recon-service（:8110，日志: $BackendLog）" -ForegroundColor Yellow
+        Write-Host "  -> 启动 recon-service（:8111，日志: $BackendLog）" -ForegroundColor Yellow
         $envBlock = Get-ChildEnvBlock
         $childCmd = "cd '$SvcDir'`n$envBlock`n& '$Mvn' spring-boot:run *>&1 | Tee-Object -FilePath '$BackendLog'"
         Start-Process powershell -ArgumentList @('-NoExit', '-Command', $childCmd) -WindowStyle Hidden | Out-Null
-        if (Wait-PortListening -Port 8110 -TimeoutSec 240 -Label 'recon-service') {
-            Write-Host '  ok recon-service 已监听 :8110' -ForegroundColor Green
+        if (Wait-PortListening -Port 8111 -TimeoutSec 240 -Label 'recon-service') {
+            Write-Host '  ok recon-service 已监听 :8111' -ForegroundColor Green
         } else {
             $failed += 'recon-service'
         }
@@ -210,7 +210,7 @@ if ($failed.Count -gt 0) {
     exit 1
 }
 Write-Host 'recon 前后端已就绪' -ForegroundColor Green
-Write-Host '  后端 API : http://localhost:8110/actuator/health' -ForegroundColor Cyan
+Write-Host '  后端 API : http://localhost:8111/actuator/health' -ForegroundColor Cyan
 Write-Host '  管理后台 : http://localhost:5176' -ForegroundColor Cyan
 Write-Host "  日志目录 : $LogDir" -ForegroundColor Cyan
 Write-Host '  停止命令 : .\stop-dev.ps1' -ForegroundColor Cyan

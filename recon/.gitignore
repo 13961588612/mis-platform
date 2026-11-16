@@ -1,53 +1,73 @@
-# IDE
+# =============================================================================
+# recon 子项目 — Git 忽略规则（与仓库根规则对齐；recon 独立成库时仍可独立使用）
+# =============================================================================
+
+# ----- IDE / 编辑器 -----
 .idea/
 *.iml
 .vscode/
 *.swp
 *.swo
+*~
 
-# OS
+# ----- 操作系统 -----
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
-# Env & secrets
+# ----- 环境变量与密钥 -----
 .env
+.env.local
+.env.*.local
 .env.integration
-backend/config/jdk.properties
+!.env.example
+!.env.*.example
 *.pem
+*.key
+*.p12
+*.jks
 keys/
 
-# Java / Maven
+# ----- Java / Maven -----
 target/
 *.class
 *.jar
 *.war
-*.log
 hs_err_pid*
+replay_pid*
+*.orig
+*.rej
 
-# Node / Frontend（后续前端模块）
+# ----- 日志（含后缀变体：*.log.1、*.log.prev、*.log.err） -----
+*.log
+*.log.*
+*.pid
+**/logs/**
+!**/logs/.gitignore
+
+# ----- Node / 前端 -----
 node_modules/
 dist/
+dist-ssr/
 .pnpm-store/
-# TS 增量编译产物（tsc --build 生成，可再生，不入库）
+# Vite 依赖预打包缓存（每次 dev 启动都会重建）
+.vite/
+.turbo/
+.eslintcache
 *.tsbuildinfo
+coverage/
+.nyc_output/
 
-# Python（后续 agent 模块）
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# ----- 临时产物 -----
+*.tmp
+*.temp
+.cache/
 
-# Docker volumes（若挂载到仓库内）
+# ----- Docker volumes（若挂载到仓库内） -----
 .deploy-data/
 
-# Nacos 本机解压目录与下载包（scripts/start-nacos-native.ps1）
-deploy/nacos/runtime/
-deploy/nacos/_last-boot.txt
-deploy/nacos/plugins/
-
-# 运行时日志目录（后台服务持续写入，物理清理需先停服务）
-/backend/logs/
-/logs/
-
-# Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
+# ----- Windows 保留名误建垃圾文件 -----
 /nul

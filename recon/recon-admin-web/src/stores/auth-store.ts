@@ -40,6 +40,12 @@ export function setSession(token: string, user: AuthUser | null, permissions: st
   listeners.forEach((l) => l());
 }
 
+/** 用后端权威权限码覆盖本地快照（壳子下发的仅作首屏缓存） */
+export function setPermissions(permissions: string[]) {
+  state = { ...state, permissions };
+  listeners.forEach((l) => l());
+}
+
 export function clearSession() {
   state = { token: '', user: null, permissions: [] };
   listeners.forEach((l) => l());

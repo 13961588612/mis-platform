@@ -1,5 +1,6 @@
 server:
-  port: 8110
+  # 8111：避开 mis-ai-template-report 占用的 8110（该端口为平台既有约定，见 docs/backend/microservices.md）
+  port: ${SERVER_PORT:8111}
 
 spring:
   application:
@@ -101,6 +102,12 @@ management:
     web:
       exposure:
         include: health,info,metrics
+  health:
+    # 邮件为占位配置（spring.mail.host 默认为空串），MailSenderAutoConfiguration 仍会建
+    # JavaMailSender → 健康检查连 SMTP 必失败，把整个 /actuator/health 拖成 503，
+    # 导致启动脚本误判「服务未就绪」。邮件未真正启用时关掉该健康项。
+    mail:
+      enabled: false
   endpoint:
     health:
       show-details: always

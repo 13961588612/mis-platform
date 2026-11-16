@@ -53,11 +53,10 @@ import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import {
   getRemoteApp,
-  normalizeRemotePath,
   registerRemoteApps,
   remoteCodeFromPath,
+  resolveRemoteEntry,
 } from '@/lib/nav/remote-apps';
-import { RECON_NAV, filterReconNavByPermission } from '@/lib/nav/recon-nav';
 import { useTabStore } from '@/stores/tab-store';
 
 /** 原型 .btn.btn-ghost：text-sm / font-medium / gap-2 / 无描边 */
@@ -80,7 +79,6 @@ export function AppLayout() {
   const app = useAuthStore((s) => s.app);
   const user = useAuthStore((s) => s.user);
   const menus = useAuthStore((s) => s.menus);
-  const permissions = useAuthStore((s) => s.permissions);
   const clearSession = useAuthStore((s) => s.clearSession);
   const navigate = useNavigate();
   const location = useLocation();
@@ -92,7 +90,12 @@ export function AppLayout() {
   // 仅 /portal 隐藏左栏（PRD §9.2 / 设计 §1.3）：门户是三 Tab 全宽工作台，不需要子系统侧栏；
   // 其余路径（/task/*、/kb/*、/system/* …）左栏原样恢复。只影响 <aside> 的条件渲染，
   // navNodes / activeAppCode / TASK_NAV 等逻辑一行不动。
-  const hideSidebar = isOnPortal;
+  //
+  // micro-app 远程子应用（如对账平台）另需整体隐藏侧栏与 Tab 栏：它自带 AppLayout
+  // （侧栏 + 页内多 Tab，按壳子下发的 permissions 过滤菜单），壳子再渲染一份会变成
+  // 「两套菜单 + 两套 Tab」。壳子在此模式下只保留顶栏（返回门户 / 切换APP / 主题 / 用户）。
+  const isRemoteApp = Boolean(remoteCodeFromPath(location.pathname));
+  const hideSidebar = isOnPortal || isRemoteApp;
 
   // iframe 模式 remote 子应用内部跳转（如对账汇总下钻差异处理）经 microApp.router.push
   // 用原生 pushState 改壳子 URL，React Router 不感知 → 侧栏选中态不切、返回失效。
@@ -134,14 +137,15 @@ export function AppLayout() {
               ? FINANCE_NAV
               : activeAppCode === 'system'
                 ? SYSTEM_NAV
-                : activeAppCode === 'recon'
-                  ? filterReconNavByPermission(RECON_NAV, permissions)
-                  : null;
+                : null;
+    // micro-app 远程子应用：菜单过滤在子应用内完成（它自带侧栏），壳子不再提供清单。
+    // 后端 `menus` 是「登录 APP（多为 system）」的菜单，混进来会把平台菜单塞进对账平台侧栏。
+    if (remoteCodeFromPath(location.pathname)) return [];
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
     return dyn;
-  }, [menus, activeAppCode, permissions]);
+  }, [menus, activeAppCode, location.pathname]);
 
   const navItem = useMemo(() => {
     // 最长命中优先：否则 /agent/skills/permissions 会先命中短路径「技能池」
@@ -194,9 +198,11 @@ export function AppLayout() {
   }, [setCopilotOpen]);
 
   useEffect(() => {
-    // remote 子路径归一为应用根路径：一个 remote 应用只占一个 Tab（对应单个 <micro-app> 实例）
-    const path = normalizeRemotePath(location.pathname);
+    const path = location.pathname;
     if (path === '/portal' || path === '/login' || path === '/change-password' || path === '/403') return;
+    // remote 子应用：页内 Tab 由子应用自己管理（壳子 TabBar 在此模式隐藏），壳子侧不开 Tab，
+    // 否则子应用每切一页都会往壳子 tab store 塞一条，切回其它应用时冒出一堆残留 Tab。
+    if (remoteCodeFromPath(path)) return;
     openTab({
       path,
       title: path === '/dashboard' ? '仪表盘' : pageTitle,
@@ -367,7 +373,7 @@ export function AppLayout() {
                               return;
                             }
                             if (item.runtime === 'remote') {
-                              navigate(`/remote/${item.code}`);
+                              navigate(resolveRemoteEntry(item.code));
                               return;
                             }
                             if (item.code === 'system' || item.runtime === 'host') {
@@ -494,9 +500,7 @@ export function AppLayout() {
                         ? '问数'
                         : activeAppCode === 'finance'
                           ? '财务辅助 · 银行账目'
-                          : activeAppCode === 'recon'
-                            ? '对账平台'
-                            : undefined
+                          : undefined
               }
             />
           )}
@@ -517,9 +521,15 @@ export function AppLayout() {
         ) : null}
 
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <TabBar />
+          {isRemoteApp ? null : <TabBar />}
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+            {/* remote 子应用自带侧栏与页内边距，壳子不再叠加 p-4/p-6，否则左栏与内容间出现双份留白 */}
+            <div
+              className={cn(
+                'relative flex min-h-0 flex-1 flex-col overflow-hidden',
+                !isRemoteApp && 'p-4 md:p-6',
+              )}
+            >
               <KeepAliveOutlet />
             </div>
           </main>

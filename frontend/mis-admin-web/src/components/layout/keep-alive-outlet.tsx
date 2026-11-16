@@ -7,7 +7,6 @@ import { useAuthStore } from '@/stores/auth-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
 import {
   getRemoteApp,
-  normalizeRemotePath,
   remoteCodeFromPath,
   useRemoteRegistryVersion,
 } from '@/lib/nav/remote-apps';
@@ -376,9 +375,9 @@ export function KeepAliveOutlet() {
       });
   }, [location.pathname]);
 
-  // remote 子路径归一为应用根路径：一个 remote 应用 = 一个 Tab = 一个 <micro-app> 实例
-  const active = normalizeRemotePath(location.pathname);
-  const paths = new Set(tabs.map((t) => normalizeRemotePath(t.path)));
+  // Tab 按完整路径保存：remote 子应用每个子页独立占一个 Tab。
+  const active = location.pathname;
+  const paths = new Set(tabs.map((t) => t.path));
   paths.add(active);
 
   const activeIframeCode = active.startsWith('/iframe/') ? active.slice('/iframe/'.length) : null;
@@ -388,6 +387,14 @@ export function KeepAliveOutlet() {
   const activeHostMissing = !activeIframeCode && !activeRemoteCode && !resolvePageComponent(active);
   const activeIframeMissing = Boolean(activeIframeCode) && !activeIframe;
   const activeRemoteMissing = Boolean(activeRemoteCode) && !activeRemote;
+
+  /**
+   * remote 子应用渲染策略。
+   *
+   * <p>侧栏菜单、页内多 Tab、Tab 保活都由子应用自己负责（壳子在 remote 模式下隐藏
+   * 侧栏与 TabBar）；壳子这里只挂当前激活 code 的一个 `<micro-app>` 实例。
+   * 壳子 URL 仍随子应用路由同步（micro-app native 模式 + 上方 router.afterEach 守卫）。
+   */
 
   return (
     <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden">
@@ -413,21 +420,8 @@ export function KeepAliveOutlet() {
           );
         }
 
-        if (remoteCode) {
-          if (!getRemoteApp(remoteCode)) return null;
-          return (
-            <div
-              key={path}
-              className={cn(
-                'absolute inset-0 flex flex-col',
-                isActive ? 'z-10' : 'pointer-events-none invisible z-0',
-              )}
-              aria-hidden={!isActive}
-            >
-              <RemotePage code={remoteCode} />
-            </div>
-          );
-        }
+        // remote Tab：由下方「每 code 一个实例」统一渲染，这里不按 Tab 挂载
+        if (remoteCode) return null;
 
         const Comp = resolvePageComponent(path);
         if (!Comp) return null;
@@ -450,6 +444,12 @@ export function KeepAliveOutlet() {
           </div>
         );
       })}
+
+      {activeRemoteCode ? (
+        <div key={`remote-${activeRemoteCode}`} className="absolute inset-0 flex flex-col">
+          <RemotePage code={activeRemoteCode} />
+        </div>
+      ) : null}
 
       {activeIframeMissing ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

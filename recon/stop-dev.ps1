@@ -39,7 +39,7 @@ $stopBackend  = $wantAll -or $Target -eq 'backend'
 $stopFrontend = $wantAll -or $Target -eq 'frontend'
 
 Write-Host '正在停止 recon 服务...' -ForegroundColor Cyan
-if ($stopBackend)  { Stop-PortProcess -Port 8110 -Label 'recon-service(8110)' }
+if ($stopBackend)  { Stop-PortProcess -Port 8111 -Label 'recon-service(8111)' }
 if ($stopFrontend) { Stop-PortProcess -Port 5176 -Label 'recon-admin-web(5176)' }
 
 Write-Host ''
