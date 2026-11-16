@@ -50,6 +50,12 @@ export function PortalHomeTab() {
         navigate(`/iframe/${app.code}`);
         return;
       }
+      // micro-app 远程子应用（runtime='remote'，如对账平台 recon）：进应用根路径，
+      // 子路由由 KeepAliveOutlet 内的 <micro-app> + microApp.router 驱动。
+      if (app.runtime === 'remote') {
+        navigate(`/remote/${app.code}`);
+        return;
+      }
       if (app.code === 'system' || app.runtime === 'host') {
         navigate(resolveAppEntry(app.code, app.basePath));
       }

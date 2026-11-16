@@ -1,6 +1,7 @@
 package com.mis.adminbff.config;
 
 import io.netty.channel.ChannelOption;
+import com.mis.adminbff.support.embed.EmbedExchangeRateLimiter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
