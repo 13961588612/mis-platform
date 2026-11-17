@@ -1,28 +1,38 @@
 -- ===========================================================================
--- V83__recon_api_registry.sql —— 对账平台（recon）BFF 透传端点登记与权限
+-- V176__recon_registry.sql —— 对账平台（recon）应用注册 + BFF 透传端点 + 权限
 -- PostgreSQL 16 | 库名: mis_platform
--- 背景：本文件合并原 V48__recon_api_registry 全部注册内容并做三处演进：
---       1) 版本号 V48 与 master 的 V48__employee_builtin_flag 撞号，改 V83；
---       2) sys_menu id 93030 已被 iqd（app=93010）占用，目录改用 93035；
---       3) 【本次】三个配置菜单（连接管理/数据源管理/场景与检查）需要区分
---          权限：无 view 码的用户看不到菜单、也调不了对应 API。故在 4 条
---          authOnly 通配之外，新增配置类细分规则绑定 view 码。
+--
+-- 【为什么是 V176 而不是原 V83】
+--   本仓曾以 V83__recon_api_registry.sql 提交，但集成/生产库的 V83 已被
+--   V83__iqd_mcp_status_port.sql 占用（同版本号两个文件会让 Flyway 直接启动失败：
+--   "Found more than one migration with version 83"）。且两个环境的
+--   flyway_schema_history 都没有 recon 的注册记录，故整体顺延到 V176 重新引入。
+--   同时 V47__sys_app_recon_remote_fix 在库中是空占位（checksum 1149516324），
+--   sys_app 的注册也一并收到本文件，避免再次出现「迁移成功但数据没落库」。
+--
+-- 【做什么】
+--   0. sys_app：注册门户应用（runtime='remote'，id=4，与各环境保持一致）
+--   1. sys_module：对账平台模块（93020）
+--   2. sys_menu：目录 93035 + 页面(view) 93036-93038 + 按钮 93046-93054
+--   3. sys_api：catalog 93090 + 4 条 authOnly 通配 + 配置类细分规则 93100-93121
+--   4. sys_menu_api：接口 ⇄ 菜单关联（决定 ApiPermissionRegistry 是否生效）
+--   5. 修复历史错位绑定（recon 通配曾挂到 iqd 菜单 93030）
+--   6. 授权给内置租户管理员 role_id=1
 --
 -- 【权限模型（页面级）】
---   * recon 三个配置菜单：连接管理 / 数据源管理 / 场景与检查，各挂页面级
---     view 码（recon:connection:view 等）。BFF 对配置类 API 校验 view 码，
---     无码一律 403（页面级拦截，页面内写/删按钮仍由前端 PermissionGate
---     用 write/delete 码控制，后端不细分）。
+--   * 三个配置菜单：连接管理 / 数据源管理 / 场景与检查，各挂页面级 view 码
+--     （recon:connection:view 等）。BFF 对配置类 API 校验 view 码，无码一律 403；
+--     页面内写/删按钮由前端 PermissionGate 用 write/delete 码控制。
 --   * 查询类（差异查询/报告中心/运行监控）保持 authOnly：登录即可访问。
---   * 机制：registry.match() 同时命中 authOnly 通配与带码规则时"以权限为准"
---     （ApiPermissionRegistry.java:80-84），故保留 GET/POST/PUT/DELETE
---     /api/v1/recon/** 四条 authOnly 通配兜底，再叠加配置类细分规则即可
---     实现"配置类需码、其余 authOnly"，且不会因拆分遗漏端点导致 403。
+--   * registry.match() 同时命中 authOnly 通配与带码规则时"以权限为准"
+--     （ApiPermissionRegistry.java:80-84），故保留四条 /api/v1/recon/** authOnly
+--     通配兜底，再叠加配置类细分规则。
 --
--- 【段位（数据库实测，V82 为当前最新）】
+-- 【段位（数据库实测）】
+--   sys_app     4
 --   sys_module  93020
---   sys_menu    93035 目录 + 93036-93038 页面(view) + 93046-93054 按钮(write/delete/pull/run/confirm)
---   sys_api     93090 catalog + 93091-93094 authOnly 通配 + 93100-93121 配置类细分
+--   sys_menu    93035 目录 + 93036-93038 页面(view) + 93046-93054 按钮
+--   sys_api     93090 catalog + 93091-93094 authOnly 通配 + 93100-93121 细分
 --   sys_api.code 0093/00930001-00930004/00930100-00930121
 --   sys_menu_api 与 api_id 同号
 --
@@ -30,15 +40,40 @@
 --   D5  V8 已 DROP sys_api.tenant_id/app_id，列清单**没有**这两列。
 --   D12 sys_api.type 是枚举 sys_api_node_type('catalog','api')，需显式 ::cast。
 --   D13 uk_api_method_path (V1:290) UNIQUE (http_method, path_pattern)
---       WHERE type='api' AND status=1 ⇒ (method,path) 全局唯一，新增规则两两不重。
+--       WHERE type='api' AND status=1 ⇒ (method,path) 全局唯一。
 --   uk_api_module_code(module_id, code) ⇒ catalog/叶子 code 在模块内不重。
 --   sys_menu: uk_menu_app_code(app_id, code)、uk_menu_app_permission(app_id, permission)
 --       WHERE permission IS NOT NULL —— permission 置 NULL 不占名额。
 --   sys_role_permission: uk_role_perm(role_id, perm_type, target_id)（V2 seed 口径）。
 --
 -- 幂等：固定 ID + WHERE NOT EXISTS + 父行存在性检查 + 授权逐行判重，可重复执行。
--- 约束：append-only，不得修改 V1–V82。
+-- 约束：append-only，不得修改 V1–V175 的已发布内容。
 -- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- 0. sys_app：门户应用注册
+--    先显式失败：若 id=4 被别的应用占用，宁可中止也不要"静默跳过"
+--    （V47 当年就是 ON CONFLICT 守卫静默跳过，导致应用行根本不存在）。
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys_app WHERE id = 4 AND code <> 'recon') THEN
+        RAISE EXCEPTION 'V176: sys_app id=4 已被 code=% 占用，无法注册 recon',
+            (SELECT code FROM sys_app WHERE id = 4);
+    END IF;
+END $$;
+
+INSERT INTO sys_app (id, tenant_id, code, name, icon, base_path, mfe_remote, sort, status,
+                     kind, runtime, description, portal_group, created_at, updated_at)
+SELECT v.* FROM (VALUES
+    -- mfe_remote：仅登记参考地址（BFF 的 AppView 未暴露该字段，壳子入口由构建期
+    -- VITE_RECON_ENTRY 决定；此处保持与部署地址一致，便于排查）
+    (4, 1, 'recon', '对账平台', 'Scale', '/recon', 'http://10.254.26.34/recon/', 4, 1,
+     'subsystem', 'remote', '数据对账与差异处理', 'operations', NOW(), NOW())
+) AS v(id, tenant_id, code, name, icon, base_path, mfe_remote, sort, status,
+       kind, runtime, description, portal_group, created_at, updated_at)
+WHERE NOT EXISTS (SELECT 1 FROM sys_app WHERE code = 'recon')
+  AND NOT EXISTS (SELECT 1 FROM sys_app WHERE id = v.id);
 
 -- ---------------------------------------------------------------------------
 -- 1. sys_module：对账平台模块（service_name 唯一，V19 同款写法）
@@ -190,8 +225,8 @@ WHERE api_id BETWEEN 93090 AND 93094
 INSERT INTO sys_role_permission (id, role_id, perm_type, target_id, created_at)
 SELECT m.id, 1, 'menu'::sys_perm_type, m.id, NOW()
 FROM sys_menu m
-WHERE m.id BETWEEN 93036 AND 93054
-  AND m.app_id = 4
+WHERE m.app_id = 4
+  AND m.permission LIKE 'recon:%'
   AND m.status = 1
   AND NOT EXISTS (
     SELECT 1 FROM sys_role_permission rp

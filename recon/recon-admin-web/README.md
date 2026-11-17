@@ -10,7 +10,7 @@
 # ① 编译后端（首次或改代码后）
 .\build-dev.ps1
 
-# ② 启动前后端（后端 8110 + 前端 5176；验收期默认连远程 PG、关 Nacos/调度）
+# ② 启动前后端（后端 8111 + 前端 5176；验收期默认连远程 PG、关 Nacos/调度）
 .\start-dev.ps1
 
 # 常用变体
@@ -29,14 +29,14 @@
 # 1) 安装依赖（pnpm 10 需本地 store，规避沙箱 safe-delete 拦截）
 pnpm install --store-dir "./.pnpm-store"
 
-# 2) 启动后端（recon-service，端口 8110；验收期关调度避免干扰手动序列）
+# 2) 启动后端（recon-service，端口 8111；验收期关调度避免干扰手动序列）
 #    在 recon-service 目录：
 #    MIS_REMOTE=false DB_HOST=10.254.16.6 DB_PORT=5432 DB_NAME=recon \
 #    DB_USER=mis DB_PASSWORD=mis123 RECON_SCHEDULER_ENABLED=false \
 #    mvn spring-boot:run
 
 # 3) 启动前端（5176，proxy /api → 平台 Gateway 8080，方案 A′：Gateway → BFF → recon-service）
-#    独立联调（不起平台链路）用直连兜底：$env:VITE_RECON_DIRECT='1'; pnpm dev（直连 8110）
+#    独立联调（不起平台链路）用直连兜底：$env:VITE_RECON_DIRECT='1'; pnpm dev（直连 8111）
 pnpm dev
 
 # 4) 构建验证（tsc --noEmit + vite build）
@@ -79,5 +79,5 @@ src/
 ## 环境备忘
 
 - 构建：`pnpm build`；vite 清空 dist 会被沙箱 bulk-guard 拦截，先手动 `rm -rf dist`
-- 后端端口 8110（经 BFF 转发，BFF `mis.recon.base-url` 默认指向 localhost:8110）；`RECON_CORS_ALLOWED_ORIGINS` 默认含 5173/8081/5176；dev 走 proxy 无跨域；独立运行（不经壳子）时经 Gateway 需提供登录上下文
+- 后端端口 8111（经 BFF 转发，BFF `mis.recon.base-url` 默认指向 localhost:8111）；`RECON_CORS_ALLOWED_ORIGINS` 默认含 5173/8081/5176；dev 走 proxy 无跨域；独立运行（不经壳子）时经 Gateway 需提供登录上下文
 - 前端固定端口 5176（避开 mis 平台 5174/5173，避免 Vite 端口漂移导致入口地址不确定）

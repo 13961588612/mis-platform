@@ -131,6 +131,7 @@ mis-platform/
 | mis-kb | 8108 | 1 | 知识库 |
 | mis-iqd | 8109 | 1 | 问数 |
 | mis-ai-template-report | 8110 | 1 | 模板报告（S3：catalog/prepare/execute） |
+| recon-service | 8111 | 1 | 对账平台后端（`recon/` 子项目，经 BFF 透传） |
 | mis-admin-web | 5173 | 1 | 开发服务器 |
 
 > **Sprint 2 重构：** mis-user（原8102）和 mis-rbac（原8104）已取消，合并为 mis-iam（8102）。端口 8104 回收。

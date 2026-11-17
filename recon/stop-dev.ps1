@@ -1,4 +1,4 @@
-﻿# recon 前后端停止脚本
+﻿﻿# recon 前后端停止脚本
 # 用法:
 #   .\stop-dev.ps1            # 停止全部（后端 + 前端）
 #   .\stop-dev.ps1 backend    # 仅停止后端

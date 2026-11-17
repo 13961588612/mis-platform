@@ -8,6 +8,9 @@ const reconDirect = process.env.VITE_RECON_DIRECT === '1';
 
 export default defineConfig({
   plugins: [react()],
+  // 子路径部署（如 Nginx 的 /recon/）用 VITE_BASE 指定，需与 router.tsx 的 basename 兜底一致；
+  // 默认根路径。示例：$env:VITE_BASE='/recon/'; pnpm build
+  base: process.env.VITE_BASE ?? '/',
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -20,8 +20,11 @@ function emit() {
 }
 
 /**
- * 本地联调兜底入口：sys_app 未注册 / 后端未暴露 entry 时也能跑通。
- * 生产以 sys_app 数据为准（后端暴露 mfeRemote 后经 registerRemoteApps 覆盖）。
+ * remote 子应用入口（构建期注入）。
+ *
+ * <p>网关 {@code /apps} 目前不返回 {@code entry}（AppView 无该字段），因此这里是**唯一**
+ * 入口来源：生产构建须显式传 `VITE_RECON_ENTRY`，例如
+ * `VITE_RECON_ENTRY=http://10.254.26.34/recon/`；未传时回落到本地 dev 地址。
  */
 const DEV_ENTRY: Record<string, string> = {
   recon: (import.meta.env.VITE_RECON_ENTRY as string | undefined)?.trim() || 'http://localhost:5176',

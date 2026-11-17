@@ -1,0 +1,48 @@
+# recon-service — systemd (S1 ai-service 10.254.26.33)
+#
+# 前置：
+#   1) 宿主机已装 Java 17（JRE 即可，与 S1 其它 Java 服务一致）
+#   2) JAR：/usr/local/app/recon-service/recon-service.jar
+#   3) 环境：/usr/local/app/recon-service/recon-service.env（自 deploy/env/prod/recon-service.env.example 复制）
+#   4) recon 库已建好（jdbc:postgresql://10.254.26.36:5432/recon），Flyway 首次启动自动建表
+#
+# 安装：
+#   sudo cp deploy/systemd/recon-service.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now recon-service
+#   sudo systemctl status recon-service
+#
+# 日志：journalctl -u recon-service -f
+#
+# 注意：8111 仅供本机 mis-admin-bff 调用，不需要对 S2 或公网放行。
+
+[Unit]
+Description=Recon Service (recon-service :8111)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/app/recon-service
+
+EnvironmentFile=-/usr/local/app/recon-service/recon-service.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# JAVA_HOME 若已写 /etc/profile.d/java17.sh，systemd 不会自动加载；需要时取消下一行注释并改路径
+# Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+# Environment=PATH=/usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/java -Xms512m -Xmx1024m -jar /usr/local/app/recon-service/recon-service.jar
+
+Restart=always
+RestartSec=5
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=recon-service
+
+[Install]
+WantedBy=multi-user.target

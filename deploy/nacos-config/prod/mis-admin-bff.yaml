@@ -98,3 +98,10 @@ mis:
   # 模板报告（S1 同机 :8110；Gateway 仍走 /api/v1/** → BFF）
   ai-template-report:
     base-url: http://127.0.0.1:8110
+
+  # 对账平台透传（S1 同机 :8111）：/api/v1/recon/** → /internal/v1/recon/**
+  # 8111 仅供本机 BFF 调用，不对 S2/公网放行。
+  recon:
+    base-url: ${RECON_BASE_URL:http://127.0.0.1:8111}
+    # 查询/拉取为真实 DB 操作，3s（aggregate-timeout-ms）会误判超时
+    timeout-ms: ${RECON_TIMEOUT_MS:15000}
