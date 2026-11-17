@@ -124,8 +124,8 @@ export function pathMatches(pathname: string, navPath: string): boolean {
 /**
  * 侧栏叶子是否应高亮：前缀匹配 + **最长命中优先**。
  *
- * <p>否则 `/agent/skills` 与 `/agent/skills/permissions` 会在权限页同时高亮——
- * 短路径是长路径的前缀，单纯 `startsWith` 无法区分「列表页」与「同前缀的兄弟页」。
+ * <p>否则短路径是长路径前缀时（如 `/agent/skills` vs 其子路径）会同时高亮，
+ * 单纯 `startsWith` 无法区分列表页与同前缀的兄弟页。
  */
 export function isNavPathActive(
   pathname: string,

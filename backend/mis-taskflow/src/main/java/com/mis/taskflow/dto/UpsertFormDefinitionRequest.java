@@ -34,11 +34,17 @@ public record UpsertFormDefinitionRequest(
         String externalWorkflowSystem,
         /** EXTERNAL 时必填。 */
         @Size(max = 256, message = "外部工作流标识最长 256 字符")
-        String externalWorkflowRef
+        String externalWorkflowRef,
+        /** 自动填单 Agent；与 aiSkillId 成对，都空表示关闭。 */
+        @Size(max = 64, message = "自动填单 Agent 最长 64 字符")
+        String aiAgentId,
+        /** 自动填单 Skill；与 aiAgentId 成对。 */
+        @Size(max = 128, message = "自动填单 Skill 最长 128 字符")
+        String aiSkillId
 ) {
-    /** 兼容旧调用方（无工作流关联字段 → NONE）。 */
+    /** 兼容旧调用方（无工作流关联字段 → NONE；无 AI 填单）。 */
     public UpsertFormDefinitionRequest(Long categoryId, String code, String name, String description,
                                        String status, Integer sortOrder, String config) {
-        this(categoryId, code, name, description, status, sortOrder, config, "NONE", null, null, null);
+        this(categoryId, code, name, description, status, sortOrder, config, "NONE", null, null, null, null, null);
     }
 }

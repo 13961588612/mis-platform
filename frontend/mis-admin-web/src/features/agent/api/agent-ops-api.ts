@@ -51,6 +51,7 @@ import type {
   SessionQuery,
   SessionTimingPayload,
   Skill,
+  SkillCategoryTreeData,
   SkillGrant,
   SkillParseResponseFE,
   SkillStats,
@@ -212,6 +213,52 @@ export async function enableSkill(id: string): Promise<void> {
 export async function disableSkill(id: string): Promise<void> {
   const res = await api.post<ApiResult<void>>(`/agent-ops/skills/${seg(id)}/disable`);
   if (res.data.code !== 0) throw new Error(res.data.message || '停用技能失败');
+}
+
+/** 技能分类树 — agent:skill:list */
+export async function listSkillCategories(): Promise<SkillCategoryTreeData> {
+  const res = await api.get<ApiResult<SkillCategoryTreeData>>('/agent-ops/skill-categories');
+  const data = unwrap(res, '获取技能分类失败');
+  return {
+    tree: Array.isArray(data.tree) ? data.tree : [],
+    binds: data.binds ?? {},
+  };
+}
+
+/** 新建技能分类 — agent:skill:manage */
+export async function createSkillCategory(payload: {
+  parent_id?: number;
+  name: string;
+  sort_order?: number;
+}): Promise<{ id: number; name: string; parent_id: number }> {
+  const res = await api.post<ApiResult<{ id: number; name: string; parent_id: number }>>(
+    '/agent-ops/skill-categories',
+    payload,
+  );
+  return unwrap(res, '创建分类失败');
+}
+
+/** 更新技能分类 — agent:skill:manage */
+export async function updateSkillCategory(
+  id: number,
+  payload: { parent_id?: number; name: string; sort_order?: number },
+): Promise<void> {
+  const res = await api.put<ApiResult<unknown>>(`/agent-ops/skill-categories/${id}`, payload);
+  if (res.data.code !== 0) throw new Error(res.data.message || '更新分类失败');
+}
+
+/** 删除技能分类 — agent:skill:manage */
+export async function deleteSkillCategory(id: number): Promise<void> {
+  const res = await api.delete<ApiResult<void>>(`/agent-ops/skill-categories/${id}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除分类失败');
+}
+
+/** 绑定/解绑技能分类 — agent:skill:manage；category_id 空则解绑 */
+export async function bindSkillCategory(skillId: string, categoryId: number | null): Promise<void> {
+  const res = await api.put<ApiResult<void>>(`/agent-ops/skills/${seg(skillId)}/category`, {
+    category_id: categoryId,
+  });
+  if (res.data.code !== 0) throw new Error(res.data.message || '设置分类失败');
 }
 
 /** §4.3 #9 — agent:skill:reindex */

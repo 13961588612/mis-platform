@@ -16,6 +16,7 @@ describe('tab-store Agent 详情族', () => {
       ],
       activeId: '/dashboard',
       lastActivePathByApp: { system: '/dashboard' },
+      recentTabIds: ['/dashboard'],
     });
   });
 
@@ -55,6 +56,27 @@ describe('tab-store Agent 详情族', () => {
     const { openTab, closeTab } = useTabStore.getState();
     openTab({ path: '/agent/agents/a/skills', title: 'Agent 详情', appCode: 'agent' });
     const next = closeTab('/agent/agents/a');
+    expect(next).toBe('/dashboard');
+  });
+
+  it('closeTab 优先回到同 APP 最近打开过的未关闭 Tab，不跳到邻接的其他 APP', () => {
+    const { openTab, closeTab } = useTabStore.getState();
+    // 顺序：system 仪表盘 → agent 技能池 → system 用户 → agent 会话（当前）
+    openTab({ path: '/agent/skills', title: '技能池', appCode: 'agent' });
+    openTab({ path: '/system/users', title: '用户', appCode: 'system' });
+    openTab({ path: '/agent/sessions', title: '会话', appCode: 'agent' });
+
+    // 顶栏顺序大致：dashboard | skills | users | sessions
+    // 旧逻辑关 sessions 会落到 users（邻接），从而切到 system
+    const next = closeTab('/agent/sessions');
+    expect(next).toBe('/agent/skills');
+    expect(useTabStore.getState().activeId).toBe('/agent/skills');
+  });
+
+  it('closeTab 同 APP 无剩余 Tab 时才回退到其他 APP', () => {
+    const { openTab, closeTab } = useTabStore.getState();
+    openTab({ path: '/agent/skills', title: '技能池', appCode: 'agent' });
+    const next = closeTab('/agent/skills');
     expect(next).toBe('/dashboard');
   });
 });

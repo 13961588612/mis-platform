@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FilePlus2, RefreshCw, Search } from 'lucide-react';
+import { FilePlus2, RefreshCw, Search, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/page-header';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
@@ -51,6 +51,9 @@ import { ProcessStartDialog, type ProcessStartConfirm } from './components/proce
 import { resolveProcessTitle } from './lib/resolve-process-title';
 import { defaultDueFromDefinition, toDatetimeLocalValue } from './lib/default-due-from-definition';
 import { formatFormCellValue, mergeFormListFields } from './lib/format-form-cell';
+import { FormAiAssistPanel } from '@/features/biz/forms/form-ai-assist-panel';
+import { canShowFormAiAssist } from '@/features/biz/forms/lib/form-ai-assist';
+import { usePermission } from '@/hooks/use-permission';
 
 const TENANT = '1';
 const PAGE_SIZE = 20;
@@ -71,6 +74,7 @@ type BoundFormOption = {
 export function FormTestPage() {
   const user = useAuthStore((s) => s.user);
   const userId = user?.id ?? '';
+  const { hasPermission } = usePermission();
 
   const [forms, setForms] = useState<FormDefinitionItem[]>([]);
   const [defs, setDefs] = useState<WfDefinition[]>([]);
@@ -98,24 +102,27 @@ export function FormTestPage() {
   const [submitting, setSubmitting] = useState(false);
   const [startDialogOpen, setStartDialogOpen] = useState(false);
   const [pendingStartRecordId, setPendingStartRecordId] = useState<string | null>(null);
+  const [assistOpen, setAssistOpen] = useState(false);
 
   const boundOptions = useMemo<BoundFormOption[]>(() => {
     const enabled = forms.filter((f) => f.status === 'ENABLED');
     const out: BoundFormOption[] = [];
     for (const form of enabled) {
       if (!hasFormLoader(form.code)) continue;
-      const def = defs.find(
-        (d) =>
-          d.status === 'ACTIVE' &&
-          (d.supportedFormCodes?.includes(form.code) ||
-            // LOCAL 绑定以表单侧为准时仍可能只有前端注册表关联
-            false),
-      );
-      // 回退：任意 ACTIVE 定义含该 formCode
-      const def2 =
-        def ??
-        defs.find((d) => d.status === 'ACTIVE' && (d.supportedFormCodes ?? []).includes(form.code));
-      if (def2) out.push({ form, definition: def2 });
+      const localId =
+        form.workflowDefinitionId != null && form.workflowDefinitionId !== ''
+          ? String(form.workflowDefinitionId)
+          : '';
+      const byFormBinding =
+        (form.workflowBindingType ?? 'NONE') === 'LOCAL' && localId
+          ? defs.find((d) => d.status === 'ACTIVE' && String(d.id) === localId)
+          : undefined;
+      const byReverse =
+        byFormBinding ??
+        defs.find(
+          (d) => d.status === 'ACTIVE' && (d.supportedFormCodes ?? []).includes(form.code),
+        );
+      if (byReverse) out.push({ form, definition: byReverse });
     }
     return out;
   }, [forms, defs]);
@@ -128,6 +135,7 @@ export function FormTestPage() {
     () => boundOptions.find((o) => o.form.code === formCode)?.form ?? null,
     [boundOptions, formCode],
   );
+  const showAssist = canShowFormAiAssist(formMeta, hasPermission);
   const entry = formCode ? resolveForm(formCode) : null;
   const FormComp = entry?.component ?? null;
 
@@ -217,13 +225,16 @@ export function FormTestPage() {
 
   function openCreate() {
     if (boundOptions.length === 0) {
-      toast.error('没有可提交的表单：请先注册表单、绑定已发布流程，且前端已注册 FormStructuredStore（如 PUR_FORM）');
+      toast.error(
+        '没有可提交的表单：请在「表单注册」将已启用表单绑定已发布的本地流程（如 PUR_FORM → 采购审批示例），且前端已实现该 formCode。',
+      );
       return;
     }
     setEditingId(null);
     setFormCode(boundOptions[0].form.code);
     setBusinessId(`TEST-${Date.now()}`);
     setFormValues({});
+    setAssistOpen(false);
     setCreateOpen(true);
   }
 
@@ -239,6 +250,7 @@ export function FormTestPage() {
     setFormCode(record.formCode);
     setBusinessId(`FR-${record.id}`);
     setFormValues({ ...(record.values as FormData) });
+    setAssistOpen(false);
     setCreateOpen(true);
   }
 
@@ -576,10 +588,17 @@ export function FormTestPage() {
 
       <PaginationFooter total={total} page={page} totalPages={totalPages} onPageChange={setPage} />
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) setAssistOpen(false);
+        }}
+      >
         <DialogContent
           className={cn(
-            'flex max-h-[85vh] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl',
+            'flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0',
+            assistOpen && showAssist ? 'max-w-5xl sm:max-w-5xl' : 'max-w-3xl sm:max-w-3xl',
           )}
         >
           <DialogHeader className="m-0 shrink-0 space-y-0 border-b px-4 py-3 pr-10">
@@ -588,7 +607,34 @@ export function FormTestPage() {
               先「保存」写入宽表（保存态）；再「保存并发起」启动本地流程。仅 PUR_FORM 等已注册 Store 的表单可落库。
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
+          {showAssist ? (
+            <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2">
+              <Button
+                type="button"
+                variant={assistOpen ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAssistOpen((v) => !v)}
+              >
+                <Sparkles className="h-4 w-4" />
+                {assistOpen ? '收起辅助' : '辅助录入'}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {assistOpen ? '右侧解析后勾选填入左侧，请核对再保存' : '打开后可上传文档/图片或对话抽取'}
+              </span>
+            </div>
+          ) : null}
+          <div
+            className={cn(
+              'min-h-0 flex-1 overflow-hidden',
+              assistOpen && showAssist ? 'flex flex-row' : 'overflow-auto',
+            )}
+          >
+            <div
+              className={cn(
+                'min-h-0 space-y-4 overflow-auto px-4 py-3',
+                assistOpen && showAssist ? 'w-1/2 border-r' : 'flex-1',
+              )}
+            >
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label htmlFor="ft-create-form" className="text-sm font-medium">
@@ -638,6 +684,19 @@ export function FormTestPage() {
                 />
               )}
             </div>
+            </div>
+            {assistOpen && showAssist && formMeta?.aiAgentId && formMeta.aiSkillId ? (
+              <div className="min-h-0 w-1/2 overflow-auto px-4 py-3">
+                <FormAiAssistPanel
+                  formCode={formCode}
+                  agentId={formMeta.aiAgentId}
+                  skillId={formMeta.aiSkillId}
+                  fields={entry?.fields ?? []}
+                  currentValues={formValues}
+                  onApply={(partial) => setFormValues((prev) => ({ ...prev, ...partial }))}
+                />
+              </div>
+            ) : null}
           </div>
           <DialogFooter className="m-0 shrink-0 gap-2 border-t px-4 py-3">
             <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>

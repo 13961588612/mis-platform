@@ -49,6 +49,8 @@ export interface Skill {
   description: string;
   status: SkillStatus;
   category?: string;
+  /** 平台分类表绑定；未绑定时为空。列表由 BFF 分类树 overlay。 */
+  category_id?: number | null;
   version?: string;
   tags?: string[];
   updated_at: string;
@@ -56,6 +58,20 @@ export interface Skill {
   handler?: string;
   /** 来源：custom / mcp / builtin / package（对齐 SkillSource 枚举）。 */
   source?: string;
+}
+
+/** 技能池分类树节点（BFF /agent-ops/skill-categories）。 */
+export interface SkillCategoryNode {
+  id: number;
+  parent_id: number;
+  name: string;
+  sort_order: number;
+  children: SkillCategoryNode[];
+}
+
+export interface SkillCategoryTreeData {
+  tree: SkillCategoryNode[];
+  binds: Record<string, number>;
 }
 
 /**

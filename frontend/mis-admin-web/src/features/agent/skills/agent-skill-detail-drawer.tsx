@@ -14,12 +14,14 @@
  * `AgentStatusBadge`（skillStatus / skillKind）。
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { FileCode2, FileText, FolderOpen } from 'lucide-react';
+import { FileCode2, FileText, FolderOpen, FolderTree, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Sheet,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
@@ -28,15 +30,18 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { PermissionGate } from '@/components/auth/permission-gate';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { getSkill } from '../api/agent-ops-api';
+import { bindSkillCategory, getSkill } from '../api/agent-ops-api';
+import { flattenSkillCategories, type SkillCatNode } from './skill-category-tree';
 import { agentErrorMessage, formatTime } from '../types';
 import type { SkillDetail } from '../types';
 
@@ -45,6 +50,12 @@ export interface AgentSkillDetailDrawerProps {
   skillId: string | null;
   open: boolean;
   onClose: () => void;
+  categoryTree?: SkillCatNode[];
+  boundCategoryId?: number | null;
+  /** 分类变更成功后通知列表刷新。 */
+  onUpdated?: () => void;
+  /** 打开「设置权限」划入窗。 */
+  onOpenGrants?: (skill: SkillDetail) => void;
 }
 
 /** 单个附件分类的折叠展示（无则显示「无」）。onFileClick 可选：传入则列表项可点击查看内容。 */
@@ -111,11 +122,22 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDetailDrawerProps) {
+export function AgentSkillDetailDrawer({
+  skillId,
+  open,
+  onClose,
+  categoryTree = [],
+  boundCategoryId = null,
+  onUpdated,
+  onOpenGrants,
+}: AgentSkillDetailDrawerProps) {
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [loading, setLoading] = useState(false);
   /** B-1.5：当前正在查看的参考资料文件（name + 内容，内容来自详情接口的 reference_contents）。 */
   const [viewRef, setViewRef] = useState<{ name: string; content: string } | null>(null);
+  const [catOpen, setCatOpen] = useState(false);
+  const [catValue, setCatValue] = useState('');
+  const [catSaving, setCatSaving] = useState(false);
 
   useEffect(() => {
     if (!open || !skillId) return;
@@ -143,7 +165,8 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
   return (
     <>
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
-      <SheetContent className="flex w-full flex-col sm:max-w-2xl">
+      {/* 原宽 max-w-2xl=42rem；左列一半 21rem，右列保持 42rem 放正文 */}
+      <SheetContent className="flex w-full flex-col sm:max-w-[63rem]">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             技能详情
@@ -153,18 +176,18 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
           </SheetTitle>
         </SheetHeader>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-auto px-5 py-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {loading && detail == null ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
               加载中…
             </div>
           ) : detail == null ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
               暂无数据
             </div>
           ) : (
             <>
-              <div>
+              <div className="shrink-0 border-b px-5 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-lg font-semibold">{detail.name}</h3>
                   <AgentStatusBadge kind="skillStatus" value={detail.status} />
@@ -175,62 +198,94 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 rounded-lg border bg-card p-3 text-sm">
-                <Field label="分类" value={detail.category || '-'} />
-                <Field label="来源" value={detail.source || '-'} />
-                <Field label="版本" value={detail.version || '-'} />
-                <Field label="执行器" value={detail.handler || '（文档型，无）'} />
-                <div className="col-span-2">
-                  <Field
-                    label="标签"
-                    value={(detail.tags ?? []).length ? (detail.tags ?? []).join('、') : '（无）'}
-                  />
-                </div>
-                <div className="col-span-2">
-                  <Field label="更新时间" value={formatTime(detail.updated_at)} />
-                </div>
-              </div>
+              <div className="flex min-h-0 flex-1">
+                <div className="flex w-[21rem] shrink-0 flex-col gap-4 overflow-auto border-r px-5 py-4">
+                  <div className="grid grid-cols-1 gap-3 rounded-lg border bg-card p-3 text-sm">
+                    <Field
+                      label="分类"
+                      value={
+                        boundCategoryId != null
+                          ? (flattenSkillCategories(categoryTree).find((c) => c.id === boundCategoryId)
+                              ?.path ?? '-')
+                          : '-'
+                      }
+                    />
+                    <Field label="来源" value={detail.source || '-'} />
+                    <Field label="版本" value={detail.version || '-'} />
+                    <Field label="执行器" value={detail.handler || '（文档型，无）'} />
+                    <Field
+                      label="标签"
+                      value={(detail.tags ?? []).length ? (detail.tags ?? []).join('、') : '（无）'}
+                    />
+                    <Field label="更新时间" value={formatTime(detail.updated_at)} />
+                  </div>
 
-              <div>
-                <h4 className="mb-2 text-sm font-medium">SKILL.md 正文</h4>
-                {detail.body ? (
-                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs text-foreground">
-                    {detail.body}
-                  </pre>
-                ) : (
-                  <p className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
-                    该技能为自建/文档型，无 SKILL.md 正文。
-                  </p>
-                )}
-              </div>
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-medium">附件</h4>
+                    <AttachmentList
+                      title="脚本 scripts"
+                      icon={<FileCode2 className="h-4 w-4" />}
+                      files={detail.scripts}
+                    />
+                    <AttachmentList
+                      title="参考资料 references"
+                      icon={<FileText className="h-4 w-4" />}
+                      files={detail.references}
+                      onFileClick={(f) =>
+                        setViewRef({
+                          name: f,
+                          content: detail.reference_contents?.[f] ?? '（内容不可用）',
+                        })
+                      }
+                    />
+                    <AttachmentList
+                      title="资源 assets"
+                      icon={<FolderOpen className="h-4 w-4" />}
+                      files={detail.assets}
+                    />
+                  </div>
+                </div>
 
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium">附件</h4>
-                <AttachmentList
-                  title="脚本 scripts"
-                  icon={<FileCode2 className="h-4 w-4" />}
-                  files={detail.scripts}
-                />
-                <AttachmentList
-                  title="参考资料 references"
-                  icon={<FileText className="h-4 w-4" />}
-                  files={detail.references}
-                  onFileClick={(f) =>
-                    setViewRef({
-                      name: f,
-                      content: detail.reference_contents?.[f] ?? '（内容不可用）',
-                    })
-                  }
-                />
-                <AttachmentList
-                  title="资源 assets"
-                  icon={<FolderOpen className="h-4 w-4" />}
-                  files={detail.assets}
-                />
+                <div className="flex min-w-0 flex-1 flex-col px-5 py-4">
+                  <h4 className="mb-2 shrink-0 text-sm font-medium">SKILL.md 正文</h4>
+                  {detail.body ? (
+                    <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs text-foreground">
+                      {detail.body}
+                    </pre>
+                  ) : (
+                    <p className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+                      该技能为自建/文档型，无 SKILL.md 正文。
+                    </p>
+                  )}
+                </div>
               </div>
             </>
           )}
         </div>
+
+        {detail ? (
+          <SheetFooter className="flex-wrap justify-end">
+            <PermissionGate permission="agent:skill:manage">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCatValue(boundCategoryId != null ? String(boundCategoryId) : '');
+                  setCatOpen(true);
+                }}
+              >
+                <FolderTree className="h-4 w-4" />
+                修改所属分类
+              </Button>
+            </PermissionGate>
+            <PermissionGate permission="agent:skill:grant">
+              <Button size="sm" onClick={() => onOpenGrants?.(detail)}>
+                <KeyRound className="h-4 w-4" />
+                设置权限
+              </Button>
+            </PermissionGate>
+          </SheetFooter>
+        ) : null}
       </SheetContent>
     </Sheet>
 
@@ -244,6 +299,58 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
         <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs text-foreground">
           {viewRef?.content}
         </pre>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={catOpen} onOpenChange={setCatOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>修改所属分类</DialogTitle>
+          <DialogDescription>写入平台分类表，不改 SKILL.md 的 category 字段。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">分类</label>
+          <select
+            className="h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm"
+            value={catValue}
+            onChange={(e) => setCatValue(e.target.value)}
+          >
+            <option value="">未分类</option>
+            {flattenSkillCategories(categoryTree).map((c) => (
+              <option key={c.id} value={String(c.id)}>
+                {`${'　'.repeat(c.depth)}${c.path}`}
+              </option>
+            ))}
+          </select>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setCatOpen(false)}>
+            取消
+          </Button>
+          <Button
+            type="button"
+            disabled={catSaving || !detail}
+            onClick={() => {
+              if (!detail) return;
+              void (async () => {
+                setCatSaving(true);
+                try {
+                  const cid = catValue.trim();
+                  await bindSkillCategory(detail.skill_id, cid ? Number(cid) : null);
+                  toast.success(cid ? '已更新分类' : '已设为未分类');
+                  setCatOpen(false);
+                  onUpdated?.();
+                } catch (e) {
+                  toast.error(agentErrorMessage(e, '修改分类失败'));
+                } finally {
+                  setCatSaving(false);
+                }
+              })();
+            }}
+          >
+            {catSaving ? '保存中…' : '保存'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
     </>

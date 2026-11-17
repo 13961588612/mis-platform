@@ -39,6 +39,10 @@ export interface FormDefinitionItem {
   workflowDefinitionId?: string | null;
   externalWorkflowSystem?: string | null;
   externalWorkflowRef?: string | null;
+  /** 自动填单 Agent id；与 aiSkillId 成对。 */
+  aiAgentId?: string | null;
+  /** 自动填单 Skill id。 */
+  aiSkillId?: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -100,6 +104,8 @@ export interface UpsertFormDefinitionRequest {
   workflowDefinitionId: number | null;
   externalWorkflowSystem: string | null;
   externalWorkflowRef: string | null;
+  aiAgentId: string | null;
+  aiSkillId: string | null;
 }
 
 /** 编码正则：以大写字母开头，仅含大写字母/数字/下划线，长度 2-64。大小写敏感。 */

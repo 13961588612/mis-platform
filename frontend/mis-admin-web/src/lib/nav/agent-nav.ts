@@ -34,9 +34,8 @@ export const AGENT_NAV: SystemNavNode[] = [
   // ui.md §2.2 智能体与调度（V19: 92034–92036；92035 Catalog 已并入总览，见 V154）
   { kind: 'leaf', path: '/agent/agents', title: 'Agent 总览', icon: 'Bot' },
   { kind: 'leaf', path: '/agent/dispatch', title: '调度观测', icon: 'Route' },
-  // ui.md §2.3 技能与工具（V19: 92037–92039）
+  // ui.md §2.3 技能与工具（V19: 92037–92039；V171 起「技能权限」页并入技能池按钮）
   { kind: 'leaf', path: '/agent/skills', title: '技能池', icon: 'Sparkles' },
-  { kind: 'leaf', path: '/agent/skills/permissions', title: '技能权限', icon: 'Lock' },
   { kind: 'leaf', path: '/agent/mcp', title: 'MCP 管理', icon: 'Plug' },
   // ui.md §2.4 渠道与运维（V19: 92040–92042）
   { kind: 'leaf', path: '/agent/channels/wecom', title: '企微机器人', icon: 'MessagesSquare' },

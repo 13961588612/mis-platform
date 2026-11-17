@@ -25,6 +25,8 @@ required_permissions:
 槽位未齐禁止销售/品类 MCP。禁止公历臆造周月键；禁止用 `listStores` 代替权限。工具只传 `apiName` + `params`。  
 一次只加载 **一个** 成文 Skill；禁止再 skill 其它 `sm-shop-ops-*-report`。
 
+**权限**：本轮 `skill()` 入参枚举 = 用户已授权可加载集。下表是意图对照，**不是**全量放行。某 `skill_id` 未出现在枚举中 = 无 `ai:skill:{id}:run`，禁止调用，告知无权并请改选已授权报表。禁止按表硬路由未枚举 id。总控 / 日历 / 主数据 / 销售字段 Skill 不受报表授权闸。
+
 ### 【早停】T+1
 
 不提供当天及之后经营日。命中则固定话术结束，禁止日历/权限/下游 MCP：
@@ -106,7 +108,7 @@ required_permissions:
 skill(sm-common-info-master-data) → listAuthorizedStores
 ```
 
-空+notice → 转述停。口述店名先权限匹配。禁止 `listStores` 绕权。
+空+notice → 转述停。口述店名先权限匹配。禁止 `listStores` 绕权。选定店号写入销售 params 的 **`storeIds`**（会话板仍记 `storeId`）。
 
 ---
 
@@ -119,9 +121,9 @@ skill(sm-common-info-master-data) → listAuthorizedStores
 
 | period | apiName | 写入销售 params |
 |--------|---------|-----------------|
-| day | `listMonthDates`（跨月再打上月；禁止 `listYearDates`） | 起止 = `ordDate` |
-| week | `listYearWeeks` | `ordWeek` 原样 |
-| month | `listYearMonths` | `ordMonth` 原样 |
+| day | `listMonthDates`（跨月再打上月；禁止 `listYearDates`） | `ordDates` = 清单 `ordDate`（标量或数组最多 5；**不要** `startOrdDate`/`endOrdDate`） |
+| week | `listYearWeeks` | `ordWeeks` = 清单 `ordWeek` 原样（**不要** `ordWeek`） |
+| month | `listYearMonths` | `ordMonths` = 清单 `ordMonth` 原样（**不要** `ordMonth`） |
 
 4. 请选键；禁止自算周月序。清单无该业务周/月 → **停**，禁止用销售接口试探。对照期由 **下游成文 Skill** 规定（对照键同样必须先在清单命中）。
 
@@ -129,12 +131,12 @@ skill(sm-common-info-master-data) → listAuthorizedStores
 
 ## 6. CAT（仅 P*）
 
-部门/柜组：`categoryLevel`。大中小类必须 `parentCategoryId`。P8/P9 默认 `categoryLevel=大类`。
+部门/柜组：`categoryLevel`。大中小类必须 `parentCategoryId`。指定同级分类用 `categoryIds`（最多 5）。P8/P9 默认 `categoryLevel=大类`。`categoryLevel`/`parentCategoryId` 仅单店+单当期。销售门店入参用 `storeIds`（不要 `storeId`）。
 
 ---
 
 ## 7. 落地与回答
 
-槽位齐 → `skill(上表唯一下游)`。空+notice 不加载成文 Skill。  
+槽位齐 → `skill(上表且出现在本轮枚举中的唯一下游)`。枚举没有对应成文 Skill → 停，告知无权。空+notice 不加载成文 Skill。  
 禁止暴露 apiName/工具名/Skill 名；损耗勿说「吃毛利」。  
 采购/财务总账/时段/坪效拒答。`spm-analyst` 暂停。百购 → 百购分析智能体。

@@ -272,7 +272,7 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
           绑定只决定该 Agent <span className="font-medium text-foreground">能否看到</span>这项技能。
           调用者最终能否执行，还要看其角色是否持有执行码
           <span className="font-mono"> ai:skill:{'{skill_id}'}:run</span>
-          （在「技能权限」页授予）。两者是<span className="font-medium text-foreground">与</span>
+          （在技能池「设置权限」授予）。两者是<span className="font-medium text-foreground">与</span>
           的关系，缺一不可。
         </p>
       </div>

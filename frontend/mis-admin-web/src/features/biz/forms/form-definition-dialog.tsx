@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { getAgentSkills, listAgents } from '@/features/agent/api/agent-ops-api';
+import type { AgentSummary, Skill } from '@/features/agent/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   createFormDefinition,
   updateFormDefinition,
@@ -59,7 +61,7 @@ function treeHasId(nodes: CategoryTreeNode[], target: string): boolean {
 }
 
 /**
- * 表单定义「新增 / 编辑」对话框（仅表单；分类独立为 `form_category`）。
+ * 表单定义「新增 / 编辑」右侧划入面板（仅表单；分类独立为 `form_category`）。
  *
  * <p>V149：工作流关联写在 {@code form_definition}（NONE / LOCAL / EXTERNAL）；
  * 流程定义侧仅反查。LOCAL 须启用表单并选择本地流程定义。
@@ -94,6 +96,12 @@ export function FormDefinitionDialog({
   const [codeError, setCodeError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [aiAgentId, setAiAgentId] = useState('');
+  const [aiSkillId, setAiSkillId] = useState('');
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [agentSkills, setAgentSkills] = useState<Skill[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // 每次打开时根据 initial 重置表单，并回填工作流关联。
@@ -112,6 +120,8 @@ export function FormDefinitionDialog({
       setWorkflowDefId(initial.workflowDefinitionId ?? '');
       setExternalSystem(initial.externalWorkflowSystem ?? '');
       setExternalRef(initial.externalWorkflowRef ?? '');
+      setAiAgentId(initial.aiAgentId ?? '');
+      setAiSkillId(initial.aiSkillId ?? '');
     } else {
       setCode('');
       setName('');
@@ -124,12 +134,67 @@ export function FormDefinitionDialog({
       setWorkflowDefId('');
       setExternalSystem('');
       setExternalRef('');
+      setAiAgentId('');
+      setAiSkillId('');
     }
     setTitleFieldOptions([]);
     setCodeError(null);
     setNameError(null);
     setWorkflowError(null);
+    setAiError(null);
   }, [open, initial]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setAgentsLoading(true);
+    void listAgents()
+      .then((list) => {
+        if (!cancelled) setAgents(list);
+      })
+      .catch(() => {
+        if (!cancelled) setAgents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAgentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !aiAgentId.trim()) {
+      setAgentSkills([]);
+      return;
+    }
+    let cancelled = false;
+    void getAgentSkills(aiAgentId.trim())
+      .then((snap) => {
+        if (cancelled) return;
+        const enabled = snap.bindings.filter((b) => b.enabled);
+        setAgentSkills(
+          enabled.map((b) => {
+            const pooled = snap.pool.find((s) => s.skill_id === b.skill_id);
+            return (
+              pooled ?? {
+                skill_id: b.skill_id,
+                name: b.skill_id,
+                description: '',
+                status: 'active' as const,
+                updated_at: '',
+              }
+            );
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAgentSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, aiAgentId]);
 
   // 选中表单组件后加载字段 schema，供「标题字段」下拉。
   useEffect(() => {
@@ -177,10 +242,17 @@ export function FormDefinitionDialog({
         wErr = '请填写外部工作流系统与流程标识';
       }
     }
+    const agent = aiAgentId.trim();
+    const skill = aiSkillId.trim();
+    let aErr: string | null = null;
+    if ((agent && !skill) || (!agent && skill)) {
+      aErr = '自动填单须同时选择 Agent 和 Skill，或全部留空';
+    }
     setCodeError(cErr);
     setNameError(nErr);
     setWorkflowError(wErr);
-    if (cErr || nErr || wErr) return;
+    setAiError(aErr);
+    if (cErr || nErr || wErr || aErr) return;
 
     const baseConfig = isEdit && initial ? initial.config : '{}';
     const body: UpsertFormDefinitionRequest = {
@@ -197,6 +269,8 @@ export function FormDefinitionDialog({
       externalWorkflowSystem:
         bindingType === 'EXTERNAL' ? externalSystem.trim() : null,
       externalWorkflowRef: bindingType === 'EXTERNAL' ? externalRef.trim() : null,
+      aiAgentId: agent || null,
+      aiSkillId: skill || null,
     };
 
     setSaving(true);
@@ -216,241 +290,318 @@ export function FormDefinitionDialog({
     }
   }
 
+  const selectClass = 'h-8 w-full rounded-md border border-input bg-background px-2 text-sm';
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? '编辑表单定义' : '新增表单定义'}</DialogTitle>
-          <DialogDescription>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex w-full flex-col sm:max-w-4xl">
+        <SheetHeader>
+          <SheetTitle>{isEdit ? '编辑表单定义' : '新增表单定义'}</SheetTitle>
+          <SheetDescription>
             {isEdit ? '修改表单定义元数据，保存后实时生效。' : '选择已注册的表单组件并登记元数据。'}
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
 
         <form
-          className="space-y-3 px-1 py-2"
+          className="flex min-h-0 flex-1 flex-col"
           onSubmit={(e) => {
             e.preventDefault();
             void handleSubmit();
           }}
         >
-          <div className="space-y-1.5">
-            <label htmlFor="fd-code" className="block text-sm font-medium text-foreground">
-              表单组件 *
-            </label>
-            <select
-              id="fd-code"
-              aria-label="表单组件"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value);
-                if (codeError) setCodeError(null);
-              }}
-              className={cn(
-                'h-8 w-full rounded-md border border-input bg-background px-2 text-sm',
-                codeError && 'border-destructive focus-visible:ring-destructive',
-              )}
-            >
-              <option value="">选择已注册组件</option>
-              {loaderCodes.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-              {strayCode ? (
-                <option value={strayCode} className="text-destructive">
-                  {`未关联组件：${strayCode}`}
-                </option>
-              ) : null}
-            </select>
-            {codeError ? (
-              <p className="text-xs text-destructive">{codeError}</p>
-            ) : strayCode ? (
-              <p className="text-xs text-destructive">
-                当前编码「{strayCode}」未关联到任何前端组件，保存后审批页将走「未注册」兜底。
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">下拉选择后端已启用且前端已实现的表单组件。</p>
-            )}
-          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+            <div className="grid items-start gap-6 md:grid-cols-2">
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-code" className="block text-sm font-medium text-foreground">
+                    表单组件 *
+                  </label>
+                  <select
+                    id="fd-code"
+                    aria-label="表单组件"
+                    value={code}
+                    onChange={(e) => {
+                      setCode(e.target.value);
+                      if (codeError) setCodeError(null);
+                    }}
+                    className={cn(selectClass, codeError && 'border-destructive focus-visible:ring-destructive')}
+                  >
+                    <option value="">选择已注册组件</option>
+                    {loaderCodes.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                    {strayCode ? (
+                      <option value={strayCode} className="text-destructive">
+                        {`未关联组件：${strayCode}`}
+                      </option>
+                    ) : null}
+                  </select>
+                  {codeError ? (
+                    <p className="text-xs text-destructive">{codeError}</p>
+                  ) : strayCode ? (
+                    <p className="text-xs text-destructive">
+                      当前编码「{strayCode}」未关联到任何前端组件，保存后审批页将走「未注册」兜底。
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      下拉选择后端已启用且前端已实现的表单组件。
+                    </p>
+                  )}
+                </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="fd-name" className="block text-sm font-medium text-foreground">
-              名称 *
-            </label>
-            <Input
-              id="fd-name"
-              aria-label="表单名称"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                if (nameError) setNameError(null);
-              }}
-              placeholder="如 报销单"
-            />
-            {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
-          </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-name" className="block text-sm font-medium text-foreground">
+                    名称 *
+                  </label>
+                  <Input
+                    id="fd-name"
+                    aria-label="表单名称"
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (nameError) setNameError(null);
+                    }}
+                    placeholder="如 报销单"
+                  />
+                  {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
+                </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="fd-category" className="block text-sm font-medium text-foreground">
-              分类
-            </label>
-            <CategorySingleTreeSelect
-              id="fd-category"
-              ariaLabel="分类"
-              tree={categoryTree}
-              value={categoryId === '' ? null : categoryId}
-              onChange={(id) => setCategoryId(id ?? '')}
-              placeholder="未分类"
-              fallbackLabel={categoryMissing ? `分类#${categoryMissing}` : null}
-            />
-          </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-category" className="block text-sm font-medium text-foreground">
+                    分类
+                  </label>
+                  <CategorySingleTreeSelect
+                    id="fd-category"
+                    ariaLabel="分类"
+                    tree={categoryTree}
+                    value={categoryId === '' ? null : categoryId}
+                    onChange={(id) => setCategoryId(id ?? '')}
+                    placeholder="未分类"
+                    fallbackLabel={categoryMissing ? `分类#${categoryMissing}` : null}
+                  />
+                </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label htmlFor="fd-status" className="block text-sm font-medium text-foreground">
-                状态
-              </label>
-              <select
-                id="fd-status"
-                aria-label="状态"
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value={FORM_STATUS_ENABLED}>启用</option>
-                <option value={FORM_STATUS_DISABLED}>停用</option>
-              </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label htmlFor="fd-status" className="block text-sm font-medium text-foreground">
+                      状态
+                    </label>
+                    <select
+                      id="fd-status"
+                      aria-label="状态"
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value={FORM_STATUS_ENABLED}>启用</option>
+                      <option value={FORM_STATUS_DISABLED}>停用</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="fd-sort" className="block text-sm font-medium text-foreground">
+                      排序
+                    </label>
+                    <Input
+                      id="fd-sort"
+                      type="number"
+                      value={sortOrder}
+                      onChange={(e) => setSortOrder(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-title-field" className="block text-sm font-medium text-foreground">
+                    标题字段
+                  </label>
+                  <select
+                    id="fd-title-field"
+                    aria-label="标题字段"
+                    value={titleField}
+                    onChange={(e) => setTitleField(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="">不指定（发起时弹窗补录）</option>
+                    {titleFieldOptions.map((f) => (
+                      <option key={f.key} value={f.key}>
+                        {f.label}（{f.key}）
+                      </option>
+                    ))}
+                    {titleField && !titleFieldOptions.some((f) => f.key === titleField) ? (
+                      <option value={titleField}>{titleField}（未在注册表）</option>
+                    ) : null}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    写入 config.titleField；发起流程时优先取该表单字段作为实例标题。
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 md:border-l md:pl-6">
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-binding" className="block text-sm font-medium text-foreground">
+                    工作流关联
+                  </label>
+                  <select
+                    id="fd-binding"
+                    aria-label="工作流关联"
+                    value={bindingType}
+                    onChange={(e) => {
+                      setBindingType(e.target.value as WorkflowBindingType);
+                      if (workflowError) setWorkflowError(null);
+                    }}
+                    className={cn(
+                      selectClass,
+                      workflowError && 'border-destructive focus-visible:ring-destructive',
+                    )}
+                  >
+                    <option value="NONE">纯表单（不关联工作流）</option>
+                    <option value="LOCAL">关联本地流程</option>
+                    <option value="EXTERNAL">关联外部工作流</option>
+                  </select>
+                  {bindingType === 'LOCAL' ? (
+                    <select
+                      id="fd-workflow"
+                      aria-label="本地流程定义"
+                      value={workflowDefId}
+                      onChange={(e) => {
+                        setWorkflowDefId(e.target.value);
+                        if (workflowError) setWorkflowError(null);
+                      }}
+                      className={selectClass}
+                    >
+                      <option value="">选择本地流程定义</option>
+                      {workflowDefinitions.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}（{d.code}）
+                          {d.status === 'ACTIVE' ? '' : ` · ${d.status === 'DRAFT' ? '草稿' : d.status}`}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {bindingType === 'EXTERNAL' ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input
+                        aria-label="外部工作流系统"
+                        value={externalSystem}
+                        onChange={(e) => setExternalSystem(e.target.value)}
+                        placeholder="外部系统编码"
+                      />
+                      <Input
+                        aria-label="外部工作流标识"
+                        value={externalRef}
+                        onChange={(e) => setExternalRef(e.target.value)}
+                        placeholder="外部流程标识"
+                      />
+                    </div>
+                  ) : null}
+                  {workflowError ? (
+                    <p className="text-xs text-destructive">{workflowError}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      关联写在表单定义上；流程中心仅可查看。一个表单只能选一种形态。
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="fd-ai-agent" className="block text-sm font-medium text-foreground">
+                    自动填单
+                  </label>
+                  <select
+                    id="fd-ai-agent"
+                    aria-label="自动填单 Agent"
+                    value={aiAgentId}
+                    onChange={(e) => {
+                      setAiAgentId(e.target.value);
+                      setAiSkillId('');
+                      if (aiError) setAiError(null);
+                    }}
+                    className={cn(
+                      selectClass,
+                      aiError && 'border-destructive focus-visible:ring-destructive',
+                    )}
+                  >
+                    <option value="">{agentsLoading ? '加载 Agent…' : '不启用（不选择 Agent）'}</option>
+                    {[...agents]
+                      .sort((a, b) => {
+                        if (a.agent_id === 'mis-extract') return -1;
+                        if (b.agent_id === 'mis-extract') return 1;
+                        return (a.display_name || a.agent_id).localeCompare(
+                          b.display_name || b.agent_id,
+                          'zh',
+                        );
+                      })
+                      .map((a) => (
+                        <option key={a.agent_id} value={a.agent_id}>
+                          {a.display_name}（{a.agent_id}）
+                        </option>
+                      ))}
+                    {aiAgentId && !agents.some((a) => a.agent_id === aiAgentId) ? (
+                      <option value={aiAgentId}>{aiAgentId}（不在列表）</option>
+                    ) : null}
+                  </select>
+                  <select
+                    id="fd-ai-skill"
+                    aria-label="自动填单 Skill"
+                    value={aiSkillId}
+                    disabled={!aiAgentId}
+                    onChange={(e) => {
+                      setAiSkillId(e.target.value);
+                      if (aiError) setAiError(null);
+                    }}
+                    className={selectClass}
+                  >
+                    <option value="">选择 Skill</option>
+                    {agentSkills.map((s) => (
+                      <option key={s.skill_id} value={s.skill_id}>
+                        {s.name}（{s.skill_id}）
+                      </option>
+                    ))}
+                    {aiSkillId && !agentSkills.some((s) => s.skill_id === aiSkillId) ? (
+                      <option value={aiSkillId}>{aiSkillId}（未在该 Agent 绑定列表）</option>
+                    ) : null}
+                  </select>
+                  {aiError ? (
+                    <p className="text-xs text-destructive">{aiError}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      推荐 Agent 选 mis-extract，Skill 选其已绑定技能（如 form-assist）。成对配置且用户有该
+                      Skill 执行权时，填单页才显示辅助录入。输出 JSON 键须等于表单 fields.key。
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label htmlFor="fd-sort" className="block text-sm font-medium text-foreground">
-                排序
+
+            <div className="mt-4 space-y-1.5">
+              <label htmlFor="fd-desc" className="block text-sm font-medium text-foreground">
+                描述
               </label>
-              <Input
-                id="fd-sort"
-                type="number"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                placeholder="0"
+              <Textarea
+                id="fd-desc"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="可选，用途说明"
+                rows={4}
               />
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="fd-binding" className="block text-sm font-medium text-foreground">
-              工作流关联
-            </label>
-            <select
-              id="fd-binding"
-              aria-label="工作流关联"
-              value={bindingType}
-              onChange={(e) => {
-                setBindingType(e.target.value as WorkflowBindingType);
-                if (workflowError) setWorkflowError(null);
-              }}
-              className={cn(
-                'h-8 w-full rounded-md border border-input bg-background px-2 text-sm',
-                workflowError && 'border-destructive focus-visible:ring-destructive',
-              )}
-            >
-              <option value="NONE">纯表单（不关联工作流）</option>
-              <option value="LOCAL">关联本地流程</option>
-              <option value="EXTERNAL">关联外部工作流</option>
-            </select>
-            {bindingType === 'LOCAL' ? (
-              <select
-                id="fd-workflow"
-                aria-label="本地流程定义"
-                value={workflowDefId}
-                onChange={(e) => {
-                  setWorkflowDefId(e.target.value);
-                  if (workflowError) setWorkflowError(null);
-                }}
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="">选择本地流程定义</option>
-                {workflowDefinitions.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}（{d.code}）
-                    {d.status === 'ACTIVE' ? '' : ` · ${d.status === 'DRAFT' ? '草稿' : d.status}`}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            {bindingType === 'EXTERNAL' ? (
-              <div className="grid grid-cols-2 gap-2">
-                <Input
-                  aria-label="外部工作流系统"
-                  value={externalSystem}
-                  onChange={(e) => setExternalSystem(e.target.value)}
-                  placeholder="外部系统编码"
-                />
-                <Input
-                  aria-label="外部工作流标识"
-                  value={externalRef}
-                  onChange={(e) => setExternalRef(e.target.value)}
-                  placeholder="外部流程标识"
-                />
-              </div>
-            ) : null}
-            {workflowError ? (
-              <p className="text-xs text-destructive">{workflowError}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                关联写在表单定义上；流程中心仅可查看。一个表单只能选一种形态。
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="fd-title-field" className="block text-sm font-medium text-foreground">
-              标题字段
-            </label>
-            <select
-              id="fd-title-field"
-              aria-label="标题字段"
-              value={titleField}
-              onChange={(e) => setTitleField(e.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">不指定（发起时弹窗补录）</option>
-              {titleFieldOptions.map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.label}（{f.key}）
-                </option>
-              ))}
-              {titleField && !titleFieldOptions.some((f) => f.key === titleField) ? (
-                <option value={titleField}>{titleField}（未在注册表）</option>
-              ) : null}
-            </select>
-            <p className="text-xs text-muted-foreground">
-              写入 config.titleField；发起流程时优先取该表单字段作为实例标题。
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="fd-desc" className="block text-sm font-medium text-foreground">
-              描述
-            </label>
-            <Textarea
-              id="fd-desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="可选，用途说明"
-              rows={3}
-            />
-          </div>
-
-          <DialogFooter className="mt-2">
+          <SheetFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>
             <Button type="submit" disabled={saving}>
               {saving ? '保存中…' : '保存'}
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 

@@ -31,7 +31,6 @@ export { AgentListPage as AgentAgentsPage } from './agents/agent-list-page';
 export { AgentCatalogPage } from './catalog/agent-catalog-page';
 export { AgentDispatchPage } from './dispatch/agent-dispatch-page';
 export { AgentSkillPoolPage as AgentSkillsPage } from './skills/agent-skill-pool-page';
-export { AgentSkillsPermissionsPage } from './skills/agent-skill-permission-page';
 export { AgentMcpPage } from './mcp/agent-mcp-page';
 export { AgentWecomPage } from './channels/agent-wecom-page';
 export { AgentMonitorPage } from './monitor/agent-monitor-page';

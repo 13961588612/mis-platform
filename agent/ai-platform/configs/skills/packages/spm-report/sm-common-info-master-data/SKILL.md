@@ -145,7 +145,7 @@ mcp_server: mcp-sm-api-suite
 **使用建议：**
 
 - 用户问「我能看哪些店 / 我的门店权限」→ 用本接口，**不要**用 `listStores`
-- 后续销售查询选店前，优先用本接口结果中的 `storeId`
+- 后续销售查询选店前，优先用本接口结果中的 `storeId`，写入销售 params 的 **`storeIds`**（不要 `storeId`）
 - 人员在权限库找不到时：**不报错**，`items=[]`，读 `notice` 提示用户
 
 ```json

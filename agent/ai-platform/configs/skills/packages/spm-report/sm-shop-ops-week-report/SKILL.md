@@ -41,7 +41,7 @@ required_permissions:
 | P9 | ABC | 同上 | `getShopCategoryAbc` |
 
 1. `skill(sm-common-info-calendar)` → **`listYearWeeks`**（`year` = 目标年）。跨年对照再打对照年 **1 次**。
-2. 清单行才是合法业务周。`ordWeek` / `startDate` / `endDate` **原样**写入销售 params。
+2. 清单行才是合法业务周。销售 params：`storeIds` + `ordWeeks`（= 清单 `ordWeek` 原样）。**不要**传 `storeId` / `ordWeek`。对照可用 `compare: "previous"`（多时段时 `summary` 为 null，用 `items[].time.role`）。
 3. 要查的每一个周键（本期、上一周、走势里的每一周）必须先在清单里命中。
 4. **不在清单 → 该键一律不查销售**，禁止换相邻周试探、禁止循环 `apiName`。
 5. 本期不在清单 → **整报停**，只说该业务周系统无此周。

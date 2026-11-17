@@ -574,9 +574,23 @@ class OpenHarnessRuntime(AgentRuntime):
                 session_id=session_id or "",
             )
             if route_decision is not None and route_decision.router_skill:
+                allowed_for_hint: list[str] | None = None
+                try:
+                    from src.runtime.oh_runtime_builder import enabled_package_skill_ids
+                    from src.skills.acl import restrict_loadable_skill_ids
+
+                    allowed_for_hint = await restrict_loadable_skill_ids(
+                        {"misUserId": mis_user_id, "user_id": user_id},
+                        enabled_package_skill_ids(agent_config),
+                    )
+                except Exception:  # noqa: BLE001 - 无授权列表时仍注入原 hint
+                    allowed_for_hint = None
                 oh_messages = _append_user_turn_hint(
                     oh_messages,
-                    format_router_skill_hint(route_decision.router_skill),
+                    format_router_skill_hint(
+                        route_decision.router_skill,
+                        allowed_skill_ids=allowed_for_hint,
+                    ),
                 )
         except Exception:  # noqa: BLE001 - 预路由失败不阻断对话
             logger.warning(

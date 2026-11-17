@@ -21,6 +21,8 @@ import java.time.LocalDateTime;
  * @param workflowDefinitionId    LOCAL 时本地流程定义 id
  * @param externalWorkflowSystem  EXTERNAL 时外部系统编码
  * @param externalWorkflowRef     EXTERNAL 时外部流程标识
+ * @param aiAgentId               自动填单 Agent id（与 aiSkillId 成对）
+ * @param aiSkillId               自动填单 Skill id
  * @param createdAt               创建时间
  * @param updatedAt               更新时间
  */
@@ -38,6 +40,8 @@ public record FormDefinitionVO(
         String workflowDefinitionId,
         String externalWorkflowSystem,
         String externalWorkflowRef,
+        String aiAgentId,
+        String aiSkillId,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {

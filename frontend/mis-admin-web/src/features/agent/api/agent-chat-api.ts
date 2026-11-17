@@ -162,10 +162,15 @@ interface ChatReplyWire {
 export async function sendChatMessage(
   sessionId: string,
   content: string,
+  requestMetadata?: Record<string, unknown>,
 ): Promise<SessionMessage> {
+  const body: Record<string, unknown> = { content };
+  if (requestMetadata && Object.keys(requestMetadata).length > 0) {
+    body.metadata = requestMetadata;
+  }
   const res = await chatApi.post<ApiResult<ChatReplyWire>>(
     `/agent-ops/chat/sessions/${seg(sessionId)}/messages`,
-    { content },
+    body,
   );
   const wire = unwrap(res, '发送消息失败');
 

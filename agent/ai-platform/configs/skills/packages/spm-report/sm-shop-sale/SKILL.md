@@ -15,22 +15,26 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 - MCP 服务名：**`mcp-sm-api-suite`**
 - 工具：**`callShopSaleApi`**
-- `items` **一律按门店**汇总，含 `storeId` / `storeName`
+- `items` 按 **门店 × 时段** 一行，含 `storeId` / `storeName`；`time.role` = `current` | `previous`
 - 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`；日报日清单用 `listMonthDates`（禁止默认 `listYearDates`）
+- 标量或数组均可（`storeIds: "6001"` 或 `["6001","6002"]`），每类最多 **5**
 
 | 字段 | 何时必填 | 说明 |
 |------|----------|------|
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
-| `storeId` | 与 `areaId` 二选一 | 单店 |
-| `areaId` | 与 `storeId` 二选一 | 区域（权限门店 ∩ 区域） |
-| `startOrdDate` + `endOrdDate` | **仅 day** | `YYYY-MM-DD` 闭区间 |
-| `ordWeek` | **仅 week** | ADS 周键 |
-| `ordMonth` | **仅 month** | ADS 月键如 `"2026-10"` |
+| `storeIds` | 与 `areaId` 二选一 | 门店号，标量或数组，最多 5 |
+| `areaId` | 与 `storeIds` 二选一 | 区域（权限门店 ∩ 区域，不计入 5 店上限） |
+| `ordDates` | **仅 day** | 离散业务日 `YYYY-MM-DD`，标量或数组，最多 5（来自 `listMonthDates.ordDate`） |
+| `ordWeeks` | **仅 week** | ADS 周键，标量或数组，最多 5 |
+| `ordMonths` | **仅 month** | ADS 月键如 `"2026-10"`，标量或数组，最多 5 |
+| `compare` | 否 | 仅 `"previous"`：按 ADS 日历补上一期（不占 5 个当期额度） |
 | `shopLevel` | 否 | 店型过滤 |
 
-**返回信封：** `meta` / `summary` / `items[]`（按门店一行）
+**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`（已更名或取消区间）。
 
-> 权限软失败（人员找不到 / 无门店权限 / 指定店不在权限内）：**不抛错**，`items=[]`，`meta.notice` 为提示文案，请把 `notice` 转述给用户。
+**返回信封：** `meta` / `summary` / `items[]`。`items` = 门店 × 时段；**多个时段（含 compare）时 `summary` 为 `null`**，对照用 `items[].time.role`。无权限的店从列表去掉并写入 `meta.notice`。
+
+> 权限软失败（人员找不到 / 无门店权限 / 指定店均不在权限内）：**不抛错**，`items=[]`，`meta.notice` 为提示文案，请把 `notice` 转述给用户。
 
 ### 对用户展示单位（强制；接口原值仍为元）
 
@@ -75,7 +79,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "listOnlineSales", "params": {
-  "storeId": "6001",
+  "storeIds": "6001",
   "startSaleDate": "2026-10-01",
   "endSaleDate": "2026-10-07",
   "groupBy": "platformStore"
@@ -104,7 +108,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getRepurchaseSummary", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -123,7 +127,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getShopInventoryOverview", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -145,7 +149,16 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getShopSaleOverview", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
+}}
+```
+
+```json
+{ "apiName": "getShopSaleOverview", "params": {
+  "period": "week",
+  "storeIds": ["6001", "6002"],
+  "ordWeeks": ["2026-W40", "2026-W39"],
+  "compare": "previous"
 }}
 ```
 
@@ -197,7 +210,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getDiscountStructure", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -215,7 +228,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getClearanceEfficiency", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -233,7 +246,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getSupplierPromoShare", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -250,7 +263,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getProductLifecycleMix", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -268,7 +281,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getVentureStructure", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -288,7 +301,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getMarginWaterfall", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -319,7 +332,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getFreshOverview", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 
@@ -342,7 +355,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 
 ```json
 { "apiName": "getLowMarginAlert", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40"
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40"
 }}
 ```
 

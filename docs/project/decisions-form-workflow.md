@@ -56,6 +56,7 @@
 | 流程侧 | 仅 **反查 / 查看关联表单**（DTO `supportedFormCodes` 为投影）；编排保存不改关联 |
 | 发起校验 | 启动本地流程时：表单须 **ENABLED** 且 **LOCAL 绑定到该定义** |
 | 运行时加载 | 实例上的 `started_form_code` 决定加载哪个表单组件 |
+| 自动填单（V173） | `form_definition.ai_agent_id` + `ai_skill_id` **成对可空**。填单页「辅助录入」仅在：可编辑 + 成对已配 + 用户有 `ai:skill:{skill_id}:run`。Skill 输出 JSON 键 = 前端 `fields[].key`。不走通用 extract / 旧 BFF `user-fill`。约定 Agent = **`mis-extract`**（Worker，填单页直连；**不**进 Copilot `worker_ids`）。技能绑在该 Agent 的 `enabled-skills.yaml`（默认 `form-assist`）。 |
 
 ---
 

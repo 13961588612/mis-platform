@@ -119,7 +119,9 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | permission | 类型 | 说明 |
 |------------|------|------|
 | agent:skill:manage | 按钮 | 技能创建/编辑/删除/启停；含解析 SKILL.md（`POST /api/v1/agent-ops/skills/parse`，V50+V61） |
+| agent:skill:grant | 按钮 92038（挂技能池 92037；V171 由独立菜单页改按钮） | 技能池「设置权限」；`GET/PUT /skills/{id}/grants`、`GET /roles` |
 | agent:session:list | 菜单页 | 会话列表；含单轮/批量耗时（V50+V61） |
+| ai:skill:form-assist:run | 按钮 92207（V173，挂 92200） | 表单辅助录入示例技能 `form-assist` 执行权；业务填单页「辅助录入」显隐与此码（及表单绑定的 skill_id）挂钩 |
 
 ## 4. 菜单树结构（数据库种子）
 
@@ -211,6 +213,8 @@ if (hasPermission('system:user:edit')) { ... }
 报告 execute 旁路结果写入会话：`POST /api/v1/agent-ops/sessions/{id}/transcript`（sys_api **93231** / code **00920078**，V162；绑 `agent:chat:use` 92032 与问数旗舰页 93040）。
 
 Copilot 语音转写：`POST /api/v1/agent-ops/speech/transcribe`（sys_api **93233** / code **00920079**，V167；绑 `agent:chat:use` 92032）。音频不进会话附件。
+
+技能分类树（V170，表 `ai_skill_category` / `ai_skill_category_bind`）：`GET /api/v1/agent-ops/skill-categories`（sys_api **93234** / 00920080，绑 `agent:skill:list` 92037）；`POST/PUT/DELETE /skill-categories` 与 `PUT /skills/{id}/category`（**93235–93238** / 00920081–00920084，绑 `agent:skill:manage` 92051）。分类真值在平台库，不写 `Skill.category` 字符串。
 
 运行时业务码：**40321** = 无权限或必要参数无可选项（前端不插参数卡）。
 

@@ -117,9 +117,10 @@ class PlatformSkillTool(BaseTool):
                 shown = ", ".join(prompt_ids)
                 deferred = sorted(self._allowed - set(prompt_ids))
                 extra = (
-                    f" 其余正式 id（{', '.join(deferred)}）仅在总控路由指示后加载。"
+                    f" 其余正式 id（{', '.join(deferred)}）仅在总控路由指示后加载；"
+                    "未出现在枚举中的 id 视为无权限，禁止调用。"
                     if deferred
-                    else ""
+                    else " 未出现在枚举中的 id 视为无权限，禁止调用。"
                 )
                 self.description = (
                     f"{_STATIC_DESCRIPTION} 提示词优先：{shown}。{extra}"

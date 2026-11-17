@@ -4,9 +4,9 @@ runtime:
   allowed_tools:
     - skill
   params:
-    maxSteps: 8
+    maxSteps: 12
     temperature: 0.1
-    maxTokens: 2048
+    maxTokens: 4096
   prompts:
     system: runtime/prompts/system.md
   middleware: {}

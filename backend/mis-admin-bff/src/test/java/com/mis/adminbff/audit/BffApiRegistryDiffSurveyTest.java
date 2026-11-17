@@ -7,6 +7,7 @@ import com.mis.adminbff.config.AiPlatformProperties;
 import com.mis.adminbff.controller.AgentOpsChannelController;
 import com.mis.adminbff.controller.AgentOpsController;
 import com.mis.adminbff.controller.AgentOpsGrantController;
+import com.mis.adminbff.controller.AgentOpsSkillCategoryController;
 import com.mis.adminbff.controller.AiProxyController;
 import com.mis.adminbff.controller.AppController;
 import com.mis.adminbff.controller.AuthMeController;
@@ -43,6 +44,7 @@ import com.mis.adminbff.service.RoleFacadeService;
 import com.mis.adminbff.service.UserAggregateService;
 import com.mis.adminbff.service.agentops.AgentOpsFacadeService;
 import com.mis.adminbff.service.agentops.AgentOpsGrantService;
+import com.mis.adminbff.service.agentops.SkillCategoryService;
 import com.mis.adminbff.service.agentops.McpPermissionService;
 import com.mis.adminbff.service.agentops.WecomBotFacadeService;
 import com.mis.adminbff.service.skill.DocWriteRegistry;
@@ -373,6 +375,8 @@ class BffApiRegistryDiffSurveyTest {
                 mock(WecomBotFacadeService.class)));
         context.getBeanFactory().registerSingleton("agentOpsGrantController", new AgentOpsGrantController(
                 mock(AgentOpsGrantService.class)));
+        context.getBeanFactory().registerSingleton("agentOpsSkillCategoryController",
+                new AgentOpsSkillCategoryController(mock(SkillCategoryService.class)));
         context.getBeanFactory().registerSingleton("aiProxyController", new AiProxyController(
                 mock(AiPlatformClient.class), mock(AiCapabilityTranslator.class),
                 mock(AiFeatureConfigService.class), mock(AiPlatformProperties.class),
@@ -694,6 +698,12 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/files/upload",
             // ---- V167：Copilot 语音转写 ----
             "POST /api/v1/agent-ops/speech/transcribe",
+            // ---- V170：技能分类树（平台库，不透传 ai-platform）----
+            "GET /api/v1/agent-ops/skill-categories",
+            "POST /api/v1/agent-ops/skill-categories",
+            "PUT /api/v1/agent-ops/skill-categories/{id}",
+            "DELETE /api/v1/agent-ops/skill-categories/{id}",
+            "PUT /api/v1/agent-ops/skills/{id}/category",
             "GET /api/v1/agent-ops/mcp/servers",
             "GET /api/v1/agent-ops/mcp/servers/health",
             "GET /api/v1/agent-ops/mcp/servers/{name}",

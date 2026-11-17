@@ -22,7 +22,8 @@ mcp_server: mcp-sm-api-suite
 
 工具 **`callCommonInfoApi`**（`mcp-sm-api-suite`）。只传 `apiName` + `params`。禁止 `serviceName` / `identity`。键与销售 ADS 同一套，禁止公历自算。
 
-行字段：`ordDate` / `ordWeek` / `ordMonth` / `startDate` / `endDate`。日行 `ordWeek` 恒 `null`。根 `grain`：`day` | `week` | `month`。
+行字段：`ordDate` / `ordWeek` / `ordMonth` / `startDate` / `endDate`。日行 `ordWeek` 恒 `null`。根 `grain`：`day` | `week` | `month`。  
+写入销售 MCP 时用复数键：`ordDates` / `ordWeeks` / `ordMonths`（不要把日历行字段名原样当销售入参）。
 
 | 意图 | apiName | params |
 |------|---------|--------|

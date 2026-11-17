@@ -8,8 +8,9 @@ agent:
   name: mis-extract
   display_name: MIS 信息抽取助手
   description: >
-    面向 MIS 表单的实体抽取助手，从非结构化文本中按 schema 抽取字段值。
-  version: "1.0.0"
+    业务表单辅助录入 Worker。技能绑在 skills/enabled-skills.yaml；
+    填单页直连本 Agent，按 schema.fields[].key 输出 JSON。
+  version: "1.1.0"
   tags:
     - mis
     - extract

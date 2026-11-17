@@ -17,6 +17,8 @@ interface TabState {
   activeId: string | null;
   /** 各 APP 上次激活的 path；切 APP 时优先恢复。 */
   lastActivePathByApp: Record<string, string>;
+  /** 全局最近激活顺序（id，新→旧）；关 Tab 时优先同 APP 回退。 */
+  recentTabIds: string[];
   openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
   activateTab: (id: string) => void;
   /** 关闭后返回下一激活 Tab 的 **path**（供 navigate）；无则 null。 */
@@ -52,6 +54,30 @@ function withLastActive(
   return { ...lastActivePathByApp, [appCode]: path };
 }
 
+/** 把 id 顶到最近激活列表头部（去重）。 */
+function touchRecent(recentTabIds: string[], id: string): string[] {
+  return [id, ...recentTabIds.filter((x) => x !== id)];
+}
+
+/** 关闭当前 Tab 后选下一激活：同 APP 最近打开 > 同 APP 任意 > 邻接回退。 */
+function pickNextActiveAfterClose(
+  closed: WorkspaceTab,
+  closedIdx: number,
+  nextTabs: WorkspaceTab[],
+  recentTabIds: string[],
+): string | null {
+  const app = tabAppCode(closed);
+  for (const rid of recentTabIds) {
+    if (rid === closed.id) continue;
+    const hit = nextTabs.find((t) => t.id === rid);
+    if (hit && tabAppCode(hit) === app) return hit.id;
+  }
+  const sameApp = nextTabs.find((t) => tabAppCode(t) === app);
+  if (sameApp) return sameApp.id;
+  const neighbor = nextTabs[Math.max(0, closedIdx - 1)] ?? nextTabs[0] ?? null;
+  return neighbor?.id ?? null;
+}
+
 export const useTabStore = create<TabState>()((set, get) => ({
   tabs: [
     {
@@ -65,6 +91,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
   ],
   activeId: '/dashboard',
   lastActivePathByApp: { [DEFAULT_TAB_APP_CODE]: '/dashboard' },
+  recentTabIds: ['/dashboard'],
 
   openTab: (tab) => {
     const id = tab.id ?? tabId(tab.path);
@@ -79,6 +106,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
         return {
           activeId: id,
           lastActivePathByApp: withLastActive(state.lastActivePathByApp, appCode, tab.path),
+          recentTabIds: touchRecent(state.recentTabIds, id),
           tabs: withoutFamilyDupes.map((t) =>
             t.id === id
               ? {
@@ -106,6 +134,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
         ],
         activeId: id,
         lastActivePathByApp: withLastActive(state.lastActivePathByApp, appCode, tab.path),
+        recentTabIds: touchRecent(state.recentTabIds, id),
       };
     });
   },
@@ -119,32 +148,37 @@ export const useTabStore = create<TabState>()((set, get) => ({
     set((state) => ({
       activeId: id,
       lastActivePathByApp: withLastActive(state.lastActivePathByApp, tabAppCode(hit), hit.path),
+      recentTabIds: touchRecent(state.recentTabIds, id),
     }));
   },
 
   closeTab: (id) => {
-    const { tabs, activeId, lastActivePathByApp } = get();
+    const { tabs, activeId, lastActivePathByApp, recentTabIds } = get();
     const target = tabs.find((t) => t.id === id);
     if (!target || target.pinned) return pathOf(tabs, activeId);
     const idx = tabs.findIndex((t) => t.id === id);
     const nextTabs = tabs.filter((t) => t.id !== id);
+    const nextRecent = recentTabIds.filter((rid) => rid !== id);
     let nextActive = activeId;
     if (activeId === id) {
-      const neighbor = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
-      nextActive = neighbor?.id ?? null;
+      nextActive = pickNextActiveAfterClose(target, idx, nextTabs, nextRecent);
     }
     const nextLast = { ...lastActivePathByApp };
-    if (nextLast[tabAppCode(target)] === target.path) {
-      const nextHit = nextTabs.find((t) => t.id === nextActive);
-      if (nextHit && tabAppCode(nextHit) === tabAppCode(target)) {
-        nextLast[tabAppCode(target)] = nextHit.path;
-      } else {
-        const sameApp = nextTabs.find((t) => tabAppCode(t) === tabAppCode(target));
-        if (sameApp) nextLast[tabAppCode(target)] = sameApp.path;
-        else delete nextLast[tabAppCode(target)];
-      }
+    const closedApp = tabAppCode(target);
+    const nextHit = nextTabs.find((t) => t.id === nextActive);
+    if (nextHit && tabAppCode(nextHit) === closedApp) {
+      nextLast[closedApp] = nextHit.path;
+    } else if (nextLast[closedApp] === target.path || !nextTabs.some((t) => tabAppCode(t) === closedApp)) {
+      const sameApp = nextTabs.find((t) => tabAppCode(t) === closedApp);
+      if (sameApp) nextLast[closedApp] = sameApp.path;
+      else delete nextLast[closedApp];
     }
-    set({ tabs: nextTabs, activeId: nextActive, lastActivePathByApp: nextLast });
+    set({
+      tabs: nextTabs,
+      activeId: nextActive,
+      lastActivePathByApp: nextLast,
+      recentTabIds: nextActive ? touchRecent(nextRecent, nextActive) : nextRecent,
+    });
     return pathOf(nextTabs, nextActive);
   },
 
@@ -164,7 +198,16 @@ export const useTabStore = create<TabState>()((set, get) => ({
         if (!keep.some((t) => tabAppCode(t) === code)) delete nextLast[code];
       }
       if (hit) nextLast[tabAppCode(hit)] = hit.path;
-      return { tabs: keep, activeId: id, lastActivePathByApp: nextLast };
+      const keepIds = new Set(keep.map((t) => t.id));
+      return {
+        tabs: keep,
+        activeId: id,
+        lastActivePathByApp: nextLast,
+        recentTabIds: touchRecent(
+          state.recentTabIds.filter((rid) => keepIds.has(rid)),
+          id,
+        ),
+      };
     });
   },
 
@@ -175,7 +218,12 @@ export const useTabStore = create<TabState>()((set, get) => ({
     for (const t of pinned) {
       nextLast[tabAppCode(t)] = t.path;
     }
-    set({ tabs: pinned, activeId: next, lastActivePathByApp: nextLast });
+    set({
+      tabs: pinned,
+      activeId: next,
+      lastActivePathByApp: nextLast,
+      recentTabIds: pinned.map((t) => t.id),
+    });
     return pathOf(pinned, next);
   },
 
@@ -187,6 +235,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
     set((state) => ({
       activeId: hit.id,
       lastActivePathByApp: withLastActive(state.lastActivePathByApp, tabAppCode(hit), path),
+      recentTabIds: touchRecent(state.recentTabIds, hit.id),
       // 按 path 激活时若命中同族主 Tab，同步 path（深链进 skills 等）
       tabs: state.tabs.map((t) => (t.id === hit.id ? { ...t, path } : t)),
     }));

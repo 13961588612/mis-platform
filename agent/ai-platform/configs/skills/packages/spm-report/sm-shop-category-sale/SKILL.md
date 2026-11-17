@@ -16,7 +16,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 - 工具：**`callShopCategorySaleApi`**
 - 只传 **`apiName`** + **`params`**
 - **不要传 `serviceName` / `identity`**
-- `items`：**门店 + 类目**一行（`storeId` + `categoryId` / `categoryName`）
+- `items`：**门店 × 类目 × 时段**一行（`storeId` + `categoryId` / `categoryName`）；`time.role` = `current` | `previous`
 - 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`
 - 分类维表可用 `callCommonInfoApi`：`listCategories` / `listChildCategories` / `getCategoryById`
 
@@ -24,15 +24,21 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ## 公共入参
 
-时间 + 门店范围与 sm-shop-sale 相同，**另加** `categoryLevel` | `parentCategoryId` **二选一**。
+时间 + 门店范围与 sm-shop-sale 相同（`storeIds` / `ordDates` / `ordWeeks` / `ordMonths` / `compare`），**另加**类目三选一。
 
 | 字段 | 何时必填 | 说明 |
 |------|----------|------|
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
-| `storeId` / `areaId` | 二选一 | 单店或区域 |
-| `startOrdDate`+`endOrdDate` / `ordWeek` / `ordMonth` | 按 period | 同 sm-shop-sale |
-| `categoryLevel` | 与 parent 二选一 | `部门` / `柜组` / `大类` / `中类` / `小类` |
-| `parentCategoryId` | 与 level 二选一 | 查该父类下一级子类 |
+| `storeIds` / `areaId` | 二选一 | 同 sm-shop-sale；最多 5 店 |
+| `ordDates` / `ordWeeks` / `ordMonths` | 按 period | 同 sm-shop-sale；最多 5 个当期 |
+| `compare` | 否 | `"previous"` 补上一期 |
+| `categoryLevel` | 三选一 | `部门` / `柜组` / `大类` / `中类` / `小类`；**仅单门店 + 单当期时段**（compare 可另补上一期） |
+| `parentCategoryId` | 三选一 | 查该父类下一级子类；同样 **单门店 + 单当期时段** |
+| `categoryIds` | 三选一 | 指定分类 id（须同级），标量或数组最多 5；可配最多 5 店 × 5 时段 |
+
+`categoryLevel` / `parentCategoryId` **不要配 `areaId`、不要配多个 storeIds / 多个当期时段**（会一次展开全部分类）。
+
+**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`。
 
 ### `data_type` 映射（门店内）
 
@@ -40,8 +46,9 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 |------|------|-------------|
 | 按级别 | `categoryLevel=大类` 等 | `门店部门` / `门店柜组` / `门店大类` / `门店中类` / `门店小类` |
 | 按父类 | 父为大类 → 查中类 | `门店中类`（父 deptLevel→下级 `门店*`） |
+| 按 id | `categoryIds=["10","20"]` | 按这些 id 自身级别映射到对应 `门店*` |
 
-占比均在**单店、当前结果集**内计算（总览的 share）；结构类指标的 rate/share 按该类目自身营业额/主营计算。
+占比按 **同一门店同一时段** 内计算（总览的 share）；结构类指标的 rate/share 按该类目自身营业额/主营计算。多个时段时 `summary` 为 `null`。
 
 > 权限软失败（人员找不到 / 无门店权限等）：**不抛错**，`items=[]`，`meta.notice` 为提示文案，请转述给用户。
 
@@ -90,15 +97,25 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40",
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40",
   "categoryLevel": "大类"
 }}
 ```
 
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
-  "period": "week", "storeId": "6001", "ordWeek": "2026-W40",
+  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40",
   "parentCategoryId": "1024"
+}}
+```
+
+```json
+{ "apiName": "getShopCategoryOverview", "params": {
+  "period": "week",
+  "storeIds": ["6001", "6002"],
+  "ordWeeks": ["2026-W40", "2026-W39"],
+  "categoryIds": ["10", "20"],
+  "compare": "previous"
 }}
 ```
 
@@ -125,7 +142,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ## 结构类（与门店档对称；指标字段同 sm-shop-sale）
 
-入参同总览（须带 `categoryLevel` 或 `parentCategoryId`）。
+入参同总览（须带 `categoryLevel` 或 `parentCategoryId` 或 `categoryIds`）。
 
 ### `getShopCategoryDiscountStructure`
 

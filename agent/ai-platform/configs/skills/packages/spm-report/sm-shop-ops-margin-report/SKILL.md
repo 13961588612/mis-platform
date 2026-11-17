@@ -23,7 +23,7 @@ required_permissions:
 独立主题服务。用户要「毛利损耗专项 / 瀑布 / 生鲜盈亏 / 低毛利」时加载。  
 **禁止** `skill` 其它 ops-report。晨会两列表 → overview-report。
 
-- 槽位齐后：`skill(sm-shop-sale)` → 按问法 S8/S9/S10，对照一期，并行。
+- 槽位齐后：`skill(sm-shop-sale)` → 按问法 S8/S9/S10，对照一期，并行。入参 `storeIds` + 复数时间键。
 - **日粒度禁止** S10；禁止改查 week 填低毛利。S8/S9 可按日。
 - 成文后禁止再 MCP。
 

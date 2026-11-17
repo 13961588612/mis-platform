@@ -2,22 +2,23 @@ metadata:
   name: mis-extract
   display_name: MIS 信息抽取助手
   description: >
-    MIS 平台表单信息抽取助手，按 schema 从文本中抽取字段值，并要求结构化 JSON 输出。
-  version: "1.0.0"
-  # R3 灰度下线：能力已迁至 mis-user-helper，从全局 catalog 剔除（enabled:false），
-  # 暂不物理删除配置（保留以回滚）。此文件为迁移备注，非硬编码调用点。
-  enabled: false
+    MIS 业务表单辅助录入 Worker：按绑定 Skill 从文档/图片/对话抽取字段 JSON。
+  version: "1.1.0"
+  # 填单页直连本 Agent（createChatSession）。不要加入 mis-copilot worker_ids
+  # （R3：Copilot 不再委派抽取；全员抽取/摘要仍走 mis-user-helper）。
+  enabled: true
   tags:
     - mis
     - extract
+    - form-assist
   capabilities:
     - extract
 
   # ---------------------------------------------------------------------------
-  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
-  # 与 mis-summary 的边界：抽取「字段值」而非「要点」，输出为 JSON 字段表。
+  # 与 mis-summary：抽字段 JSON，不是要点摘要。
+  # 与 mis-user-helper：本 Agent 只服务表单注册绑定的 Skill，不进 Copilot 委派。
   # ---------------------------------------------------------------------------
-  when_to_use: 从已给定文本中按字段名抽取结构化字段值；不做检索、不做摘要
+  when_to_use: 业务表单辅助录入；按 schema.fields[].key 与已绑定 Skill 抽取 JSON 字段
   input_contract:
     - user_question
     - attachments_text

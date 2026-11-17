@@ -12,6 +12,8 @@ interface PageHeaderProps {
   description?: string;
   breadcrumbs?: BreadcrumbItem[];
   actions?: ReactNode;
+  /** 隐藏大标题与副标题，操作按钮与面包屑同一行（如技能池紧凑页头） */
+  hideTitle?: boolean;
   className?: string;
 }
 
@@ -21,14 +23,24 @@ export function PageHeader({
   description,
   breadcrumbs,
   actions,
+  hideTitle = false,
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn('mb-4 flex flex-wrap items-end justify-between gap-3', className)}>
+    <div
+      className={cn(
+        'mb-4 flex flex-wrap justify-between gap-3',
+        hideTitle ? 'items-center' : 'items-end',
+        className,
+      )}
+    >
       <div className="min-w-0">
         {breadcrumbs && breadcrumbs.length > 0 ? (
           <nav
-            className="mb-[0.375rem] flex flex-wrap items-center gap-[0.375rem] text-xs text-muted-foreground"
+            className={cn(
+              'flex flex-wrap items-center gap-[0.375rem] text-xs text-muted-foreground',
+              !hideTitle && 'mb-[0.375rem]',
+            )}
             aria-label="面包屑"
           >
             {breadcrumbs.map((item, i) => (
@@ -47,9 +59,13 @@ export function PageHeader({
             ))}
           </nav>
         ) : null}
-        <h1 className="text-xl font-semibold leading-[1.4]">{title}</h1>
-        {description ? (
-          <p className="mt-[0.2rem] text-[0.8125rem] text-muted-foreground">{description}</p>
+        {!hideTitle ? (
+          <>
+            <h1 className="text-xl font-semibold leading-[1.4]">{title}</h1>
+            {description ? (
+              <p className="mt-[0.2rem] text-[0.8125rem] text-muted-foreground">{description}</p>
+            ) : null}
+          </>
         ) : null}
       </div>
       {actions ? <div className="flex items-center gap-2">{actions}</div> : null}

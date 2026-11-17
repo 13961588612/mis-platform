@@ -1,7 +1,8 @@
 /**
  * 技能池页（UI#1 #7，路径 `/agent/skills`，V19 菜单 `92037`）。
  *
- * <p>覆盖 §4.3 #1 列表 / #2 统计 / #4 创建 / #5 编辑 / #6 删除 / #7 启用 / #8 停用 / #9 重建索引。
+ * <p>覆盖 §4.3 #1 列表 / #4 创建 / #5 编辑 / #6 删除 / #7 启用 / #8 停用 / #9 重建索引。
+ * 页头紧凑：隐藏大标题与统计卡，操作按钮与面包屑同行。
  *
  * <p>**为什么用原生 `<table>` + `<select>`**：`components/ui/` 只有 13 个原语，
  * 没有 table / select / checkbox（impl-plan §2.1 零新框架，禁 `shadcn add`）。
@@ -18,11 +19,11 @@ import {
   CheckCircle2,
   CirclePause,
   Eye,
+  KeyRound,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
-  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -30,7 +31,6 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PermissionGate } from '@/components/auth/permission-gate';
-import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -40,17 +40,39 @@ import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentSkillFormDialog } from './agent-skill-form-dialog';
 import { AgentSkillDetailDrawer } from './agent-skill-detail-drawer';
+import { AgentSkillGrantDrawer } from './agent-skill-grant-drawer';
 import {
+  AgentSkillCategoryTree,
+  SKILL_CAT_UNCAT,
+} from './agent-skill-category-tree';
+import {
+  flattenSkillCategories,
+  skillCatDescendantIds,
+  skillCatPathById,
+  type SkillCatNode,
+} from './skill-category-tree';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  createSkillCategory,
   deleteSkill,
+  deleteSkillCategory,
   disableSkill,
   enableSkill,
-  getSkillStats,
+  listSkillCategories,
   listSkills,
   reindexSkills,
+  updateSkillCategory,
 } from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { Skill, SkillStats, SkillStatus } from '../types';
+import type { Skill, SkillStatus } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -80,7 +102,6 @@ type PendingAction =
 
 export function AgentSkillPoolPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [stats, setStats] = useState<SkillStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,6 +110,17 @@ export function AgentSkillPoolPage() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [grantSkill, setGrantSkill] = useState<Skill | null>(null);
+  const [catTree, setCatTree] = useState<SkillCatNode[]>([]);
+  const [catBinds, setCatBinds] = useState<Record<string, number>>({});
+  const [catDialog, setCatDialog] = useState<
+    | { kind: 'create'; parentId: number }
+    | { kind: 'rename'; node: SkillCatNode }
+    | { kind: 'delete'; node: SkillCatNode }
+    | null
+  >(null);
+  const [catName, setCatName] = useState('');
+  const [catBusy, setCatBusy] = useState(false);
 
   const skillFilter = useAgentStore((s) => s.skillFilter);
   const setSkillFilter = useAgentStore((s) => s.setSkillFilter);
@@ -99,20 +131,20 @@ export function AgentSkillPoolPage() {
     'mis-agent-skill-table-widths',
   );
 
-  /**
-   * 拉列表 + 统计。
-   *
-   * <p>统计接口失败**不阻断**列表渲染：#2 只是四张卡片，
-   * 让它把整页拖进 error 态属于因小失大。失败时卡片显示 `-`。
-   */
+  /** 拉列表 + 分类树（统计卡已隐藏，不再请求 getSkillStats）。 */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [list, stat] = await Promise.allSettled([listSkills(), getSkillStats()]);
+      const [list, cats] = await Promise.allSettled([listSkills(), listSkillCategories()]);
       if (list.status === 'rejected') throw list.reason;
       setSkills(list.value);
-      setStats(stat.status === 'fulfilled' ? stat.value : null);
+      if (cats.status === 'fulfilled') {
+        setCatTree(cats.value.tree);
+        setCatBinds(cats.value.binds);
+      } else {
+        toast.error(agentErrorMessage(cats.reason, '获取技能分类失败'));
+      }
     } catch (e) {
       setError(agentErrorMessage(e, '获取技能列表失败'));
     } finally {
@@ -124,18 +156,52 @@ export function AgentSkillPoolPage() {
     void load();
   }, [load]);
 
-  /** 分类下拉选项：从列表现有数据归纳，避免再开一个字典接口。 */
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of skills) if (s.category) set.add(s.category);
-    return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [skills]);
+  const catPathById = useMemo(() => skillCatPathById(catTree), [catTree]);
+  const catFlat = useMemo(() => flattenSkillCategories(catTree), [catTree]);
+
+  const skillsWithCat = useMemo(
+    () =>
+      skills.map((s) => {
+        const cid = catBinds[s.skill_id];
+        return {
+          ...s,
+          category_id: cid ?? null,
+          category: cid != null ? (catPathById.get(cid) ?? s.category) : undefined,
+        };
+      }),
+    [skills, catBinds, catPathById],
+  );
+
+  const categoryCounts = useMemo(() => {
+    const map: Record<number, number> = {};
+    for (const n of catFlat) {
+      const ids = skillCatDescendantIds(catTree, n.id);
+      map[n.id] = skillsWithCat.filter(
+        (s) => s.category_id != null && ids.has(s.category_id),
+      ).length;
+    }
+    return map;
+  }, [skillsWithCat, catFlat, catTree]);
+
+  const uncategorizedCount = useMemo(
+    () => skillsWithCat.filter((s) => s.category_id == null).length,
+    [skillsWithCat],
+  );
 
   const filtered = useMemo(() => {
     const kw = skillFilter.keyword.trim().toLowerCase();
-    return skills.filter((s) => {
+    const cat = skillFilter.category;
+    return skillsWithCat.filter((s) => {
       if (skillFilter.status !== 'all' && s.status !== skillFilter.status) return false;
-      if (skillFilter.category && s.category !== skillFilter.category) return false;
+      if (cat === SKILL_CAT_UNCAT) {
+        if (s.category_id != null) return false;
+      } else if (cat) {
+        const selectedId = Number(cat);
+        if (Number.isFinite(selectedId)) {
+          const ids = skillCatDescendantIds(catTree, selectedId);
+          if (s.category_id == null || !ids.has(s.category_id)) return false;
+        }
+      }
       if (!kw) return true;
       return (
         s.name.toLowerCase().includes(kw) ||
@@ -143,7 +209,7 @@ export function AgentSkillPoolPage() {
         s.description.toLowerCase().includes(kw)
       );
     });
-  }, [skills, skillFilter]);
+  }, [skillsWithCat, skillFilter, catTree]);
 
   const getSortValue = useCallback((row: Skill, key: string) => {
     if (key === 'tags') return (row.tags ?? []).join(',');
@@ -275,34 +341,55 @@ export function AgentSkillPoolPage() {
   return (
     <AgentPageShell
       title="技能池"
-      description="可用技能的注册与生命周期管理。"
       permission="agent:skill:list"
       actions={headerActions}
+      hideTitle
     >
       {/*
-        不把 empty 交给 AgentPageShell：空池时仍需露出统计卡与页头「重建技能索引」，
+        不把 empty 交给 AgentPageShell：空池时仍需露出页头「重建技能索引 / 新建技能」，
         否则整页被空态吞掉时观感像「没有按钮」。
       */}
       <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="技能总数" value={stats?.total ?? skills.length} icon={Sparkles} />
-          <StatCard
-            label="已启用"
-            value={stats?.active ?? skills.filter((s) => s.status === 'active').length}
-            icon={CheckCircle2}
-          />
-          <StatCard
-            label="已停用"
-            value={stats?.disabled ?? skills.filter((s) => s.status === 'disabled').length}
-            icon={CirclePause}
-          />
-          <StatCard
-            label="最近重建索引"
-            value={stats ? formatTime(stats.last_reindex_at) : '-'}
-            icon={RotateCcw}
-          />
-        </div>
+        <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+        <aside className="flex w-64 shrink-0 flex-col rounded-lg border bg-card">
+          <div className="flex items-center justify-between border-b px-2 py-2">
+            <span className="text-sm font-medium">技能分类</span>
+            <PermissionGate permission="agent:skill:manage">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setCatName('');
+                  setCatDialog({ kind: 'create', parentId: 0 });
+                }}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </PermissionGate>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            <AgentSkillCategoryTree
+              tree={catTree}
+              counts={categoryCounts}
+              uncategorizedCount={uncategorizedCount}
+              totalCount={skills.length}
+              selected={skillFilter.category}
+              onSelect={(s) => setSkillFilter({ category: s })}
+              onAddChild={(parent) => {
+                setCatName('');
+                setCatDialog({ kind: 'create', parentId: parent.id });
+              }}
+              onEdit={(node) => {
+                setCatName(node.name);
+                setCatDialog({ kind: 'rename', node });
+              }}
+              onDelete={(node) => setCatDialog({ kind: 'delete', node })}
+            />
+          </div>
+        </aside>
 
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
           <div className="min-w-[14rem] flex-1">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
@@ -324,21 +411,6 @@ export function AgentSkillPoolPage() {
               <option value="all">全部状态</option>
               <option value="active">已启用</option>
               <option value="disabled">已停用</option>
-            </select>
-          </div>
-          <div className="w-44">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">分类</label>
-            <select
-              className={selectClass}
-              value={skillFilter.category}
-              onChange={(e) => setSkillFilter({ category: e.target.value })}
-            >
-              <option value="">全部分类</option>
-              {categories.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
             </select>
           </div>
           <Button size="sm" variant="secondary" onClick={resetSkillFilter}>
@@ -465,6 +537,16 @@ export function AgentSkillPoolPage() {
                             详情
                           </button>
                         </PermissionGate>
+                        <PermissionGate permission="agent:skill:grant">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => setGrantSkill(skill)}
+                          >
+                            <KeyRound className="h-3 w-3" />
+                            设置权限
+                          </button>
+                        </PermissionGate>
                         <PermissionGate permission="agent:skill:manage">
                           <button
                             type="button"
@@ -515,12 +597,20 @@ export function AgentSkillPoolPage() {
           </table>
         </div>
         </AgentContentState>
+        </div>
+        </div>
       </div>
 
       <AgentSkillFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
         skill={editing}
+        categoryTree={catTree}
+        defaultCategoryId={
+          Number.isFinite(Number(skillFilter.category)) && skillFilter.category
+            ? Number(skillFilter.category)
+            : null
+        }
         onSaved={() => void load()}
       />
 
@@ -528,7 +618,124 @@ export function AgentSkillPoolPage() {
         skillId={detailSkillId}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
+        categoryTree={catTree}
+        boundCategoryId={detailSkillId ? (catBinds[detailSkillId] ?? null) : null}
+        onUpdated={() => void load()}
+        onOpenGrants={(skill) => setGrantSkill(skill)}
       />
+
+      <AgentSkillGrantDrawer
+        skillId={grantSkill?.skill_id ?? null}
+        skillName={grantSkill?.name}
+        open={grantSkill != null}
+        onClose={() => setGrantSkill(null)}
+      />
+
+      <Dialog
+        open={catDialog != null}
+        onOpenChange={(v) => {
+          if (!v) setCatDialog(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {catDialog?.kind === 'create'
+                ? catDialog.parentId
+                  ? '新建子分类'
+                  : '新建分类'
+                : catDialog?.kind === 'rename'
+                  ? '重命名分类'
+                  : '删除分类'}
+            </DialogTitle>
+            <DialogDescription>
+              {catDialog?.kind === 'delete'
+                ? '有子分类或仍绑定技能时无法删除，请先调整。'
+                : '分类存在独立表中，与 SKILL.md 的 category 字段无关。'}
+            </DialogDescription>
+          </DialogHeader>
+          {catDialog?.kind === 'delete' ? (
+            <p className="text-sm">
+              确认删除分类「{catDialog.node.name}」？当前该节点（含子级）有{' '}
+              {categoryCounts[catDialog.node.id] ?? 0} 个技能。
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {catDialog?.kind === 'create' && catDialog.parentId ? (
+                <p className="text-xs text-muted-foreground">
+                  上级：{catPathById.get(catDialog.parentId) ?? catDialog.parentId}
+                </p>
+              ) : null}
+              <Input
+                value={catName}
+                onChange={(e) => setCatName(e.target.value)}
+                placeholder="分类名称"
+                maxLength={128}
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCatDialog(null)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant={catDialog?.kind === 'delete' ? 'destructive' : 'default'}
+              disabled={catBusy}
+              onClick={() => {
+                void (async () => {
+                  if (!catDialog) return;
+                  const next = catName.trim();
+                  setCatBusy(true);
+                  try {
+                    if (catDialog.kind === 'create') {
+                      if (!next) {
+                        toast.error('请填写分类名称');
+                        return;
+                      }
+                      const created = await createSkillCategory({
+                        parent_id: catDialog.parentId || 0,
+                        name: next,
+                      });
+                      setSkillFilter({ category: String(created.id) });
+                      toast.success('已创建分类');
+                      setCatDialog(null);
+                      await load();
+                    } else if (catDialog.kind === 'rename') {
+                      if (!next) {
+                        toast.error('请填写分类名称');
+                        return;
+                      }
+                      await updateSkillCategory(catDialog.node.id, {
+                        parent_id: catDialog.node.parent_id,
+                        name: next,
+                        sort_order: catDialog.node.sort_order,
+                      });
+                      toast.success('分类已更新');
+                      setCatDialog(null);
+                      await load();
+                    } else {
+                      await deleteSkillCategory(catDialog.node.id);
+                      if (skillFilter.category === String(catDialog.node.id)) {
+                        setSkillFilter({ category: SKILL_CAT_UNCAT });
+                      }
+                      toast.success('分类已删除');
+                      setCatDialog(null);
+                      await load();
+                    }
+                  } catch (e) {
+                    toast.error(agentErrorMessage(e, '分类操作失败'));
+                  } finally {
+                    setCatBusy(false);
+                  }
+                })();
+              }}
+            >
+              {catBusy ? '处理中…' : catDialog?.kind === 'delete' ? '删除' : '确定'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AgentConfirmDialog
         open={pending !== null}

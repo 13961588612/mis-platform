@@ -56,7 +56,6 @@ import {
   AgentOverviewPage,
   AgentSessionsPage,
   AgentSkillsPage,
-  AgentSkillsPermissionsPage,
   AgentWecomPage,
 } from '@/features/agent/pages';
 import { TerminalsPage } from '@/features/finance/bank-account/pos-account/terminals-page';
@@ -181,7 +180,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/catalog': AgentCatalogPage,
   '/agent/dispatch': AgentDispatchPage,
   '/agent/skills': AgentSkillsPage,
-  '/agent/skills/permissions': AgentSkillsPermissionsPage,
+  '/agent/skills/permissions': AgentSkillsPage,
   '/agent/mcp': AgentMcpPage,
   '/agent/channels/wecom': AgentWecomPage,
   '/agent/monitor': AgentMonitorPage,

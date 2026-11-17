@@ -22,7 +22,7 @@ required_permissions:
 独立主题服务。用户要「品类管理 / 结构 / 四象限 / ABC」时加载。  
 **禁止** `skill` 其它 ops-report。门店促销全文 → promo；门店库存总览 → inventory。P2～P4 轻量留在本 Skill。
 
-- 槽位齐后：`skill(sm-shop-category-sale)` → 按意图选用表 apiName，对照一期，并行。
+- 槽位齐后：`skill(sm-shop-category-sale)` → 按意图选用表 apiName，对照一期，并行。入参同品类销售公共字段（`storeIds` + 复数时间键 + `categoryLevel`/`parentCategoryId`/`categoryIds` 三选一）。
 - 日粒度不写 P7、禁止改查 week。成文后禁止再 MCP。
 
 ### 取数 → 章节对照（只写已有结果的节）

@@ -23,7 +23,7 @@ required_permissions:
 独立主题服务。用户要「库存 / 滞销 / 缺货 / 周转 / 订货」且粒度为周/月时加载。  
 **禁止** `skill` 其它 ops-report。P7 品类库存 → category-report。
 
-- 槽位齐后：`skill(sm-shop-sale)` → `getShopInventoryOverview`，对照上一期，并行。
+- 槽位齐后：`skill(sm-shop-sale)` → `getShopInventoryOverview`，对照上一期，并行。入参 `storeIds` + `ordWeeks`/`ordMonths`（不要旧字段名）。
 - **日粒度禁止加载、禁止本接口、禁止改查 week。** 成文后禁止再 MCP。
 
 ---

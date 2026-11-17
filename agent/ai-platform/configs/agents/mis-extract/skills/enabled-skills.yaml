@@ -1,4 +1,12 @@
+# =============================================================================
+# mis-extract — 表单辅助录入 Skills
+# 技能包正文在 configs/skills/packages/form/；本文件是本 Agent 的绑定真值。
+# 填单页按 form_definition.ai_skill_id 指定本轮要加载的技能。
+# =============================================================================
+
 skills:
-  enabled: []
+  enabled:
+    - skill_id: form-assist
+      prompt_expose: true
   custom_skills_dir: skills/custom-skills/
   overrides_dir: skills/skill-overrides/

@@ -46,6 +46,8 @@ export interface AgentPageShellProps {
   description?: string;
   permission?: string | null;
   actions?: ReactNode;
+  /** 隐藏页头大标题，操作区与面包屑同行 */
+  hideTitle?: boolean;
   loading?: boolean;
   error?: string | null;
   empty?: boolean;
@@ -167,6 +169,7 @@ export function AgentPageShell({
   description,
   permission,
   actions,
+  hideTitle = false,
   loading = false,
   error = null,
   empty = false,
@@ -193,9 +196,10 @@ export function AgentPageShell({
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title={title}
-        description={description}
+        description={hideTitle ? undefined : description}
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title })}
         actions={actions}
+        hideTitle={hideTitle}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {content}

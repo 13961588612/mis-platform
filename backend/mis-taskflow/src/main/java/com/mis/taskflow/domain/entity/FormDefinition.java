@@ -88,6 +88,14 @@ public class FormDefinition {
     @Column(name = "external_workflow_ref", length = 256)
     private String externalWorkflowRef;
 
+    /** 自动填单 Agent id；与 {@link #aiSkillId} 成对可空。 */
+    @Column(name = "ai_agent_id", length = 64)
+    private String aiAgentId;
+
+    /** 自动填单 Skill id；与 {@link #aiAgentId} 成对可空。 */
+    @Column(name = "ai_skill_id", length = 128)
+    private String aiSkillId;
+
     @Column(nullable = false)
     private Integer deleted = 0;
 
@@ -126,6 +134,10 @@ public class FormDefinition {
     public void setExternalWorkflowSystem(String externalWorkflowSystem) { this.externalWorkflowSystem = externalWorkflowSystem; }
     public String getExternalWorkflowRef() { return externalWorkflowRef; }
     public void setExternalWorkflowRef(String externalWorkflowRef) { this.externalWorkflowRef = externalWorkflowRef; }
+    public String getAiAgentId() { return aiAgentId; }
+    public void setAiAgentId(String aiAgentId) { this.aiAgentId = aiAgentId; }
+    public String getAiSkillId() { return aiSkillId; }
+    public void setAiSkillId(String aiSkillId) { this.aiSkillId = aiSkillId; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Long getCreatedBy() { return createdBy; }

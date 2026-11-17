@@ -22,7 +22,7 @@ required_permissions:
 独立主题服务。用户只要「经营总览 / 晨会」时由 router 加载本 Skill。  
 **禁止** `skill` 其它 ops-report。用户要日报/周报/月报 → 告诉应走 diary/week/month，不要在本 Skill 里拼综合。
 
-- 槽位齐后：`skill(sm-shop-sale)` → `getShopSaleOverview`。日：本期+上周同期（不查前一天）；周/月：本期+上一期。并行。
+- 槽位齐后：`skill(sm-shop-sale)` → `getShopSaleOverview`。入参 `storeIds` + `ordDates`/`ordWeeks`/`ordMonths`（不要 `storeId`/`ordWeek`/`ordMonth`/日区间）。日：本期+上周同期（不查前一天）；周/月：本期+上一期。可用 `compare: "previous"`。并行。
 - 只写晨会两表（销售 + 轻量毛利损耗 + 促销占比）。瀑布/生鲜/低毛利 → 用户应改走 margin-report，本表不展开。
 - 促销三列深拆 → promo-report。S1a/S1b 有数则轻量句。
 - 成文后禁止再 MCP。

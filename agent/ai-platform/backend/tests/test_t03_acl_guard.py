@@ -16,7 +16,9 @@ from src.skills.acl import (
     CODE_SKILL_FORBIDDEN,
     SkillAclDenied,
     SkillAclGuard,
+    is_acl_gated_downstream_skill,
     permission_code_of,
+    restrict_loadable_skill_ids,
 )
 from tests.t03_helpers import FakeResolver, make_settings
 
@@ -407,6 +409,60 @@ def test_filter_runnable_empty_when_no_codes() -> None:
     assert guard.filter_runnable({"permission_codes": set()}, ["a", "b"]) == []
     assert guard.filter_runnable({}, ["a", "b"]) == []
     assert guard.filter_runnable(None, ["a"]) == []
+
+
+def test_is_acl_gated_downstream_skill() -> None:
+    """总控/日历/主数据/销售字段不闸；成文报表闸。"""
+    assert not is_acl_gated_downstream_skill("sm-report-router")
+    assert not is_acl_gated_downstream_skill("sm-common-info-calendar")
+    assert not is_acl_gated_downstream_skill("sm-common-info-master-data")
+    assert not is_acl_gated_downstream_skill("sm-shop-sale")
+    assert not is_acl_gated_downstream_skill("sm-shop-category-sale")
+    assert is_acl_gated_downstream_skill("sm-shop-ops-week-report")
+    assert is_acl_gated_downstream_skill("sm-shop-ops-diary-report")
+
+
+async def test_list_runnable_skills_fail_closed_and_granted() -> None:
+    """无身份空列表；有码只返回命中项。"""
+    empty_guard = SkillAclGuard(FakeResolver(), None, make_settings())
+    assert await empty_guard.list_runnable_skills({}, ["sm-shop-ops-week-report"]) == []
+    resolver = FakeResolver(codes={"ai:skill:sm-shop-ops-week-report:run"})
+    guard = SkillAclGuard(resolver, None, make_settings())
+    ctx: dict[str, object] = {"misUserId": "1001"}
+    assert await guard.list_runnable_skills(
+        ctx,
+        ["sm-shop-ops-week-report", "sm-shop-ops-month-report"],
+    ) == ["sm-shop-ops-week-report"]
+
+
+async def test_restrict_loadable_skill_ids_keeps_ungated_drops_ungranted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """router/日历/销售字段保留；未授权成文报表从 skill() 枚举去掉。"""
+    from src.skills import acl as acl_mod
+
+    guard = SkillAclGuard(
+        FakeResolver(codes={"ai:skill:sm-shop-ops-week-report:run"}),
+        None,
+        make_settings(),
+    )
+    monkeypatch.setattr(acl_mod, "get_skill_acl_guard", lambda registry=None: guard)
+    ids = await restrict_loadable_skill_ids(
+        {"misUserId": 1001},
+        [
+            "sm-report-router",
+            "sm-common-info-calendar",
+            "sm-shop-sale",
+            "sm-shop-ops-week-report",
+            "sm-shop-ops-month-report",
+        ],
+    )
+    assert ids == [
+        "sm-report-router",
+        "sm-common-info-calendar",
+        "sm-shop-sale",
+        "sm-shop-ops-week-report",
+    ]
 
 
 # ---------------------------------------------------------------------------

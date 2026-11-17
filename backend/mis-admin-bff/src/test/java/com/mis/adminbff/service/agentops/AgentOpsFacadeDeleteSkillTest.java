@@ -30,6 +30,8 @@ class AgentOpsFacadeDeleteSkillTest {
     @Mock
     private AgentOpsGrantService agentOpsGrantService;
     @Mock
+    private SkillCategoryService skillCategoryService;
+    @Mock
     private KbSubjectProxyService subjectProxyService;
 
     private AgentOpsFacadeService facade;
@@ -40,6 +42,7 @@ class AgentOpsFacadeDeleteSkillTest {
                 client,
                 skillPermissionCodeService,
                 agentOpsGrantService,
+                skillCategoryService,
                 subjectProxyService,
                 new ObjectMapper());
     }
@@ -53,6 +56,7 @@ class AgentOpsFacadeDeleteSkillTest {
         facade.deleteSkill("demo");
 
         verify(client).deleteSkill("demo");
+        verify(skillCategoryService).unbindSkill("demo");
         verify(skillPermissionCodeService).removeCode("demo");
         verify(agentOpsGrantService).revokeMenuFromAllRoles(92210L);
     }

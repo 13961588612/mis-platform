@@ -1282,7 +1282,36 @@ class A2uiRunLoop:
                     else ""
                 )
                 if skill_for_hint:
-                    hint = format_router_skill_hint(skill_for_hint)
+                    allowed_for_hint: list[str] | None = None
+                    try:
+                        from src.agent.manager import get_agent_manager
+                        from src.runtime.oh_runtime_builder import enabled_package_skill_ids
+                        from src.skills.acl import (
+                            is_acl_gated_downstream_skill,
+                            restrict_loadable_skill_ids,
+                        )
+
+                        wcfg = get_agent_manager().get_agent(hard_worker).config
+                        allowed_for_hint = await restrict_loadable_skill_ids(
+                            {"misUserId": mis_user_id},
+                            enabled_package_skill_ids(wcfg),
+                        )
+                        from src.skills.skill_id_aliases import canonicalize_skill_id
+
+                        canon = str(
+                            canonicalize_skill_id(skill_for_hint) or skill_for_hint
+                        ).strip()
+                        if (
+                            is_acl_gated_downstream_skill(canon)
+                            and canon not in set(allowed_for_hint)
+                        ):
+                            skill_for_hint = "sm-report-router"
+                    except Exception:  # noqa: BLE001 - Worker 配置/ACL 失败仍用原 hint
+                        allowed_for_hint = None
+                    hint = format_router_skill_hint(
+                        skill_for_hint,
+                        allowed_skill_ids=allowed_for_hint,
+                    )
                     if hint:
                         user_text_for_invoke = (
                             f"{last_user_for_route.rstrip()}\n\n{hint}"

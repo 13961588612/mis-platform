@@ -45,6 +45,7 @@ S/P 是编排缩写；加载 `sm-shop-sale` / `sm-shop-category-sale` 是为了�
 ## 1. 查数
 
 日历：`listMonthDates`（跨月再打上月）。禁止 `listYearDates`。  
+销售 params：`storeIds` + `period=day` + `ordDates`（= 清单 `ordDate`）。**不要** `storeId` / `startOrdDate` / `endOrdDate`。对照上周同期可两期 `ordDates` 或 `compare`（多时段 `summary` 为 null）。  
 可并行 `skill(sm-shop-sale)` 与 `skill(sm-shop-category-sale)` 取字段说明；**同一轮并行**上表本期 apiName。失败/truncated 禁止同参重试。
 
 | | 规则 |

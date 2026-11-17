@@ -6,7 +6,7 @@
  *
  * <p>**字段范围严格对齐 `SkillPayload`**（新增 `body`）—— 这是 §4.3 已定稿的端点签名。
  * 本期增强（B-1~B-6/B-8/B-9）：
- *   - 对话框放大为双栏（左：元数据；右：SKILL.md 正文 body），同屏编辑；
+ *   - 右侧划入双栏（左 21rem 元数据；右原宽 SKILL.md 正文），描述通栏；
  *   - 右栏正文可编辑并提交（B-8）；
  *   - 编辑态按详情回填正文，保证与列表项（无 body）一致（B-9）；
  *   - 「粘贴 SKILL.md」模式解析后同时回填元数据与正文（粘贴解析 / 直填 / 解析后改均可）。
@@ -26,19 +26,21 @@ import { SubmitButton } from '@/components/common/submit-button';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
+  bindSkillCategory,
   createSkill,
   getSkill,
   parseSkill,
   updateSkill,
   type SkillPayload,
 } from '../api/agent-ops-api';
+import type { SkillCatNode } from './skill-category-tree';
 import {
   chatSkillBuilder,
   createChatSession,
@@ -87,6 +89,7 @@ const skillFormSchema = z.object({
   name: z.string().trim().min(1, '名称必填').max(64, '名称不超过 64 字'),
   description: z.string().trim().min(1, '描述必填').max(500, '描述不超过 500 字'),
   category: z.string().trim().max(64, '分类不超过 64 字'),
+  categoryId: z.string(),
   tags: z.string().trim().max(200, '标签整体不超过 200 字'),
   handler: z.string().max(128, 'handler 不超过 128 字符'),
 });
@@ -98,6 +101,7 @@ const EMPTY_FORM: SkillFormValues = {
   name: '',
   description: '',
   category: '',
+  categoryId: '',
   tags: '',
   handler: '',
 };
@@ -116,6 +120,8 @@ export interface AgentSkillFormDialogProps {
   onOpenChange: (open: boolean) => void;
   /** null = 新建；非 null = 编辑该技能。 */
   skill: Skill | null;
+  categoryTree?: SkillCatNode[];
+  defaultCategoryId?: number | null;
   /** 保存成功回调（外层据此刷新列表与统计）。 */
   onSaved: () => void;
 }
@@ -127,6 +133,8 @@ export function AgentSkillFormDialog({
   open,
   onOpenChange,
   skill,
+  categoryTree = [],
+  defaultCategoryId = null,
   onSaved,
 }: AgentSkillFormDialogProps) {
   const [form, setForm] = useState<SkillFormValues>(EMPTY_FORM);
@@ -177,10 +185,19 @@ export function AgentSkillFormDialog({
             name: skill.name,
             description: skill.description,
             category: skill.category ?? '',
+            categoryId:
+              skill.category_id != null
+                ? String(skill.category_id)
+                : defaultCategoryId != null
+                  ? String(defaultCategoryId)
+                  : '',
             tags: (skill.tags ?? []).join(', '),
             handler: skill.handler ?? '',
           }
-        : EMPTY_FORM,
+        : {
+            ...EMPTY_FORM,
+            categoryId: defaultCategoryId != null ? String(defaultCategoryId) : '',
+          },
     );
     // B-8/B-9：编辑态按详情回填正文，保证与列表项（无 body）一致
     if (skill) {
@@ -190,7 +207,7 @@ export function AgentSkillFormDialog({
           /* 正文缺失不阻断编辑 */
         });
     }
-  }, [open, skill]);
+  }, [open, skill, defaultCategoryId]);
 
   function patch(key: keyof SkillFormValues, value: string): void {
     setForm((f) => ({ ...f, [key]: value }));
@@ -411,11 +428,14 @@ export function AgentSkillFormDialog({
 
     setSaving(true);
     try {
+      const savedId = isEdit && skill ? skill.skill_id : values.id;
       if (isEdit && skill) {
         await updateSkill(skill.skill_id, payload);
       } else {
         await createSkill({ ...payload, skill_id: values.id });
       }
+      const cid = values.categoryId.trim();
+      await bindSkillCategory(savedId, cid ? Number(cid) : null);
       toast.success(isEdit ? '技能已更新' : '技能已创建');
       onOpenChange(false);
       onSaved();
@@ -432,57 +452,56 @@ export function AgentSkillFormDialog({
   ];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
         className={cn(
-          'flex flex-col overflow-hidden',
-          mode === 'ai' ? 'h-[88vh] max-h-[88vh] max-w-6xl' : 'max-h-[88vh] max-w-4xl',
+          'flex w-full flex-col',
+          mode === 'ai' ? 'sm:max-w-[90rem]' : 'sm:max-w-[63rem]',
         )}
       >
-        <DialogHeader className="shrink-0">
-          <DialogTitle>{isEdit ? '编辑技能' : '新建技能'}</DialogTitle>
-        </DialogHeader>
+        <SheetHeader>
+          <SheetTitle>{isEdit ? '编辑技能' : '新建技能'}</SheetTitle>
+        </SheetHeader>
 
-        {/* 模式切换：手动填写 / AI 对话创建 */}
-        <div className="flex shrink-0 gap-1 rounded-md border bg-muted/40 p-1 text-sm">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setMode(t.key)}
-              className={cn(
-                'flex-1 rounded px-3 py-1.5 font-medium',
-                mode === t.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="flex shrink-0 gap-1 border-b px-5 py-2">
+          <div className="flex w-full gap-1 rounded-md border bg-muted/40 p-1 text-sm">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setMode(t.key)}
+                className={cn(
+                  'flex-1 rounded px-3 py-1.5 font-medium',
+                  mode === t.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/*
-          手动：双栏（左元数据 + 导入 / 右正文）
-          AI：三栏（左元数据 / 中正文 / 右对话）
-        */}
-        <div
-          className={cn(
-            'mt-4 grid min-h-0 grid-cols-1 gap-4',
-            mode === 'ai'
-              ? 'flex-1 overflow-hidden lg:grid-cols-3 lg:grid-rows-1'
-              : 'max-h-[60vh] overflow-auto pr-1 md:grid-cols-2',
-          )}
-        >
-          {/* 左栏：元数据 */}
-          <div className={cn('space-y-3', mode === 'ai' && 'min-h-0 overflow-y-auto pr-1')}>
-            {mode === 'ai' ? (
-              <SkillFormFields
-                form={form}
-                errors={errors}
-                highlight={highlight}
-                isEdit={isEdit}
-                onChange={patch}
-              />
-            ) : (
+        <div className="shrink-0 border-b px-5 py-3">
+          <label className={fieldLabel} htmlFor="skill-desc">
+            描述 *
+          </label>
+          <Textarea
+            id="skill-desc"
+            rows={2}
+            value={form.description}
+            placeholder="这个技能在什么场景下被调用、能做什么"
+            className={cn(highlight.has('description') ? 'ring-2 ring-amber-400/70 border-amber-400/70' : '')}
+            onChange={(e) => patch('description', e.target.value)}
+          />
+          {errors.description ? (
+            <p className="mt-1 text-xs text-destructive">{errors.description}</p>
+          ) : null}
+        </div>
+
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex w-[21rem] shrink-0 flex-col gap-3 overflow-auto border-r px-5 py-4">
+            {mode === 'manual' ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
@@ -495,71 +514,51 @@ export function AgentSkillFormDialog({
                   <Button
                     variant="outline"
                     type="button"
+                    size="sm"
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Upload className="mr-1 h-4 w-4" />
                     导入 SKILL.md 文件
                   </Button>
-                  {importError ? (
-                    <span className="text-xs text-destructive">{importError}</span>
-                  ) : null}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  支持带 YAML Front Matter 的 SKILL.md；导入成功后将自动回填字段与正文。
-                  无 Front Matter 时原样作为正文。
-                </p>
-                <SkillFormFields
-                  form={form}
-                  errors={errors}
-                  highlight={highlight}
-                  isEdit={isEdit}
-                  onChange={patch}
-                />
+                {importError ? (
+                  <span className="text-xs text-destructive">{importError}</span>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    支持带 YAML Front Matter 的 SKILL.md；导入成功后将自动回填字段与正文。
+                  </p>
+                )}
               </>
-            )}
+            ) : null}
+            <SkillFormFields
+              form={form}
+              errors={errors}
+              highlight={highlight}
+              isEdit={isEdit}
+              categoryTree={categoryTree}
+              onChange={patch}
+              hideDescription
+            />
           </div>
 
-          {/* 中栏（仅 AI）/ 右栏（手动）：SKILL.md 正文 */}
-          {mode === 'ai' ? (
-            <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
-              <label className={cn(fieldLabel, 'shrink-0')} htmlFor="skill-body-ai">
-                SKILL.md 正文（由 AI 回填，可编辑）
-              </label>
-              <div className="min-h-0 flex-1">
-                <Textarea
-                  id="skill-body-ai"
-                  className="h-full min-h-0 resize-none overflow-y-auto font-mono text-xs"
-                  value={body}
-                  placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
-                  onChange={(e) => setBody(e.target.value)}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              <label className={fieldLabel} htmlFor="skill-body">
-                SKILL.md 正文（body）
-              </label>
-              <Textarea
-                id="skill-body"
-                className="min-h-[18rem] flex-1 font-mono text-xs"
-                value={body}
-                placeholder={'在此编写技能的执行说明 / 提示词正文…\n支持 Markdown。'}
-                onChange={(e) => setBody(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                新建 / 编辑 custom 技能时随元数据一并保存（落盘到
-                <code className="mx-1 rounded bg-muted px-1">
-                  {'{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md'}
-                </code>
-                ）。文档型技能（handler 留空）靠正文做语义检索与上下文注入。
-              </p>
-            </div>
-          )}
+          <div className="flex min-w-0 flex-1 flex-col gap-2 px-5 py-4">
+            <label className={cn(fieldLabel, 'shrink-0')} htmlFor="skill-body">
+              SKILL.md 正文
+            </label>
+            <Textarea
+              id="skill-body"
+              className="min-h-0 flex-1 resize-none overflow-y-auto font-mono text-xs"
+              value={body}
+              placeholder={'在此编写技能的执行说明 / 提示词正文…\n支持 Markdown。'}
+              onChange={(e) => setBody(e.target.value)}
+            />
+            <p className="shrink-0 text-xs text-muted-foreground">
+              新建 / 编辑 custom 技能时随元数据一并保存。文档型技能（handler 留空）靠正文做语义检索。
+            </p>
+          </div>
 
-          {/* 右栏（仅 AI）：对话面板 */}
           {mode === 'ai' ? (
-            <div className="flex h-full min-h-0 flex-col overflow-hidden">
+            <div className="flex w-[24rem] shrink-0 flex-col overflow-hidden border-l px-5 py-4">
               <SkillBuilderPanel
                 sending={aiSending}
                 input={aiInput}
@@ -576,22 +575,21 @@ export function AgentSkillFormDialog({
           ) : null}
         </div>
 
-        <DialogFooter className="shrink-0 justify-center">
-          <SubmitButton loading={saving} onClick={() => void onSubmit()}>
-            保存
-          </SubmitButton>
+        <SheetFooter className="justify-end">
           <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>
             取消
           </Button>
-        </DialogFooter>
+          <SubmitButton loading={saving} onClick={() => void onSubmit()}>
+            保存
+          </SubmitButton>
+        </SheetFooter>
 
-        {/* T04：内嵌技能选择器（不离开创建流，挂在对话框内作为嵌套 Dialog） */}
         <SkillBuilderSelector
           open={selectorOpen}
           onOpenChange={setSelectorOpen}
           onConfirm={handleSkillsSelected}
         />
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

@@ -141,6 +141,25 @@ def test_format_hints() -> None:
     legacy_hint = format_router_skill_hint("sm-shop-ops-daily-report")
     assert "sm-shop-ops-diary-report" in legacy_hint
     assert "sm-shop-ops-daily-report" not in legacy_hint
+    granted = ["sm-report-router", "sm-shop-ops-week-report"]
+    week_ok = format_router_skill_hint(
+        "sm-shop-ops-week-report",
+        allowed_skill_ids=granted,
+    )
+    assert "sm-shop-ops-week-report" in week_ok
+    assert "已授权枚举" in week_ok
+    month_denied = format_router_skill_hint(
+        "sm-shop-ops-month-report",
+        allowed_skill_ids=granted,
+    )
+    assert "sm-report-router" in month_denied
+    assert "sm-shop-ops-month-report" not in month_denied
+    assert "`sm-shop-ops-week-report`" in month_denied
+    none_granted = format_router_skill_hint(
+        "sm-report-router",
+        allowed_skill_ids=["sm-report-router", "sm-common-info-calendar"],
+    )
+    assert "无任何成文报表授权" in none_granted
     hint = format_coordinator_route_hint(worker_id="spm-report", intent="spm_report")
     assert "spm-report" in hint
     assert "spm_report" in hint

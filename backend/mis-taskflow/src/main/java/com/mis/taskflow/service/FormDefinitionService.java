@@ -118,6 +118,7 @@ public class FormDefinitionService {
         });
         validateCategory(tenantId, req.categoryId());
         BindingSpec binding = resolveBinding(tenantId, req);
+        AiFillSpec aiFill = resolveAiFill(req);
 
         LocalDateTime now = LocalDateTime.now();
         FormDefinition f = new FormDefinition();
@@ -131,6 +132,7 @@ public class FormDefinitionService {
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         applyBinding(f, binding);
+        applyAiFill(f, aiFill);
         f.setDeleted(0);
         f.setCreatedBy(operatorId);
         f.setCreatedAt(now);
@@ -150,6 +152,7 @@ public class FormDefinitionService {
 
         validateCategory(tenantId, req.categoryId());
         BindingSpec binding = resolveBinding(tenantId, req);
+        AiFillSpec aiFill = resolveAiFill(req);
 
         f.setCategoryId(req.categoryId());
         f.setName(req.name().trim());
@@ -158,6 +161,7 @@ public class FormDefinitionService {
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         applyBinding(f, binding);
+        applyAiFill(f, aiFill);
         f.setUpdatedAt(LocalDateTime.now());
         formRepository.save(f);
     }
@@ -290,6 +294,30 @@ public class FormDefinitionService {
     private record BindingSpec(String type, Long definitionId, String externalSystem, String externalRef) {
     }
 
+    private record AiFillSpec(String agentId, String skillId) {
+    }
+
+    /**
+     * Agent 与 Skill 必须成对：都空=关闭辅助录入；只填一侧拒绝。
+     */
+    private static AiFillSpec resolveAiFill(UpsertFormDefinitionRequest req) {
+        String agent = StringUtils.hasText(req.aiAgentId()) ? req.aiAgentId().trim() : null;
+        String skill = StringUtils.hasText(req.aiSkillId()) ? req.aiSkillId().trim() : null;
+        if (agent == null && skill == null) {
+            return new AiFillSpec(null, null);
+        }
+        if (agent == null || skill == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "自动填单须同时选择 Agent 和 Skill，或全部留空");
+        }
+        return new AiFillSpec(agent, skill);
+    }
+
+    private static void applyAiFill(FormDefinition f, AiFillSpec spec) {
+        f.setAiAgentId(spec.agentId());
+        f.setAiSkillId(spec.skillId());
+    }
+
     private BindingSpec resolveBinding(Long tenantId, UpsertFormDefinitionRequest req) {
         String raw = StringUtils.hasText(req.workflowBindingType())
                 ? req.workflowBindingType().trim().toUpperCase()
@@ -370,6 +398,8 @@ public class FormDefinitionService {
                 f.getWorkflowDefinitionId() == null ? null : String.valueOf(f.getWorkflowDefinitionId()),
                 f.getExternalWorkflowSystem(),
                 f.getExternalWorkflowRef(),
+                f.getAiAgentId(),
+                f.getAiSkillId(),
                 f.getCreatedAt(), f.getUpdatedAt());
     }
 }

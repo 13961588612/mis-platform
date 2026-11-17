@@ -114,7 +114,7 @@ export function AppLayout() {
   }, [menus, activeAppCode]);
 
   const navItem = useMemo(() => {
-    // 最长命中优先：否则 /agent/skills/permissions 会先命中短路径「技能池」
+    // 最长命中优先：避免短路径是长路径前缀时侧栏同时高亮
     return (
       pickBestNavLeaf(location.pathname, flattenNavLeaves(navNodes)) ??
       findSystemNavItem(location.pathname) ??

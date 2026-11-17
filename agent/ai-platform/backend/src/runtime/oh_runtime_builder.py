@@ -269,7 +269,7 @@ def build_formal_skill_ids_prompt(
     if deferred:
         lines.append(
             "其余业务 skill **不要**自行抢先加载；仅在总控路由完成槽位确认并指示后，"
-            "再用正式 id 调用 `skill`（例如门店销售 / 品类销售）。"
+            "再用正式 id 调用 `skill`。未列入可加载列表的成文 Skill 本轮无权限，禁止调用。"
         )
     return "\n".join(lines).rstrip()
 
@@ -362,6 +362,26 @@ async def build_native_query_engine(
     config_base: Path = Path(get_settings().CONFIG_BASE_PATH)
     cwd: str = str(config_base.resolve())
     skill_view: MaterializedSkillView = materialize_oh_skill_view(config, config_base)
+    from src.skills.acl import restrict_loadable_skill_ids
+
+    loadable_ids: list[str] = await restrict_loadable_skill_ids(
+        {"misUserId": mis_user_id, "user_id": user_id},
+        skill_view.loadable_ids,
+    )
+    if loadable_ids != list(skill_view.loadable_ids):
+        logger.info(
+            "ACL restricted loadable skill ids",
+            agent_id=getattr(config, "agent_id", ""),
+            before=len(skill_view.loadable_ids),
+            after=len(loadable_ids),
+        )
+    allowed_set = set(loadable_ids)
+    skill_view = MaterializedSkillView(
+        load_dirs=skill_view.load_dirs,
+        prompt_dirs=skill_view.prompt_dirs,
+        loadable_ids=loadable_ids,
+        prompt_ids=[sid for sid in skill_view.prompt_ids if sid in allowed_set],
+    )
 
     mcp_configs: dict[str, McpServerConfig] = agent_mcp_to_openharness_configs(config.mcp_servers)
     allowed_tools: Any = config.runtime.allowed_tools if config.runtime else []

@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from src.identity.mis_permission_resolver import (
     MisPermissionResolver,
@@ -42,7 +42,9 @@ __all__ = [
     "PERMISSION_CODE_TEMPLATE",
     "SkillAclDenied",
     "SkillAclGuard",
+    "is_acl_gated_downstream_skill",
     "permission_code_of",
+    "restrict_loadable_skill_ids",
 ]
 
 #: 权限码模板。**唯一事实源**，Java / Python / 授权页三处共用同一格式。
@@ -52,6 +54,24 @@ PERMISSION_CODE_TEMPLATE: str = "ai:skill:{skill_id}:run"
 CODE_SKILL_FORBIDDEN: str = "AI_SKILL_FORBIDDEN"
 #: 语义标签（非 wire 码）：权限源不可达。
 CODE_ACL_UNAVAILABLE: str = "AI_ACL_UNAVAILABLE"
+
+
+def is_acl_gated_downstream_skill(skill_id: str) -> bool:
+    """成文/业务 Skill 须按 ``ai:skill:{id}:run`` 预过滤；总控与主数据不闸。
+
+    总控路由表会列出全部 ``sm-shop-ops-*-report``。若不在 ``skill()`` 枚举里
+    去掉未授权项，模型仍会按表路由，执行期才 403，表现为「路由到没权限的 skill」。
+    """
+    sid = (skill_id or "").strip()
+    if not sid:
+        return False
+    if sid.endswith("-router") or sid.endswith("_router"):
+        return False
+    if "common-info" in sid:
+        return False
+    if sid in {"sm-shop-sale", "sm-shop-category-sale"}:
+        return False
+    return True
 
 
 def permission_code_of(skill_id: str) -> str:
@@ -376,6 +396,48 @@ class SkillAclGuard:
         if not codes:
             return []
         return [sid for sid in skill_ids if self.permission_code(sid) in codes]
+
+    async def list_runnable_skills(self, ctx: Any, skill_ids: list[str]) -> list[str]:
+        """解析权限后返回可执行子集；ACL 关闭或超管豁免时原样返回。
+
+        Args:
+            ctx: 含 ``misUserId`` 的身份上下文。
+            skill_ids: 候选 skill_id。
+
+        Returns:
+            可执行子集；无身份 / 源不可达时为空列表（fail-closed，不抛给装配层）。
+        """
+        if not bool(getattr(self._settings, "MIS_ACL_ENABLED", True)):
+            return list(skill_ids)
+        try:
+            await self.resolve_codes(ctx)
+        except SkillAclDenied:
+            return []
+        if self._is_superadmin(ctx):
+            return list(skill_ids)
+        return self.filter_runnable(ctx, list(skill_ids))
+
+
+async def restrict_loadable_skill_ids(
+    ctx: Any,
+    loadable_ids: Sequence[str],
+) -> list[str]:
+    """Agent 启用集 ∩ 用户授权：未授权的成文 Skill 从 ``skill()`` 枚举去掉。
+
+    总控 / 日历 / 主数据 / 销售字段 Skill 仍可加载，否则授权了周报也无法查日历。
+    """
+    ids: list[str] = [str(sid).strip() for sid in loadable_ids if sid and str(sid).strip()]
+    if not ids:
+        return []
+    gated = [sid for sid in ids if is_acl_gated_downstream_skill(sid)]
+    if not gated:
+        return ids
+    runnable = set(await get_skill_acl_guard().list_runnable_skills(ctx, gated))
+    return [
+        sid
+        for sid in ids
+        if (not is_acl_gated_downstream_skill(sid)) or sid in runnable
+    ]
 
 
 # ---------------------------------------------------------------------------

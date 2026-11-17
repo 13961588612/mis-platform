@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import type { SkillFormValues } from './agent-skill-form-dialog';
+import { flattenSkillCategories, type SkillCatNode } from './skill-category-tree';
 
 /** 字段标签通用样式（导出供对话框复用，避免重复定义）。 */
 export const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
@@ -20,7 +21,10 @@ export interface SkillFormFieldsProps {
   errors: Partial<Record<keyof SkillFormValues, string>>;
   highlight: Set<string>;
   isEdit: boolean;
+  categoryTree?: SkillCatNode[];
   onChange: (key: keyof SkillFormValues, value: string) => void;
+  /** 描述改放到面板标题下通栏时，左栏不再渲染该字段。 */
+  hideDescription?: boolean;
 }
 
 /** 命中高亮字段时叠加的 ring 样式。 */
@@ -34,7 +38,9 @@ export function SkillFormFields({
   errors,
   highlight,
   isEdit,
+  categoryTree = [],
   onChange,
+  hideDescription = false,
 }: SkillFormFieldsProps) {
   return (
     <div className="space-y-3">
@@ -72,36 +78,47 @@ export function SkillFormFields({
         {errors.name ? <p className="mt-1 text-xs text-destructive">{errors.name}</p> : null}
       </div>
 
-      <div>
-        <label className={fieldLabel} htmlFor="skill-desc">
-          描述 *
-        </label>
-        <Textarea
-          id="skill-desc"
-          rows={3}
-          value={form.description}
-          placeholder="这个技能在什么场景下被调用、能做什么"
-          className={cn(highlight.has('description') ? HIGHLIGHT_CLASS : '')}
-          onChange={(e) => onChange('description', e.target.value)}
-        />
-        {errors.description ? (
-          <p className="mt-1 text-xs text-destructive">{errors.description}</p>
-        ) : null}
-      </div>
+      {hideDescription ? null : (
+        <div>
+          <label className={fieldLabel} htmlFor="skill-desc">
+            描述 *
+          </label>
+          <Textarea
+            id="skill-desc"
+            rows={3}
+            value={form.description}
+            placeholder="这个技能在什么场景下被调用、能做什么"
+            className={cn(highlight.has('description') ? HIGHLIGHT_CLASS : '')}
+            onChange={(e) => onChange('description', e.target.value)}
+          />
+          {errors.description ? (
+            <p className="mt-1 text-xs text-destructive">{errors.description}</p>
+          ) : null}
+        </div>
+      )}
 
       <div>
         <label className={fieldLabel} htmlFor="skill-category">
           分类
         </label>
-        <Input
+        <select
           id="skill-category"
-          value={form.category}
-          placeholder="如 member / order / ops"
-          className={cn(highlight.has('category') ? HIGHLIGHT_CLASS : '')}
-          onChange={(e) => onChange('category', e.target.value)}
-        />
-        {errors.category ? (
-          <p className="mt-1 text-xs text-destructive">{errors.category}</p>
+          value={form.categoryId}
+          className={cn(
+            'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm',
+            highlight.has('category') ? HIGHLIGHT_CLASS : '',
+          )}
+          onChange={(e) => onChange('categoryId', e.target.value)}
+        >
+          <option value="">未分类</option>
+          {flattenSkillCategories(categoryTree).map((c) => (
+            <option key={c.id} value={String(c.id)}>
+              {`${'　'.repeat(c.depth)}${c.name}`}
+            </option>
+          ))}
+        </select>
+        {errors.categoryId ? (
+          <p className="mt-1 text-xs text-destructive">{errors.categoryId}</p>
         ) : null}
       </div>
 

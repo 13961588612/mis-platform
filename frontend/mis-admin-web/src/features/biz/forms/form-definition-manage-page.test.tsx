@@ -2,7 +2,7 @@
 /**
  * FormDefinitionManagePage 单测（分类列 + code 下拉 + 标红）：
  * 1. 表单表格显示（含「编码」「分类」表头），分类列解析分类名/未分类
- * 2. 「新增表单」对话框的 code 是下拉选「已注册组件」，且含分类下拉
+ * 2. 「新增表单」划入面板的 code 是下拉选「已注册组件」，且含分类下拉
  * 3. 表单列表里 code 未关联前端组件的行标红 + 「未关联组件」徽标
  * 4. 对话框未选组件时校验报错且不发起创建请求
  * 5. 分类筛选：勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙
@@ -45,6 +45,11 @@ vi.mock('@/lib/api/biz-category', async (importOriginal) => {
     deleteBizCategory: vi.fn(),
   };
 });
+
+vi.mock('@/features/agent/api/agent-ops-api', () => ({
+  listAgents: vi.fn().mockResolvedValue([]),
+  getAgentSkills: vi.fn().mockResolvedValue({ bindings: [], pool: [] }),
+}));
 
 vi.mock('@/lib/api/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
@@ -183,7 +188,7 @@ describe('FormDefinitionManagePage', () => {
     expect(screen.getByText('未分类', { selector: 'td' })).toBeTruthy();
   });
 
-  it('「新增表单」对话框含组件下拉、分类触发器与工作流关联', async () => {
+  it('「新增表单」划入面板含组件下拉、分类触发器与工作流关联', async () => {
     render(
       <MemoryRouter>
         <FormDefinitionManagePage />
@@ -200,6 +205,8 @@ describe('FormDefinitionManagePage', () => {
     const categoryTrigger = screen.getByLabelText('分类') as HTMLButtonElement;
     expect(categoryTrigger.tagName).toBe('BUTTON');
     expect(categoryTrigger.textContent).toContain('未分类');
+    expect(screen.getByLabelText('自动填单 Agent')).toBeTruthy();
+    expect(screen.getByLabelText('自动填单 Skill')).toBeTruthy();
     const binding = screen.getByLabelText('工作流关联') as HTMLSelectElement;
     expect(binding.value).toBe('NONE');
     fireEvent.change(binding, { target: { value: 'LOCAL' } });

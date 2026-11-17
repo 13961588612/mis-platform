@@ -65,6 +65,7 @@ public class AgentOpsFacadeService {
     private final AgentOpsClient client;
     private final SkillPermissionCodeService skillPermissionCodeService;
     private final AgentOpsGrantService agentOpsGrantService;
+    private final SkillCategoryService skillCategoryService;
     private final KbSubjectProxyService subjectProxyService;
     private final ObjectMapper objectMapper;
 
@@ -72,11 +73,13 @@ public class AgentOpsFacadeService {
             AgentOpsClient client,
             SkillPermissionCodeService skillPermissionCodeService,
             AgentOpsGrantService agentOpsGrantService,
+            SkillCategoryService skillCategoryService,
             KbSubjectProxyService subjectProxyService,
             ObjectMapper objectMapper) {
         this.client = client;
         this.skillPermissionCodeService = skillPermissionCodeService;
         this.agentOpsGrantService = agentOpsGrantService;
+        this.skillCategoryService = skillCategoryService;
         this.subjectProxyService = subjectProxyService;
         this.objectMapper = objectMapper;
     }
@@ -139,6 +142,11 @@ public class AgentOpsFacadeService {
      */
     public JsonNode deleteSkill(String skillId) {
         JsonNode deleted = client.deleteSkill(skillId);
+        try {
+            skillCategoryService.unbindSkill(skillId);
+        } catch (RuntimeException ex) {
+            log.warn("技能已删除，清理分类绑定失败 skillId={}: {}", skillId, ex.toString());
+        }
         try {
             Long menuId = skillPermissionCodeService.removeCode(skillId);
             if (menuId != null) {

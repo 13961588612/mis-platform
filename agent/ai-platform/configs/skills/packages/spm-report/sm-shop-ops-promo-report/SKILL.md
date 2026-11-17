@@ -22,7 +22,7 @@ required_permissions:
 独立主题服务。用户明确要「促销专项 / 折扣三列 / 出清 / 供应商分担」时加载。  
 **禁止** `skill` 其它 ops-report。弱问仅促销占比 → overview-report。P2～P4 品类侧 → category-report，禁止本 Skill。
 
-- 槽位齐后：`skill(sm-shop-sale)` → S2/S3/S4，对照一期，并行。
+- 槽位齐后：`skill(sm-shop-sale)` → S2/S3/S4，对照一期，并行。入参同门店销售公共字段（`storeIds` / `ordDates|ordWeeks|ordMonths`）。
 - 成文后禁止再 MCP；禁止编造未取数。
 
 ---

@@ -572,6 +572,15 @@ WHERE ur.user_id = ? AND m.app_id = ?
 - `idx_oper_log_user` (user_id)
 - `idx_oper_log_time` (oper_time DESC)
 
+### 3.99 ai_skill_category / ai_skill_category_bind（V170）
+
+技能池分类邻接树；`parent_id=0` 为根。技能与分类一对一绑定，真值在平台库，不使用 `Skill.category` 字符串拼路径。
+
+| 表 | 要点 |
+|----|------|
+| `ai_skill_category` | `id` IDENTITY、`parent_id`、`name`、`sort_order` |
+| `ai_skill_category_bind` | PK `skill_id`；`category_id` FK → `ai_skill_category` |
+
 ## 4. 数据权限枚举
 
 | 值 | 常量名 | 说明 |
@@ -598,6 +607,7 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | V1__init_schema.sql | 含 `sys_dept_category`、`sys_dept`、`sys_perm_type` ENUM 等 |
 | V2__seed_data.sql | 种子：APP、模块、菜单树（code）、`sys_api` 全量 API 树 |
 | V3__indexes_optimize.sql | 性能索引（按需） |
+| V170__ai_skill_category.sql | 技能池分类树 `ai_skill_category` + 绑定 `ai_skill_category_bind`；sys_api **93234–93238** |
 
 ## 7. 待确认项
 

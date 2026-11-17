@@ -423,4 +423,27 @@ class FormDefinitionServiceIntegrationTest {
         assertNotNull(voForm.formData(), "includeFormData=true 应带 formData");
         assertTrue(voForm.formData().contains("128000"), "列表 formData 应原样透出: " + voForm.formData());
     }
+
+    @Test
+    @DisplayName("V173：Agent 与 Skill 成对保存；只填一侧被拒")
+    void aiFillMustBePaired() {
+        String code = uniqCode("FORM");
+        Long id = formService.create(TENANT, 1L, new UpsertFormDefinitionRequest(
+                null, code, "AI表单", null, FormDefinition.STATUS_ENABLED, 0, "{}",
+                "NONE", null, null, null, "mis-copilot", "form-assist"));
+        var vo = formService.get(id, TENANT);
+        assertEquals("mis-copilot", vo.aiAgentId());
+        assertEquals("form-assist", vo.aiSkillId());
+
+        BusinessException onlyAgent = assertThrows(BusinessException.class, () -> formService.update(id, TENANT,
+                new UpsertFormDefinitionRequest(null, code, "AI表单", null, FormDefinition.STATUS_ENABLED, 0, "{}",
+                        "NONE", null, null, null, "mis-copilot", null)));
+        assertTrue(onlyAgent.getMessage().contains("同时选择"));
+
+        formService.update(id, TENANT, new UpsertFormDefinitionRequest(
+                null, code, "AI表单", null, FormDefinition.STATUS_ENABLED, 0, "{}",
+                "NONE", null, null, null, null, null));
+        assertNull(formService.get(id, TENANT).aiAgentId());
+        assertNull(formService.get(id, TENANT).aiSkillId());
+    }
 }

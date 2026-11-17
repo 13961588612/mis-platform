@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 
@@ -95,22 +95,57 @@ def clear_intent_router_cache(agent_id: str | None = None) -> None:
         _CONFIG_CACHE.pop(agent_id, None)
 
 
-def format_router_skill_hint(router_skill: str) -> str:
-    """注入 turn_reminder 的强制加载提示（Worker）。"""
+def format_router_skill_hint(
+    router_skill: str,
+    *,
+    allowed_skill_ids: Sequence[str] | None = None,
+) -> str:
+    """注入 turn_reminder 的强制加载提示（Worker）。
+
+    ``allowed_skill_ids`` 为本轮 ``skill()`` 可加载集（Agent 启用 ∩ IAM）。
+    预路由指向未授权成文 Skill 时回退到总控，避免模型按 SKILL.md 全表硬路由。
+    """
+    from src.skills.acl import is_acl_gated_downstream_skill
     from src.skills.skill_id_aliases import canonicalize_skill_id
 
     sid = str(canonicalize_skill_id((router_skill or "").strip()) or "").strip()
     if not sid:
         return ""
+    allowed_canon: list[str] = []
+    if allowed_skill_ids is not None:
+        seen: set[str] = set()
+        for raw in allowed_skill_ids:
+            item = str(canonicalize_skill_id(str(raw or "").strip()) or "").strip()
+            if item and item not in seen:
+                seen.add(item)
+                allowed_canon.append(item)
+        if is_acl_gated_downstream_skill(sid) and sid not in seen:
+            sid = "sm-report-router"
+    gated_allowed = [x for x in allowed_canon if is_acl_gated_downstream_skill(x)]
+    acl_suffix = ""
+    if allowed_skill_ids is not None:
+        if gated_allowed:
+            listed = "、".join(f"`{x}`" for x in gated_allowed)
+            acl_suffix = (
+                f" 下游成文 Skill 仅限本轮已授权枚举：{listed}；"
+                f"枚举外的 `sm-shop-ops-*-report` 禁止 skill。"
+            )
+        else:
+            acl_suffix = (
+                " 当前用户无任何成文报表授权；禁止 skill 任何 `sm-shop-ops-*-report`，"
+                "仅可走总控槽位与主数据/日历。"
+            )
     if sid == "sm-report-router":
         return (
             f"【意图预路由】本轮必须先 skill 加载 `{sid}` 做意图与槽位路由，"
             f"再 skill **唯一**下游成文 Skill；禁止跳过路由直接调 MCP。"
+            f"{acl_suffix}"
         )
     return (
         f"【意图预路由】槽位已齐则直接 skill 加载 `{sid}`，按其正文自行查数并成文；"
         f"禁止再 skill 其它 `sm-shop-ops-*-report`；禁止称其为 router。"
         f"槽位不齐时先 skill(`sm-report-router`)。"
+        f"{acl_suffix}"
     )
 
 
