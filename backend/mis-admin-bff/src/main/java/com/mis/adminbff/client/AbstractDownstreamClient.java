@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-abstract class AbstractDownstreamClient {
+public abstract class AbstractDownstreamClient {
 
     private final WebClient webClient;
     private final Duration timeout;
@@ -48,6 +48,18 @@ abstract class AbstractDownstreamClient {
 
     /** 透传 Gateway 上下文，供下游 DataScope / 操作人校验。 */
     protected Consumer<org.springframework.http.HttpHeaders> loginContextHeaders() {
+        return loginContextHeadersStatic();
+    }
+
+    /**
+     * 静态版登录上下文头（供 BFF 侧非客户端组件如 ReconProxyController 复用）。
+     *
+     * <p>语义与 {@link #loginContextHeaders()} 完全一致：从
+     * {@link com.mis.common.security.context.SecurityContextHolder} 取当前
+     * {@link LoginUser}，把 X-User-Id / X-Tenant-Id / X-App-Id / X-Employee-Id
+     * / X-Username 逐一带上；无安全上下文则不带任何头（白名单或未认证调用）。
+     */
+    public static Consumer<org.springframework.http.HttpHeaders> loginContextHeadersStatic() {
         return headers -> {
             try {
                 var user = com.mis.common.security.context.SecurityContextHolder.getOptional().orElse(null);

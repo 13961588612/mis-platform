@@ -59,7 +59,7 @@ export interface RouterNode {
   children?: RouterNode[] | null;
 }
 
-/** runtime: 'host'（单体托管） | 'iframe'（远程页面直嵌） | 'remote'（未来微前端） */
+/** runtime: 'host'（单体托管） | 'iframe'（远程页面直嵌） | 'remote'（micro-app 微前端子应用） */
 export interface AppItem {
   id: string;
   tenantId: string;
@@ -67,6 +67,8 @@ export interface AppItem {
   name: string;
   icon: string | null;
   basePath: string | null;
+  /** 微前端子应用入口（runtime='remote' 用；后端暂未暴露，走前端兜底） */
+  entry?: string | null;
   description: string | null;
   portalGroup: string | null;
   kind: string;

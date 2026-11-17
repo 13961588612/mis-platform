@@ -1,0 +1,31 @@
+import java.sql.*;
+import java.util.Properties;
+
+public class CheckTrads2 {
+    public static void main(String[] args) throws Exception {
+        String url = "jdbc:postgresql://10.254.16.6:5432/recon";
+        Properties p = new Properties();
+        p.setProperty("user", "mis");
+        p.setProperty("password", "mis123");
+        try (Connection c = DriverManager.getConnection(url, p)) {
+            q(c, "SELECT record_key, record_data->>'code' code, record_data->>'trad_id' trad_id, record_data->>'cash_card' cash_card "
+                    + "FROM recon_source_record WHERE ds_code='zhg_order' "
+                    + "AND (record_data->>'trad_id' = '146947' OR record_data->>'trad_id' = '146811')");
+        }
+    }
+    static void q(Connection c, String sql) throws Exception {
+        System.out.println("-- " + sql);
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                StringBuilder sb = new StringBuilder();
+                int n = rs.getMetaData().getColumnCount();
+                for (int i = 1; i <= n; i++) {
+                    if (i > 1) sb.append(" | ");
+                    String v = rs.getString(i);
+                    sb.append(rs.getMetaData().getColumnName(i)).append("=").append(v == null ? "NULL" : v);
+                }
+                System.out.println("  " + sb);
+            }
+        }
+    }
+}
