@@ -34,6 +34,11 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // micro-app 子应用（recon）在壳子内发起的 /internal 请求走壳子代理到 recon-service
+      '/internal': {
+        target: 'http://localhost:8111',
+        changeOrigin: true,
+      },
     },
   },
   // T07'：Vite 多页 admin/embed 双入口

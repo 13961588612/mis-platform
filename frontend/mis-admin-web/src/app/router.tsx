@@ -87,6 +87,7 @@ export function AppRouter() {
               {/* T09/T10：存量页迁移（ai-platform 后端，懒加载页面由 KeepAliveOutlet 渲染） */}
               <Route path="/ai/*" element={null} />
               <Route path="/iframe/:code" element={null} />
+              <Route path="/remote/:code/*" element={null} />
               <Route path="/403" element={null} />
             </Route>
           </Route>

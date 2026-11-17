@@ -5,6 +5,7 @@ import { registerIframeApps } from '@/lib/nav/iframe-apps';
 import { useAuthStore } from '@/stores/auth-store';
 import type { AppItem } from '@/types/api';
 import { resolveAppEntry } from '@/lib/nav/host-apps';
+import { resolveRemoteEntry } from '@/lib/nav/remote-apps';
 import { WorkbenchOverview } from '../components/workbench-overview';
 import { TaskBoard } from '../components/task-board';
 import { MessageBoard } from '../components/message-board';
@@ -48,6 +49,12 @@ export function PortalHomeTab() {
       if (!app.enterable) return;
       if (app.runtime === 'iframe' && app.basePath) {
         navigate(`/iframe/${app.code}`);
+        return;
+      }
+      // micro-app 远程子应用（runtime='remote'，如对账平台 recon）：进应用入口页，
+      // 子路由由 KeepAliveOutlet 内的 <micro-app> + microApp.router 驱动。
+      if (app.runtime === 'remote') {
+        navigate(resolveRemoteEntry(app.code));
         return;
       }
       if (app.code === 'system' || app.runtime === 'host') {

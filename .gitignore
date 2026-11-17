@@ -1,61 +1,92 @@
-# IDE
+# =============================================================================
+# MIS Platform — Git 忽略规则（仓库根，为主规则）
+# 子项目补充：recon/.gitignore、agent/.gitignore、agent/ai-platform/frontend/.gitignore
+# =============================================================================
+
+# ----- IDE / 编辑器 -----
 .idea/
 *.iml
 .vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
 *.swp
 *.swo
+*~
 
-# OS
+# ----- 操作系统 -----
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
-# Env & secrets
+# ----- 环境变量与密钥 -----
+# Vite 的 .env.development / .env.production 只含 VITE_* 公开变量，按惯例入库；
+# 本地覆盖文件（.env.local / .env.*.local）与含密码的 .env.integration 一律忽略。
 .env
+.env.local
+.env.*.local
 .env.integration
+!.env.example
+!.env.*.example
 backend/config/jdk.properties
 *.pem
+*.key
+*.p12
+*.jks
 keys/
 
-# Java / Maven
+# ----- Java / Maven -----
 target/
 *.class
 *.jar
 *.war
-*.log
 hs_err_pid*
+replay_pid*
+# 冲突/补丁残留
+*.orig
+*.rej
 
-# Node / Frontend（后续前端模块）
+# ----- 日志（含后缀变体：*.log.1、*.log.prev、*.log.err） -----
+*.log
+*.log.*
+*.pid
+**/logs/**
+!**/logs/.gitignore
+
+# ----- Node / 前端 -----
 node_modules/
 dist/
+dist-ssr/
 .pnpm-store/
-# TS 增量编译产物（tsc --build 生成，可再生，不入库）
+# Vite 依赖预打包缓存（每次 dev 启动都会重建）
+.vite/
+.turbo/
+.eslintcache
+# TS 增量编译产物（tsc --build 生成，可再生）
 *.tsbuildinfo
+coverage/
+.nyc_output/
 
-# Python（后续 agent 模块）
+# ----- Python（agent 模块） -----
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
 
-# OpenHarness 技能视图（目录名=正式 skill_id，运行时物化）
-agent/ai-platform/configs/.runtime/
-
-# Docker volumes（若挂载到仓库内）
-.deploy-data/
-
-# Nacos 本机解压目录与下载包（scripts/start-nacos-native.ps1）
-deploy/nacos/runtime/
-deploy/nacos/_last-boot.txt
-deploy/nacos/plugins/
-deploy/nacos/nacos-server-*.zip
-
-# 运行时日志目录（后台服务持续写入，物理清理需先停服务）
-/backend/logs/
-
-# Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
-/nul
-
-# 本地探测 / QA 临时产物（AI 辅助开发反复生成，不提交）
+# ----- 临时 / 探测产物（AI 辅助开发反复生成，不提交） -----
+*.tmp
+*.temp
+.cache/
 **/_e2e*.txt
 **/_full*.txt
 **/_pytest_full.txt
@@ -65,3 +96,18 @@ deploy/nacos/nacos-server-*.zip
 **/.qa-*.txt
 # vite/vitest config 预打包临时文件（vite.config.ts.timestamp-*.mjs 等）
 **/*.timestamp-*.mjs
+
+# ----- OpenHarness 技能视图（目录名=正式 skill_id，运行时物化） -----
+agent/ai-platform/configs/.runtime/
+
+# ----- Docker volumes（若挂载到仓库内） -----
+.deploy-data/
+
+# ----- Nacos 本机解压目录与下载包（scripts/start-nacos-native.ps1） -----
+deploy/nacos/runtime/
+deploy/nacos/_last-boot.txt
+deploy/nacos/plugins/
+deploy/nacos/nacos-server-*.zip
+
+# ----- Windows 保留名误建垃圾文件（0 字节，git 不可见即可） -----
+/nul

@@ -22,6 +22,7 @@
     "@codemirror/state": "^6.4.0",
     "@codemirror/view": "^6.30.0",
     "@dagrejs/dagre": "^1.1.4",
+    "@micro-zoe/micro-app": "1.0.0-rc.32",
     "@microsoft/fetch-event-source": "^2.0.1",
     "@preact/signals-core": "^1.5.0",
     "@radix-ui/react-alert-dialog": "^1.1.20",
