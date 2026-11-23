@@ -8,5 +8,9 @@ public record OrgUpdateRequest(
         Long parentId,
         Integer sort,
         Integer status,
-        String remark
+        String remark,
+        Integer isStore,
+        String storeCode,
+        /** 门店类型：BGMD/CSMD/WLZS（is_store=1 必填） */
+        String storeType
 ) {}

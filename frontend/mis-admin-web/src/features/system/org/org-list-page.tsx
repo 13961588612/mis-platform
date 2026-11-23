@@ -34,9 +34,22 @@ const ORG_COLUMNS: ResizableColumn[] = [
   { key: 'parent', label: '上级组织' },
   { key: 'sort', label: '排序' },
   { key: 'status', label: '状态' },
+  { key: 'store', label: '门店' },
   { key: 'remark', label: '备注' },
   { key: '__ops__', label: '操作', locked: true },
 ];
+
+/** 门店类型码 → 展示名（与后端 STORE_TYPES 一致） */
+const STORE_TYPE_OPTIONS = [
+  { value: 'BGMD', label: '百购门店' },
+  { value: 'CSMD', label: '超市门店' },
+  { value: 'WLZS', label: '物流中心' },
+] as const;
+
+function storeTypeLabel(code?: string | null): string {
+  if (!code) return '—';
+  return STORE_TYPE_OPTIONS.find((o) => o.value === code)?.label ?? code;
+}
 
 const thPad = 'px-3';
 
@@ -99,7 +112,17 @@ export function OrgListPage() {
   const [editing, setEditing] = useState<OrgItem | null>(null);
   const [viewing, setViewing] = useState<OrgItem | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ code: '', name: '', parentId: '0', sort: '0', remark: '', status: 1 });
+  const [form, setForm] = useState({
+    code: '',
+    name: '',
+    parentId: '0',
+    sort: '0',
+    remark: '',
+    status: 1,
+    isStore: 0,
+    storeCode: '',
+    storeType: '',
+  });
 
   const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
     ORG_COLUMNS,
@@ -120,13 +143,20 @@ export function OrgListPage() {
         return row.sort;
       case 'status':
         return row.status;
+      case 'store':
+        return row.isStore === 1
+          ? [row.storeCode, storeTypeLabel(row.storeType)].filter(Boolean).join(' · ') || '门店'
+          : '';
       case 'remark':
         return row.remark ?? '';
       default:
         return null;
     }
   }, [index]);
-  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue, {
+    key: 'sort',
+    dir: 'asc',
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -154,7 +184,17 @@ export function OrgListPage() {
   function openCreate() {
     setEditing(null);
     setViewing(null);
-    setForm({ code: '', name: '', parentId: '0', sort: '0', remark: '', status: 1 });
+    setForm({
+      code: '',
+      name: '',
+      parentId: '0',
+      sort: '0',
+      remark: '',
+      status: 1,
+      isStore: 0,
+      storeCode: '',
+      storeType: '',
+    });
     setOpen(true);
   }
 
@@ -174,6 +214,9 @@ export function OrgListPage() {
       sort: String(row.sort ?? 0),
       remark: row.remark ?? '',
       status: row.status,
+      isStore: row.isStore === 1 ? 1 : 0,
+      storeCode: row.storeCode ?? '',
+      storeType: row.storeType ?? '',
     });
     setOpen(true);
   }
@@ -181,6 +224,14 @@ export function OrgListPage() {
   async function onSave() {
     if (!form.name.trim() || (!editing && !form.code.trim())) {
       toast.warning('请填写编码与名称');
+      return;
+    }
+    if (form.isStore === 1 && !form.storeCode.trim()) {
+      toast.warning('门店组织必须填写门店编号');
+      return;
+    }
+    if (form.isStore === 1 && !form.storeType.trim()) {
+      toast.warning('门店组织必须选择门店类型');
       return;
     }
     const parentId = form.parentId === '0' || form.parentId === '' ? 0 : Number(form.parentId);
@@ -193,6 +244,9 @@ export function OrgListPage() {
           sort: Number(form.sort) || 0,
           status: form.status,
           remark: form.remark.trim() || undefined,
+          isStore: form.isStore,
+          storeCode: form.isStore === 1 ? form.storeCode.trim() : '',
+          storeType: form.isStore === 1 ? form.storeType.trim() : '',
         });
         toast.success('已更新');
       } else {
@@ -202,6 +256,9 @@ export function OrgListPage() {
           parentId,
           sort: Number(form.sort) || 0,
           remark: form.remark.trim() || undefined,
+          isStore: form.isStore,
+          storeCode: form.isStore === 1 ? form.storeCode.trim() : '',
+          storeType: form.isStore === 1 ? form.storeType.trim() : '',
         });
         toast.success('已创建');
       }
@@ -344,6 +401,11 @@ export function OrgListPage() {
                         text={row.status === 1 ? '启用' : '禁用'}
                       />
                     </td>
+                    <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle">
+                      {row.isStore === 1
+                        ? [row.storeCode || '是', storeTypeLabel(row.storeType)].filter((x) => x && x !== '—').join(' · ')
+                        : '—'}
+                    </td>
                     <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle text-muted-foreground">
                       {row.remark ?? '—'}
                     </td>
@@ -409,6 +471,9 @@ export function OrgListPage() {
                       />
                     ),
                   },
+                  { label: '是否门店', value: viewing.isStore === 1 ? '是' : '否' },
+                  { label: '门店编号', value: viewing.storeCode || '—' },
+                  { label: '门店类型', value: storeTypeLabel(viewing.storeType) },
                   { label: '备注', value: viewing.remark },
                 ]}
               />
@@ -459,6 +524,49 @@ export function OrgListPage() {
                     <option value={0}>禁用</option>
                   </select>
                 </div>
+              ) : null}
+              <div className={SHEET_FORM_FIELD}>
+                <label className="flex items-center gap-2 text-[13px] font-medium">
+                  <input
+                    type="checkbox"
+                    checked={form.isStore === 1}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        isStore: e.target.checked ? 1 : 0,
+                        storeCode: e.target.checked ? f.storeCode : '',
+                        storeType: e.target.checked ? f.storeType : '',
+                      }))
+                    }
+                  />
+                  是否门店
+                </label>
+              </div>
+              {form.isStore === 1 ? (
+                <>
+                  <div className={SHEET_FORM_FIELD}>
+                    <label className={fieldLabel}>门店编号 *</label>
+                    <Input
+                      value={form.storeCode}
+                      onChange={(e) => setForm((f) => ({ ...f, storeCode: e.target.value }))}
+                    />
+                  </div>
+                  <div className={SHEET_FORM_FIELD}>
+                    <label className={fieldLabel}>门店类型 *</label>
+                    <select
+                      className={fieldInput}
+                      value={form.storeType}
+                      onChange={(e) => setForm((f) => ({ ...f, storeType: e.target.value }))}
+                    >
+                      <option value="">请选择</option>
+                      {STORE_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               ) : null}
               <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>备注</label>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Search, Workflow } from 'lucide-react';
+import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Workflow } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
+import { FilterField, FilterPanel, FILTER_FIELD_CONTROL_CLASS } from '@/components/common/filter-panel';
 import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -209,52 +211,65 @@ export function WorkflowDefinitionPage() {
   );
 
   const totalPages = Math.max(1, Math.ceil(total / DEF_SIZE));
+  const filterCount = (filterCategoryIds.length > 0 ? 1 : 0) + (filterKeyword.trim() ? 1 : 0);
+
+  const onReset = useCallback(() => {
+    setFilterCategoryIds([]);
+    setFilterKeyword('');
+    setAppliedCategoryIds([]);
+    setAppliedKeyword('');
+    setPage(1);
+  }, []);
 
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
-        title="流程中心"
-        description="流程定义、画布编排与表单关联配置"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void loadDefinitions()}>
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              刷新
-            </Button>
-          </div>
-        }
+        className="mb-2 shrink-0"
+        hideTitle
+        title="流程定义"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'system', group: '流程中心', title: '流程定义' })}
       />
 
-      <div className="flex flex-nowrap items-center gap-2">
-        <CategoryTreeSelect
-          tree={categoryTree}
-          value={filterCategoryIds.map(String)}
-          onChange={(ids) => setFilterCategoryIds(ids.map(Number))}
-          placeholder="全部分类"
-          triggerClassName="w-56"
-        />
-        <div className="relative shrink-0">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <FilterPanel
+        filterCount={filterCount}
+        onSearch={onSearch}
+        onReset={onReset}
+        actions={
+          <>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+              新建流程
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void loadDefinitions()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              刷新
+            </Button>
+          </>
+        }
+      >
+        <FilterField label="业务分类" col={4}>
+          <CategoryTreeSelect
+            tree={categoryTree}
+            value={filterCategoryIds.map(String)}
+            onChange={(ids) => setFilterCategoryIds(ids.map(Number))}
+            placeholder="全部分类"
+            triggerClassName="w-full"
+          />
+        </FilterField>
+        <FilterField label="名称或编码" col={4} htmlFor="wf-def-kw">
           <Input
+            id="wf-def-kw"
             value={filterKeyword}
             onChange={(e) => setFilterKeyword(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') onSearch();
             }}
             placeholder="流程名称或编码"
-            className="h-9 w-64 pl-8"
+            className={FILTER_FIELD_CONTROL_CLASS}
             aria-label="流程名称或编码"
           />
-        </div>
-        <Button size="sm" variant="secondary" className="shrink-0" onClick={onSearch}>
-          <Search className="mr-1 h-3.5 w-3.5" />
-          查询
-        </Button>
-        <Button size="sm" className="ml-auto shrink-0" onClick={() => setCreateOpen(true)}>
-          <FilePlus2 className="mr-1 h-3.5 w-3.5" />
-          新建流程
-        </Button>
-      </div>
+        </FilterField>
+      </FilterPanel>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
         {loading ? (
@@ -376,7 +391,7 @@ export function WorkflowDefinitionPage() {
         )}
       </div>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-between py-2 text-sm text-muted-foreground">
         <span>
           共 <b className="text-foreground">{total}</b> 条 · 第 {page}/{totalPages} 页
         </span>

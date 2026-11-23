@@ -69,7 +69,7 @@ class McpPermissionServiceTest {
         SecurityContextHolder.clear();
         SecurityContextHolder.setLoginUser(loginUser());
         when(iamWebClient.listApps(1L, null)).thenReturn(List.of(new AppVO(
-                "1", "1", "system", "system", null, null, null, null, null, null, 1, 1)));
+                "1", "1", "system", "system", null, null, null, null, null, null, 1, 1, null)));
     }
 
     @AfterEach

@@ -36,7 +36,9 @@ import java.time.Duration;
         AiTemplateReportProperties.class,
         BankReceiptProperties.class,
         SmpProperties.class,
-        ReconProperties.class
+        ReconProperties.class,
+        SpmProperties.class,
+        ImapProperties.class
 })
 @EnableScheduling
 public class BffConfiguration {

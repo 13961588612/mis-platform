@@ -1,9 +1,13 @@
 package com.mis.iam.controller;
 
 import com.mis.common.core.result.Result;
+import com.mis.iam.dto.AppUpdateRequest;
 import com.mis.iam.dto.AppVO;
 import com.mis.iam.service.AppService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,5 +32,10 @@ public class AppController {
             return Result.ok(appService.listPortalSubsystems(tenantId));
         }
         return Result.ok(appService.listByTenant(tenantId));
+    }
+
+    @PutMapping("/{id}")
+    public Result<AppVO> update(@PathVariable Long id, @RequestBody AppUpdateRequest request) {
+        return Result.ok(appService.update(id, request));
     }
 }

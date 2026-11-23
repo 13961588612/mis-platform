@@ -25,6 +25,8 @@ function emit() {
  */
 const DEV_ENTRY: Record<string, string> = {
   recon: (import.meta.env.VITE_RECON_ENTRY as string | undefined)?.trim() || 'http://localhost:5176',
+  spm: (import.meta.env.VITE_SPM_ENTRY as string | undefined)?.trim() || 'http://localhost:5177',
+  imap: (import.meta.env.VITE_IMAP_ENTRY as string | undefined)?.trim() || 'http://localhost:5178',
 };
 
 /** 注册 runtime === 'remote' 的子应用（门户 / AppLayout 拉清单后调用） */
@@ -86,6 +88,8 @@ export function remoteCodeFromPath(pathname: string): string | null {
  */
 const DEV_DEFAULT_LANDING: Record<string, string> = {
   recon: '/remote/recon/summary',
+  spm: '/remote/spm/home',
+  imap: '/remote/imap',
 };
 
 /**

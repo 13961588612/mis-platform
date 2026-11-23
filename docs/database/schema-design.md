@@ -118,6 +118,9 @@ erDiagram
 | sort | INT | NOT NULL DEFAULT 0 | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | 0=禁用 1=启用 |
 | remark | VARCHAR(512) | NULL | |
+| is_store | SMALLINT | NOT NULL DEFAULT 0 | V176：是否门店 0/1 |
+| store_code | VARCHAR(64) | NULL | V176：门店编号（is_store=1） |
+| store_type | VARCHAR(16) | NULL | V181：门店类型 BGMD/CSMD/WLZS（is_store=1） |
 | deleted | SMALLINT | NOT NULL DEFAULT 0 | |
 | created_by | BIGINT | NULL | |
 | created_at | TIMESTAMPTZ | NOT NULL | |
@@ -126,6 +129,7 @@ erDiagram
 
 **索引：**
 - `uk_org_tenant_code` UNIQUE (tenant_id, code) WHERE deleted=0
+- `uk_org_tenant_store_code` UNIQUE (tenant_id, store_code) WHERE deleted=0 AND is_store=1 AND store_code 非空（V176）
 - `idx_org_tenant` (tenant_id)
 
 > Phase 1 组织为**扁平列表**（无 parent_id）。部门树挂在组织下。
@@ -443,7 +447,7 @@ WHERE a.type = 'api'
 | `menu` | `sys_menu.id` | 1 | 菜单/按钮 → `sys_menu.permission` |
 | `dept` | `sys_dept.id` | 1 | 部门数据范围；多角色 **并集**（S1） |
 | `org` | `sys_org.id` | 1 | 组织数据范围；`data_scope=5` 时与 `dept` 取 **并集** |
-| `store` | 待定 | 2+ | 门店数据权限 |
+| `store` | `sys_org.id`（`is_store=1`） | 1+ | 门店数据权限；V182 起可经 `/permissions/stores` 按类型查询 |
 
 **索引：**
 - `uk_role_perm` UNIQUE (role_id, perm_type, target_id)

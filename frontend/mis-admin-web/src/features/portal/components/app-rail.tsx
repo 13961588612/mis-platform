@@ -4,6 +4,7 @@ import type { AppItem } from '@/types/api';
 import { resolveNavIcon } from '@/lib/nav/icons';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { cn } from '@/lib/utils';
+import { IntranetOnlyBadge } from '@/components/common/intranet-only-badge';
 
 interface AppRailProps {
   apps: AppItem[];
@@ -57,17 +58,19 @@ export function AppRail({ apps, currentAppCode, onEnter }: AppRailProps) {
                     {list.map((app) => {
                       const Icon = resolveNavIcon(app.icon);
                       const active = currentAppCode === app.code;
+                      const blockedUpcoming = !app.enterable && !app.intranetOnly;
                       return (
                         <li key={app.id}>
                           <button
                             type="button"
-                            disabled={!app.enterable}
+                            disabled={blockedUpcoming}
                             onClick={() => onEnter(app)}
                             className={cn(
                               'group flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition',
-                              app.enterable
-                                ? 'hover:bg-muted/70'
-                                : 'cursor-not-allowed opacity-50',
+                              blockedUpcoming
+                                ? 'cursor-not-allowed opacity-50'
+                                : 'hover:bg-muted/70',
+                              app.intranetOnly && !app.enterable && 'ring-1 ring-inset ring-amber-500/35',
                               active && 'bg-primary/8 font-medium text-primary',
                             )}
                           >
@@ -82,9 +85,10 @@ export function AppRail({ apps, currentAppCode, onEnter }: AppRailProps) {
                               <Icon className="h-3.5 w-3.5" />
                             </span>
                             <span className="min-w-0 flex-1 truncate">{app.name}</span>
+                            {app.intranetOnly ? <IntranetOnlyBadge /> : null}
                             {app.enterable ? (
                               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition group-hover:opacity-100" />
-                            ) : (
+                            ) : app.intranetOnly ? null : (
                               <span className="shrink-0 text-[10px] text-muted-foreground">即将上线</span>
                             )}
                           </button>

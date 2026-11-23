@@ -34,6 +34,8 @@ import java.util.stream.Collectors;
 @Service
 public class OrgService {
 
+    private static final Set<String> STORE_TYPES = Set.of("BGMD", "CSMD", "WLZS");
+
     private final SysOrgRepository orgRepository;
     private final SysDeptRepository deptRepository;
     private final SysDeptCategoryRepository categoryRepository;
@@ -91,6 +93,7 @@ public class OrgService {
         org.setSort(request.sort() != null ? request.sort() : 0);
         org.setStatus(1);
         org.setRemark(request.remark());
+        applyStoreFields(org, request.isStore(), request.storeCode(), request.storeType(), true);
         org.setDeleted(0);
         org.setCreatedAt(now);
         org.setUpdatedAt(now);
@@ -135,6 +138,9 @@ public class OrgService {
         }
         if (request.remark() != null) {
             org.setRemark(request.remark());
+        }
+        if (request.isStore() != null || request.storeCode() != null || request.storeType() != null) {
+            applyStoreFields(org, request.isStore(), request.storeCode(), request.storeType(), false);
         }
         org.setUpdatedAt(Instant.now());
         orgRepository.save(org);
@@ -246,6 +252,38 @@ public class OrgService {
                 .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "租户未配置部门类别"));
     }
 
+    private void applyStoreFields(
+            SysOrg org, Integer isStore, String storeCode, String storeType, boolean creating) {
+        int flag = isStore != null ? isStore : (org.getIsStore() != null ? org.getIsStore() : 0);
+        if (flag != 0 && flag != 1) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "是否门店只能为 0 或 1");
+        }
+        String code = storeCode != null ? storeCode.trim() : org.getStoreCode();
+        String type = storeType != null ? storeType.trim().toUpperCase() : org.getStoreType();
+        if (flag == 1) {
+            if (code == null || code.isBlank()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "门店组织必须填写门店编号");
+            }
+            if (type == null || type.isBlank()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "门店组织必须选择门店类型");
+            }
+            if (!STORE_TYPES.contains(type)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "门店类型无效，可选：BGMD/CSMD/WLZS");
+            }
+            org.setIsStore(1);
+            org.setStoreCode(code);
+            org.setStoreType(type);
+        } else {
+            org.setIsStore(0);
+            org.setStoreCode(creating || isStore != null ? null : org.getStoreCode());
+            org.setStoreType(creating || isStore != null ? null : org.getStoreType());
+            if (isStore != null && isStore == 0) {
+                org.setStoreCode(null);
+                org.setStoreType(null);
+            }
+        }
+    }
+
     private OrgVO toVo(SysOrg org) {
         return new OrgVO(
                 String.valueOf(org.getId()),
@@ -256,6 +294,9 @@ public class OrgService {
                 org.getSort(),
                 org.getStatus(),
                 org.getRemark(),
+                org.getIsStore() == null ? 0 : org.getIsStore(),
+                org.getStoreCode(),
+                org.getStoreType(),
                 org.getCreatedAt(),
                 org.getUpdatedAt());
     }

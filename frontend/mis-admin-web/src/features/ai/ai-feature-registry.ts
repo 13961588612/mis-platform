@@ -5,22 +5,6 @@ import type { AiFeatureDeclaration } from './types';
  * 双向对齐后端 CapabilityMeta；前端业务页只写 <AiFeature feature="...">。
  */
 export const AI_FEATURES: Record<string, AiFeatureDeclaration> = {
-  // UC-1 表单智能填充
-  'form-fill': {
-    key: 'form-fill',
-    capability: 'extract',
-    mountPoint: 'form-top',
-    title: 'AI 填充',
-    fallback: 'hide',
-  },
-  // UC-3 文本/文档抽取
-  'text-extract': {
-    key: 'text-extract',
-    capability: 'extract',
-    mountPoint: 'form-top',
-    title: '智能录入',
-    fallback: 'hide',
-  },
   // UC-2 记录智能摘要
   'detail-summary': {
     key: 'detail-summary',
@@ -52,14 +36,6 @@ export const AI_FEATURES: Record<string, AiFeatureDeclaration> = {
     capability: 'nl2sql',
     mountPoint: 'list-top-right',
     title: 'AI 查数',
-    fallback: 'hide',
-  },
-  // F9 Skill Fill（实体映射 HITL 填充）
-  'skill-fill': {
-    key: 'skill-fill',
-    capability: 'extract',
-    mountPoint: 'form-top',
-    title: '智能填充',
     fallback: 'hide',
   },
 };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Eye,
   KeyRound,
@@ -29,16 +29,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import type { AdminField, AdminPageDef } from '@/features/system/types';
 import { AiFeature } from '@/features/ai/components/ai-feature';
-import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
 import { AiRag } from '@/features/ai/components/ai-rag';
-import {
-  FormFillBridgeProvider,
-  toFormFieldSchema,
-  type FormFillBridge,
-} from '@/features/ai/context/form-fill-bridge';
 import { listOrgs } from '@/lib/api/orgs';
 import { fetchApps } from '@/lib/api/platform';
 import { DeptTreeSelect } from '@/components/common/dept-tree-select';
@@ -151,7 +144,6 @@ export function UserListPage() {
   const [editing, setEditing] = useState<UserView | null>(null);
   const [viewing, setViewing] = useState<UserView | null>(null);
   const [saving, setSaving] = useState(false);
-  const [aiAssistOpen, setAiAssistOpen] = useState(false);
   const [aiRagOpen, setAiRagOpen] = useState(false);
   const [form, setForm] = useState<UserFormState>({
     username: '',
@@ -227,56 +219,6 @@ export function UserListPage() {
   }, []);
   const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
 
-  // 最小合法 AdminPageDef：仅用于驱动 AI 表单回填桥接（schema 真源 = 本页表单字段）
-  const userAiDef = useMemo<AdminPageDef>(
-    () => ({
-      id: 'user',
-      group: '',
-      title: '用户',
-      description: '',
-      columns: [],
-      form: [
-        { key: 'username', label: '用户名', type: 'text', required: true },
-        { key: 'realName', label: '姓名', type: 'text', required: true },
-        { key: 'email', label: '邮箱', type: 'text' },
-        { key: 'phone', label: '手机', type: 'text' },
-      ] as AdminField[],
-      sample: [],
-    }),
-    [],
-  );
-
-  // 表单回填桥接：桥接 AI 组件与当前 form 状态（schema 真源 = userAiDef.form）
-  const bridge = useMemo<FormFillBridge>(
-    () => ({
-      def: userAiDef,
-      getSchema: () => toFormFieldSchema(userAiDef.form),
-      getValues: () => form as unknown as Record<string, unknown>,
-      applyFields: (partial) => {
-        setForm((prev) => {
-          const next = { ...prev };
-          for (const [k, s] of Object.entries(partial)) {
-            const val = s.value;
-            if (k === 'roleIds') {
-              const arr = Array.isArray(val)
-                ? val.map(String)
-                : String(val)
-                    .split(/[,，]/)
-                    .map((x) => x.trim())
-                    .filter(Boolean);
-              next.roleIds = arr;
-            } else if (k === 'username' || k === 'realName' || k === 'email' || k === 'phone') {
-              next[k] = String(val);
-            }
-          }
-          return next;
-        });
-      },
-      openCreate: () => openCreate(),
-    }),
-    [userAiDef, form, openCreate],
-  );
-
   const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
@@ -323,7 +265,7 @@ export function UserListPage() {
     void loadUsers();
   }, [loadUsers]);
 
-  function openCreate(opts?: { withAssist?: boolean }) {
+  function openCreate() {
     setMode('create');
     setEditing(null);
     setForm({
@@ -344,7 +286,6 @@ export function UserListPage() {
     setBoundEmployee(null);
     setPickerOpen(false);
     loadForceBind();
-    setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
   }
 
@@ -381,7 +322,6 @@ export function UserListPage() {
     );
     setPickerOpen(false);
     loadForceBind();
-    setAiAssistOpen(false);
     setSheetOpen(true);
 
     // Bug1 修复：编辑态下补拉员工详情，补全任职信息卡片的 posts。
@@ -450,18 +390,10 @@ export function UserListPage() {
     setSheetOpen(true);
   }
 
-  // UC-3 智能录入：打开新增表单，并在右侧展开辅助录入
-  const openSmartImport = () => {
-    openCreate({ withAssist: true });
-  };
-
   const closeSheet = (open: boolean) => {
     setSheetOpen(open);
-    if (!open) setAiAssistOpen(false);
   };
 
-  const formModes = mode === 'create' || mode === 'edit' || mode === 'perms';
-  const splitAssist = (mode === 'create' || mode === 'edit') && aiAssistOpen;
   // 已绑定员工的用户：姓名/手机由员工模块维护，禁止在前端修改（与后端双保险，Req4）
   // 强制绑定模式：员工来源唯一，手机号/姓名/邮箱由员工主数据提供且不可编辑
   const isForce = forceBindEmp;
@@ -675,7 +607,6 @@ export function UserListPage() {
   const dataCols = USER_COLUMNS.filter((c) => !c.locked);
 
   return (
-    <FormFillBridgeProvider value={bridge}>
       <div className="flex min-h-0 flex-1 flex-col">
         <PageHeader
           title="用户管理"
@@ -694,12 +625,6 @@ export function UserListPage() {
                   新增用户
                 </Button>
               </PermissionGate>
-              <AiFeature feature="text-extract">
-                <Button type="button" variant="outline" className={HEADER_ACTION_BTN_CLASS} onClick={openSmartImport}>
-                  <Sparkles className="h-4 w-4" />
-                  智能录入
-                </Button>
-              </AiFeature>
             </div>
           }
         />
@@ -957,12 +882,7 @@ export function UserListPage() {
         </div>
 
         <Sheet open={sheetOpen} onOpenChange={closeSheet}>
-          <SheetContent
-            className={cn(
-              'flex w-full flex-col',
-              splitAssist ? 'sm:max-w-4xl' : 'sm:max-w-md',
-            )}
-          >
+          <SheetContent className="flex w-full flex-col sm:max-w-md">
             <SheetHeader>
               <SheetTitle>
                 {mode === 'create'
@@ -975,33 +895,8 @@ export function UserListPage() {
               </SheetTitle>
             </SheetHeader>
 
-            {formModes && mode !== 'perms' && (
-              <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2">
-                <AiFeature feature="text-extract">
-                  <Button
-                    variant={aiAssistOpen ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setAiAssistOpen((v) => !v)}
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    {aiAssistOpen ? '收起辅助' : '辅助录入'}
-                  </Button>
-                </AiFeature>
-                <span className="text-xs text-muted-foreground">
-                  {aiAssistOpen
-                    ? '右侧抽取后自动填入左侧表单，请核对后保存'
-                    : '打开后在右侧粘贴/上传，识别结果写入左侧'}
-                </span>
-              </div>
-            )}
-
-            <div className={cn('flex min-h-0 flex-1', splitAssist ? 'flex-row' : 'flex-col')}>
-              <div
-                className={cn(
-                  'flex min-h-0 min-w-0 flex-col',
-                  splitAssist ? 'w-1/2 border-r' : 'flex-1',
-                )}
-              >
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div className={SHEET_FORM_BODY}>
                   {mode === 'detail' && viewing ? (
                     <UserDetail viewing={viewing} onAiRag={() => setAiRagOpen(true)} />
@@ -1226,16 +1121,6 @@ export function UserListPage() {
                   )}
                 </SheetFooter>
               </div>
-
-              {splitAssist ? (
-                <div className="flex w-1/2 min-h-0 min-w-0 flex-col bg-muted/10">
-                  <AiTextExtract
-                    embedded
-                    autoApplyOnDone
-                    onClose={() => setAiAssistOpen(false)}
-                  />
-                </div>
-              ) : null}
             </div>
           </SheetContent>
         </Sheet>
@@ -1259,7 +1144,6 @@ export function UserListPage() {
           </SheetContent>
         </Sheet>
       </div>
-    </FormFillBridgeProvider>
   );
 }
 

@@ -8,7 +8,6 @@ import type { AiCapability, AiError, UseAIOptions, UseAIResult } from './types';
 const ENDPOINT: Record<AiCapability, string> = {
   chat: '/ai/chat/completions',
   summary: '/ai/summary',
-  extract: '/ai/extract',
   rag: '/ai/rag',
 };
 
@@ -47,7 +46,7 @@ function buildBody(o: UseAIOptions<unknown>, ctx: ReturnType<typeof useAiContext
 
 /**
  * 统一 AI 调用 Hook：封装非流式/流式、JWT、错误、降级。
- * - 非流式（extract/summary/rag）：复用 api 客户端，统一解包 ApiResult。
+ * - 非流式（summary/rag）：复用 api 客户端，统一解包 ApiResult。
  * - 流式（chat）：调用 aiFetchEventSource（T-stream 就绪后启用；本期 Copilot 走非流式 MVP）。
  */
 export function useAI<TReq, TResp = unknown>(opts: UseAIOptions<TReq>): UseAIResult<TResp> {

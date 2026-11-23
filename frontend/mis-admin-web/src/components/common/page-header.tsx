@@ -29,8 +29,8 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        'mb-4 flex flex-wrap justify-between gap-3',
-        hideTitle ? 'items-center' : 'items-end',
+        'flex flex-wrap justify-between',
+        hideTitle ? 'mb-2 items-center gap-2' : 'mb-4 items-end gap-3',
         className,
       )}
     >

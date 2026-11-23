@@ -4,17 +4,14 @@
  */
 
 /** AI 能力类型（对应 BFF 端点） */
-export type AiCapability = 'chat' | 'summary' | 'extract' | 'rag';
+export type AiCapability = 'chat' | 'summary' | 'rag';
 
 /** 注册表 feature 键 */
 export type AiFeatureKey =
-  | 'form-fill'
-  | 'text-extract'
   | 'detail-summary'
   | 'rag-qa'
   | 'copilot'
-  | 'nl2sql'
-  | 'skill-fill';
+  | 'nl2sql';
 
 /** 入口降级策略 */
 export type AiFallback = 'hide' | 'disable' | 'message';
@@ -33,23 +30,6 @@ export interface AiPageContext {
   module?: string;
   record?: Record<string, unknown> | null;
   selectedRows?: Record<string, unknown>[];
-}
-
-/** 表单字段 schema（由 AdminField 映射，作为 extract 输入真源） */
-export type FormFieldType = 'string' | 'number' | 'select' | 'switch' | 'textarea';
-
-export interface FormFieldSchema {
-  name: string;
-  label: string;
-  type: FormFieldType;
-  options?: { value: unknown; label: string }[];
-  required?: boolean;
-}
-
-/** 字段回填建议单元（HITL 仅确认项落值） */
-export interface FieldSuggestion {
-  value: unknown;
-  confidence: number;
 }
 
 export type AiErrorKind = 'network' | 'timeout' | 'business' | 'gate';
@@ -83,15 +63,6 @@ export interface UseAIResult<TResp> {
   unavailable: boolean;
   /** 触发请求（可覆盖 options 局部字段） */
   run: (overrides?: Partial<UseAIOptions<unknown>>) => Promise<void>;
-}
-
-/** extract 响应（兼容 T-ext 前的标量 confidence） */
-export interface ExtractResponse {
-  fields: Record<string, unknown>;
-  /** T-ext 前为标量 number；T-ext 后为 Record<string, number> */
-  confidence: number | Record<string, number>;
-  unmapped?: Array<{ raw: string; hint?: string }>;
-  sessionId?: string;
 }
 
 /** 摘要要点（MVP 兼容 List<String>，T-sum 后支持结构化 label/value/risk） */

@@ -49,16 +49,17 @@ import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
 import { IQD_NAV } from '@/lib/nav/iqd-nav';
 import { FINANCE_NAV } from '@/lib/nav/finance-nav';
-import { resolveActiveHostAppCode, resolveAppEntry } from '@/lib/nav/host-apps';
+import { resolveActiveHostAppCode } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import {
   getRemoteApp,
   registerRemoteApps,
   remoteCodeFromPath,
-  resolveRemoteEntry,
 } from '@/lib/nav/remote-apps';
 import { useTabStore } from '@/stores/tab-store';
+import { guardIntranetLocation, navigateIntoApp, setAppCatalog, tryEnterApp } from '@/lib/nav/intranet-app';
+import { IntranetOnlyBadge } from '@/components/common/intranet-only-badge';
 
 /** 原型 .btn.btn-ghost：text-sm / font-medium / gap-2 / 无描边 */
 const shellBtn =
@@ -104,7 +105,7 @@ export function AppLayout() {
   // 守卫，这里把子应用目标路径同步回 React Router。
   useEffect(() => {
     const unlisten = microApp.router?.afterEach?.((to, _from, appName) => {
-      if (appName !== 'recon') return;
+      if (!appName || !getRemoteApp(String(appName))) return;
       const target = `${String(to?.pathname ?? '')}${String(to?.search ?? '')}`;
       if (target && target !== `${location.pathname}${location.search}`) {
         navigate(target);
@@ -249,11 +250,17 @@ export function AppLayout() {
     void fetchApps()
       .then((data) => {
         setApps(data);
+        setAppCatalog(data);
         registerIframeApps(data);
         registerRemoteApps(data);
       })
       .catch(() => setApps([]));
   }, []);
+
+  useEffect(() => {
+    if (apps.length === 0) return;
+    guardIntranetLocation(location.pathname, navigate);
+  }, [apps, location.pathname, navigate]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -346,9 +353,8 @@ export function AppLayout() {
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
           </button>
           {switcherOpen ? (
-            // ② 下拉由单列纵向改为**每行两列**：分组标题仍独占一行（保留 APP_GROUP_LABEL
-            // 的分组语义），组内项用 `grid grid-cols-2` 排两列；宽度 w-64 → w-80 容纳两列。
-            <div className="absolute left-0 top-full z-50 mt-1 max-h-80 w-80 overflow-y-auto rounded-md border bg-popover p-1 shadow-card">
+            // 两列；标题与标签紧挨（不用 flex-1/ml-auto 拉开间距）；面板随内容增高，不出现滚动条。
+            <div className="absolute left-0 top-full z-50 mt-1 w-[28rem] overflow-visible rounded-md border bg-popover p-1 shadow-card">
               {appsByGroup.map(([group, list]) => (
                 <div key={group} className="mb-1 last:mb-0">
                   <div className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -357,36 +363,28 @@ export function AppLayout() {
                   <div className="grid grid-cols-2 gap-1">
                     {list.map((item) => {
                       const Icon = resolveNavIcon(item.icon);
+                      const blockedUpcoming = !item.enterable && !item.intranetOnly;
                       return (
                         <button
                           key={item.id}
                           type="button"
-                          disabled={!item.enterable}
+                          disabled={blockedUpcoming}
+                          title={item.name}
                           className={cn(
-                            'flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
+                            'flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-2 text-left text-sm',
                             item.code === activeAppCode ? 'bg-accent' : 'hover:bg-accent',
-                            !item.enterable && 'cursor-not-allowed opacity-50',
+                            blockedUpcoming && 'cursor-not-allowed opacity-50',
                           )}
                           onClick={() => {
                             setSwitcherOpen(false);
-                            if (!item.enterable) return;
-                            if (item.runtime === 'iframe' && item.basePath) {
-                              navigate(`/iframe/${item.code}`);
-                              return;
-                            }
-                            if (item.runtime === 'remote') {
-                              navigate(resolveRemoteEntry(item.code));
-                              return;
-                            }
-                            if (item.code === 'system' || item.runtime === 'host') {
-                              navigate(resolveAppEntry(item.code, item.basePath));
-                            }
+                            tryEnterApp(item, (ok) => navigateIntoApp(navigate, ok));
                           }}
                         >
                           <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                          {!item.enterable ? (
-                            <span className="text-[10px] text-muted-foreground">即将上线</span>
+                          <span className="min-w-0 truncate text-left leading-5">{item.name}</span>
+                          {item.intranetOnly ? <IntranetOnlyBadge compact /> : null}
+                          {!item.enterable && !item.intranetOnly ? (
+                            <span className="shrink-0 text-[10px] text-muted-foreground">即将上线</span>
                           ) : null}
                         </button>
                       );

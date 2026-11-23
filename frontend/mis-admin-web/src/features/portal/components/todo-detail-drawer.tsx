@@ -10,6 +10,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { OpenAppButton } from '@/components/common/open-app-button';
 import { ProcessShell } from '@/features/taskflow/process-shell';
 import type { WfInstance } from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
@@ -117,12 +118,15 @@ export function TodoDetailDrawer({ open, onOpenChange, instanceId, onDone }: Tod
           )}
         </div>
 
-        {instanceId ? (
+        {instanceId || header?.appCode ? (
           <SheetFooter>
-            <Button variant="outline" size="sm" onClick={openFullPage}>
-              <ExternalLink className="mr-1 h-3.5 w-3.5" />
-              在完整页打开
-            </Button>
+            <OpenAppButton appCode={header?.appCode} />
+            {instanceId ? (
+              <Button variant="outline" size="sm" onClick={openFullPage}>
+                <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                在完整页打开
+              </Button>
+            ) : null}
           </SheetFooter>
         ) : null}
       </SheetContent>

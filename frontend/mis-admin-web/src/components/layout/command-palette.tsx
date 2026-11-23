@@ -8,6 +8,8 @@ import { buildSearchIndex, groupLabel } from '@/lib/search/search-registry';
 import type { SearchItem } from '@/lib/search/types';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
 import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
+import { toast } from 'sonner';
+import { INTRANET_ONLY_HINT, isIntranetPathBlocked } from '@/lib/nav/intranet-app';
 
 interface CommandPaletteProps {
   open: boolean;
@@ -81,7 +83,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       navigate('/portal');
       return;
     }
-    if (item.path) navigate(item.path);
+    if (item.path) {
+      if (isIntranetPathBlocked(item.path)) {
+        toast.error(INTRANET_ONLY_HINT);
+        return;
+      }
+      navigate(item.path);
+    }
   };
 
   return (

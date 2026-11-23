@@ -10,6 +10,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { OpenAppButton } from '@/components/common/open-app-button';
 import { ListError } from '@/components/common/empty-state';
 import { ProcessShell } from '@/features/taskflow/process-shell';
 import {
@@ -240,12 +241,15 @@ export function MessageDetailDrawer({
           ) : null}
         </div>
 
-        {hasProcess ? (
+        {hasProcess || detail?.appCode ? (
           <SheetFooter>
-            <Button variant="outline" size="sm" onClick={openFullPage}>
-              <ExternalLink className="mr-1 h-3.5 w-3.5" />
-              在完整页打开
-            </Button>
+            <OpenAppButton appCode={detail?.appCode ?? header?.appCode} />
+            {hasProcess ? (
+              <Button variant="outline" size="sm" onClick={openFullPage}>
+                <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                在完整页打开
+              </Button>
+            ) : null}
           </SheetFooter>
         ) : null}
       </SheetContent>

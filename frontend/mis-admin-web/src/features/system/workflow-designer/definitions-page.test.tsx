@@ -191,7 +191,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     await screen.findByText('采购审批流程');
     expect(screen.queryByText('发布')).toBeNull();
     expect(screen.queryByText('取消发布')).toBeNull();
-    expect(screen.queryByText('关联表单')).toBeNull();
+    expect(screen.queryByRole('button', { name: '查看关联表单' })).toBeNull();
   });
 
   it('有权限时显示「关联表单」并打开弹窗', async () => {
@@ -203,8 +203,8 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     });
     renderPage();
 
-    fireEvent.click(await screen.findByText('关联表单'));
-    await waitFor(() => expect(screen.getByText(/一个表单只能关联一个流程/)).toBeTruthy());
+    fireEvent.click(await screen.findByRole('button', { name: '查看关联表单' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '关联表单' })).toBeTruthy());
   });
 
   it('勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙', async () => {

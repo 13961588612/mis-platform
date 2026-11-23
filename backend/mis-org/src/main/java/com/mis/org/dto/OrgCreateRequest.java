@@ -11,6 +11,12 @@ public record OrgCreateRequest(
         Long parentId,
         Integer sort,
         String remark,
+        /** 是否门店：0/1 */
+        Integer isStore,
+        /** 门店编号（is_store=1 必填） */
+        String storeCode,
+        /** 门店类型：BGMD/CSMD/WLZS（is_store=1 必填） */
+        String storeType,
         /** 根部门类别；为空则取租户 headquarters 或首个启用类别 */
         Long categoryId
 ) {}

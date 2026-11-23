@@ -175,6 +175,17 @@ mis:
     base-url: ${RECON_BASE_URL:http://localhost:8111}
     # 对账引擎查询/拉取为真实 DB 操作，3s（aggregate-timeout-ms）会误判超时
     timeout-ms: ${RECON_TIMEOUT_MS:15000}
+  spm:
+    # 超市运营（独立仓 mis-spm-biz / spm-service）。与 mis.bff.smp（老 SMP 鉴权）无关。
+    base-url: ${SPM_BASE_URL:http://localhost:8112}
+    timeout-ms: ${SPM_TIMEOUT_MS:15000}
+    intranet-only: ${SPM_INTRANET_ONLY:true}
+    # extra-allowed-cidrs: ["203.0.113.0/24"]
+  imap:
+    # 室内地图（独立仓 indoor-map Nest）。BFF /api/v1/imap/** → Nest /api/v1/**
+    base-url: ${IMAP_BASE_URL:http://localhost:3000}
+    timeout-ms: ${IMAP_TIMEOUT_MS:15000}
+    intranet-only: ${IMAP_INTRANET_ONLY:true}
   mcp:
     servers:
       org: http://localhost:8103

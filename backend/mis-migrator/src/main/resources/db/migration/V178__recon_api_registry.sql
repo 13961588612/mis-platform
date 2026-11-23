@@ -1,8 +1,9 @@
 -- ===========================================================================
--- V83__recon_api_registry.sql —— 对账平台（recon）BFF 透传端点登记与权限
+-- V178__recon_api_registry.sql —— 对账平台（recon）BFF 透传端点登记与权限
 -- PostgreSQL 16 | 库名: mis_platform
--- 背景：本文件合并原 V48__recon_api_registry 全部注册内容并做三处演进：
---       1) 版本号 V48 与 master 的 V48__employee_builtin_flag 撞号，改 V83；
+-- 背景：本文件合并原 V48__recon_api_registry 全部注册内容并做演进：
+--       1) 版本号 V48 与 master 的 V48__employee_builtin_flag 撞号，曾改 V83；
+--          又与 V83__iqd_mcp_status_port 撞号，再改 V178；
 --       2) sys_menu id 93030 已被 iqd（app=93010）占用，目录改用 93035；
 --       3) 【本次】三个配置菜单（连接管理/数据源管理/场景与检查）需要区分
 --          权限：无 view 码的用户看不到菜单、也调不了对应 API。故在 4 条
@@ -19,7 +20,7 @@
 --     /api/v1/recon/** 四条 authOnly 通配兜底，再叠加配置类细分规则即可
 --     实现"配置类需码、其余 authOnly"，且不会因拆分遗漏端点导致 403。
 --
--- 【段位（数据库实测，V82 为当前最新）】
+-- 【段位（菜单/API 号段；脚本版本为 V178）】
 --   sys_module  93020
 --   sys_menu    93035 目录 + 93036-93038 页面(view) + 93046-93054 按钮(write/delete/pull/run/confirm)
 --   sys_api     93090 catalog + 93091-93094 authOnly 通配 + 93100-93121 配置类细分

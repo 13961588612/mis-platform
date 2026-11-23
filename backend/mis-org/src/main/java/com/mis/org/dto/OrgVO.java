@@ -11,6 +11,10 @@ public record OrgVO(
         Integer sort,
         Integer status,
         String remark,
+        Integer isStore,
+        String storeCode,
+        /** 门店类型：BGMD/CSMD/WLZS */
+        String storeType,
         Instant createdAt,
         Instant updatedAt
 ) {}

@@ -65,6 +65,10 @@ export interface AdminPageDef {
   group: string;
   title: string;
   description: string;
+  /** 隐藏面包屑下的大标题与副标题 */
+  hideTitle?: boolean;
+  /** 新建等操作放到筛选条「查询」同一行，而不是页头 */
+  actionsInFilterBar?: boolean;
   readonly?: boolean;
   filters?: AdminField[];
   columns: AdminColumn[];

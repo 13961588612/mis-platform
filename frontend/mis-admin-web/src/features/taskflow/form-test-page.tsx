@@ -6,8 +6,10 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FilePlus2, RefreshCw, Search, Sparkles } from 'lucide-react';
+import { FilePlus2, RefreshCw, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
+import { FilterField, FilterPanel, FILTER_FIELD_CONTROL_CLASS } from '@/components/common/filter-panel';
 import { PageHeader } from '@/components/common/page-header';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
 import { PaginationFooter } from '@/components/common/pagination-footer';
@@ -369,6 +371,17 @@ export function FormTestPage() {
     setKeyword(keywordDraft.trim());
   }
 
+  function onReset() {
+    setKeywordDraft('');
+    setKeyword('');
+    setStatusFilter('');
+    setFormCodeFilter('');
+    setPage(1);
+  }
+
+  const filterCount =
+    (keywordDraft.trim() ? 1 : 0) + (statusFilter ? 1 : 0) + (formCodeFilter ? 1 : 0);
+
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
   const [listFields, setListFields] = useState<FormFieldSchema[]>([]);
@@ -402,36 +415,36 @@ export function FormTestPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
+        className="mb-2 shrink-0"
+        hideTitle
         title="测试表单"
-        description="保存写入专用宽表；发起挂流程；撤回后回保存态可改再发。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'system', group: '表单管理', title: '测试表单' })}
       />
 
-      <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        PUR_FORM 已接结构化宽表 <code className="mx-0.5">biz_form_pur_form</code>。使用前请确认
-        <Link className="mx-1 text-primary underline-offset-2 hover:underline" to="/system/forms">
-          表单注册
-        </Link>
-        与
-        <Link
-          className="mx-1 text-primary underline-offset-2 hover:underline"
-          to="/system/workflow/definitions"
-        >
-          流程定义
-        </Link>
-        已关联发布。当前可提交 {metaLoading ? '…' : boundOptions.length} 个表单。
-      </div>
-
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
-          <label htmlFor="ft-kw" className="text-xs text-muted-foreground">
-            关键字
-          </label>
+      <FilterPanel
+        filterCount={filterCount}
+        onSearch={onSearch}
+        onReset={onReset}
+        actions={
+          <>
+            <Button type="button" size="sm" onClick={openCreate}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+              新建单据
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadList()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              刷新
+            </Button>
+          </>
+        }
+      >
+        <FilterField label="关键字" col={3} htmlFor="ft-kw">
           <Input
             id="ft-kw"
             aria-label="关键字"
-            className="h-8 w-48"
+            className={FILTER_FIELD_CONTROL_CLASS}
             placeholder="标题 / 单据号"
             value={keywordDraft}
             onChange={(e) => setKeywordDraft(e.target.value)}
@@ -439,15 +452,12 @@ export function FormTestPage() {
               if (e.key === 'Enter') onSearch();
             }}
           />
-        </div>
-        <div className="space-y-1">
-          <label htmlFor="ft-status" className="text-xs text-muted-foreground">
-            单据状态
-          </label>
+        </FilterField>
+        <FilterField label="单据状态" col={3} htmlFor="ft-status">
           <select
             id="ft-status"
             aria-label="单据状态"
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            className={FILTER_FIELD_CONTROL_CLASS}
             value={statusFilter}
             onChange={(e) => {
               setPage(1);
@@ -460,15 +470,12 @@ export function FormTestPage() {
             <option value="APPROVED">已通过</option>
             <option value="REJECTED">已驳回</option>
           </select>
-        </div>
-        <div className="space-y-1">
-          <label htmlFor="ft-form-filter" className="text-xs text-muted-foreground">
-            表单
-          </label>
+        </FilterField>
+        <FilterField label="表单" col={4} htmlFor="ft-form-filter">
           <select
             id="ft-form-filter"
             aria-label="表单筛选"
-            className="h-8 max-w-[200px] rounded-md border border-input bg-background px-2 text-sm"
+            className={FILTER_FIELD_CONTROL_CLASS}
             value={formCodeFilter}
             onChange={(e) => {
               setPage(1);
@@ -482,20 +489,22 @@ export function FormTestPage() {
               </option>
             ))}
           </select>
-        </div>
-        <Button type="button" variant="outline" size="sm" className="h-8 gap-1" onClick={onSearch}>
-          <Search className="h-3.5 w-3.5" />
-          查询
-        </Button>
-        <Button type="button" variant="outline" size="sm" className="h-8 gap-1" onClick={() => void loadList()}>
-          <RefreshCw className="h-3.5 w-3.5" />
-          刷新
-        </Button>
-        <div className="flex-1" />
-        <Button type="button" size="sm" className="h-8 gap-1" onClick={openCreate}>
-          <FilePlus2 className="h-3.5 w-3.5" />
-          新建单据
-        </Button>
+        </FilterField>
+      </FilterPanel>
+
+      <div className="mb-4 shrink-0 rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+        PUR_FORM 已接结构化宽表 <code className="mx-0.5">biz_form_pur_form</code>。使用前请确认
+        <Link className="mx-1 text-primary underline-offset-2 hover:underline" to="/system/forms">
+          表单注册
+        </Link>
+        与
+        <Link
+          className="mx-1 text-primary underline-offset-2 hover:underline"
+          to="/system/workflow/definitions"
+        >
+          流程定义
+        </Link>
+        已关联发布。当前可提交 {metaLoading ? '…' : boundOptions.length} 个表单。
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">

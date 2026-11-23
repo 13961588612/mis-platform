@@ -55,6 +55,9 @@ public class OrgFacadeService {
         body.put("parentId", request.parentId());
         body.put("sort", request.sort());
         body.put("remark", request.remark());
+        body.put("isStore", request.isStore());
+        body.put("storeCode", request.storeCode());
+        body.put("storeType", request.storeType());
         body.put("categoryId", request.categoryId());
         return orgWebClient.createOrg(body);
     }
@@ -66,6 +69,9 @@ public class OrgFacadeService {
         body.put("sort", request.sort());
         body.put("status", request.status());
         body.put("remark", request.remark());
+        body.put("isStore", request.isStore());
+        body.put("storeCode", request.storeCode());
+        body.put("storeType", request.storeType());
         return orgWebClient.updateOrg(id, body);
     }
 

@@ -8,5 +8,8 @@ public record OrgUpdateRequest(
         Long parentId,
         Integer sort,
         Integer status,
-        String remark
+        String remark,
+        Integer isStore,
+        String storeCode,
+        String storeType
 ) {}
