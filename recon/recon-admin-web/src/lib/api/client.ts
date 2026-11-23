@@ -28,18 +28,18 @@ const AUTH_CODES = [40100, 40101, 40104];
 
 /** 平台 JWT（micro-app 嵌入时由壳子下发；独立运行无认证） */
 let authToken: string | null = null;
+/** 401 联动（防抖）：壳内跳壳子登录页；独立运行提示改走平台（避免并发请求多次跳转） */
+let authRedirecting = false;
 
-/** 设置/清除认证令牌（壳子经 microApp.setData 下发后写入） */
+/** 设置/清除认证令牌（壳子经 microApp.setData 下发后写入）。新令牌到达后允许再次 401 处理。 */
 export function setAuthToken(token: string | null) {
   authToken = token;
+  if (token) authRedirecting = false;
 }
 
 export function getAuthToken(): string | null {
   return authToken;
 }
-
-/** 401 联动（防抖）：壳内跳壳子登录页；独立运行提示改走平台（避免并发请求多次跳转） */
-let authRedirecting = false;
 function handleUnauthorized(message: string) {
   if (authRedirecting) return;
   authRedirecting = true;

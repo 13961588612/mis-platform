@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAiStore } from '@/stores/ai-store';
 import { logout } from '@/lib/api/auth';
+import { destroyRemoteMicroApps } from '@/lib/nav/destroy-remote-apps';
 import { fetchApps } from '@/lib/api/platform';
 import type { AppItem } from '@/types/api';
 import { Button } from '@/components/ui/button';
@@ -285,6 +286,7 @@ export function AppLayout() {
 
   const handleLogout = async () => {
     await logout();
+    destroyRemoteMicroApps();
     clearSession();
     navigate('/login', { replace: true });
   };

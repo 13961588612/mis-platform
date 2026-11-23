@@ -24,6 +24,8 @@ declare global {
         iframe?: boolean;
         /** 子应用首次挂载完成回调（keep-alive-outlet 用于下发会话令牌） */
         onMounted?: () => void;
+        /** keep-alive 从缓存唤回（重登后再进 APP 不会再走 mounted） */
+        onAftershow?: () => void;
       };
     }
   }

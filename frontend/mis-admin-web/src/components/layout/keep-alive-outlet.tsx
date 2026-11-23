@@ -134,26 +134,22 @@ function IframePage({ basePath, title }: { basePath: string; title: string }) {
 /**
  * micro-app 远程子应用：壳内融合渲染（独立运行时，与 React 组件不同生命周期）。
  * baseroute 下发为子应用 __MICRO_APP_BASE_ROUTE__；keep-alive 由 micro-app 内置保活。
- * 令牌：子应用启动经 getData/addDataListener 接收 setData 下发的 AUTH_TOKEN。
+ * 令牌：getData/addDataListener 接收 forceSetData 下发的 AUTH_TOKEN（含 keep-alive aftershow）。
  */
 function RemotePage({ code }: { code: string }) {
   const meta = getRemoteApp(code);
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const permissions = useAuthStore((s) => s.permissions);
-  // iframe 模式下 setData 早于子应用就绪会丢数据（无 web-component 模式的缓存补投递），
-  // 因此在 micro-app mounted 事件（iframe 加载完成、子应用 main.tsx 已执行）时
-  // 用 forceSetData 强制重发一次，确保会话数据必达。
+  // iframe 模式下 setData 早于子应用就绪会丢；keep-alive 唤回只走 aftershow、不走 mounted。
+  // 一律 forceSetData：令牌变化、首次 mounted、缓存 aftershow 都把当前会话推给子应用。
   const pushSession = useCallback(() => {
     if (!token) return;
     microApp.forceSetData(code, { type: 'AUTH_TOKEN', token, user, permissions });
   }, [code, token, user, permissions]);
   useEffect(() => {
-    if (token) {
-      // 会话数据整体下发：token + 用户信息 + 权限码（阶段 2：子应用免调 /auth/me 即可展示身份/判权限）
-      microApp.setData(code, { type: 'AUTH_TOKEN', token, user, permissions });
-    }
-  }, [code, token, user, permissions]);
+    pushSession();
+  }, [pushSession]);
   if (!meta) return null;
   return (
     <micro-app
@@ -165,6 +161,7 @@ function RemotePage({ code }: { code: string }) {
       iframe
       className="flex-1 min-h-0 block w-full"
       onMounted={pushSession}
+      onAftershow={pushSession}
     />
   );
 }

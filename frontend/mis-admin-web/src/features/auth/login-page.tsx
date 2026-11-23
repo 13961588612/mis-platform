@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertCircle } from 'lucide-react';
 import { fetchCaptcha, login } from '@/lib/api/auth';
 import { bootstrapSession } from '@/lib/auth/bootstrap';
+import { destroyRemoteMicroApps } from '@/lib/nav/destroy-remote-apps';
 import { readLastAuthKick, type AuthKickEntry } from '@/lib/auth/auth-kick-log';
 import { useAuthStore } from '@/stores/auth-store';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -42,6 +43,7 @@ export function LoginPage() {
   };
 
   useEffect(() => {
+    destroyRemoteMicroApps();
     void loadCaptcha();
     const last = readLastAuthKick();
     if (!last?.at) return;
