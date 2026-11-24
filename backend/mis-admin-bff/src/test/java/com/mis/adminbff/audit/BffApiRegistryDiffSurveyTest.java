@@ -4,6 +4,8 @@ import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.config.AiPlatformProperties;
+import com.mis.adminbff.config.ImapProperties;
+import com.mis.adminbff.config.SpmProperties;
 import com.mis.adminbff.controller.AgentOpsChannelController;
 import com.mis.adminbff.controller.AgentOpsController;
 import com.mis.adminbff.controller.AgentOpsGrantController;
@@ -370,7 +372,7 @@ class BffApiRegistryDiffSurveyTest {
         context.getBeanFactory().registerSingleton("userController", new UserController(
                 mock(UserAggregateService.class), mock(OrgWebClient.class)));
         context.getBeanFactory().registerSingleton("appController", new AppController(
-                mock(IamWebClient.class)));
+                mock(IamWebClient.class), mock(SpmProperties.class), mock(ImapProperties.class)));
         context.getBeanFactory().registerSingleton("agentOpsChannelController", new AgentOpsChannelController(
                 mock(WecomBotFacadeService.class)));
         context.getBeanFactory().registerSingleton("agentOpsGrantController", new AgentOpsGrantController(
@@ -618,12 +620,14 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/oper-logs",
             "GET /api/v1/oper-logs/{id}",
             "GET /api/v1/auth/me",
+            "GET /api/v1/permissions/stores",
             "GET /api/v1/auth/logout",
             "GET /api/v1/auth/password",
             // ---- V4：员工列表（sys_api 1011 → menu 201 system:user:list）----
             "GET /api/v1/employees",
             // ---- V5：应用列表（sys_api 9006 → menu 90 permission NULL，authOnly）----
             "GET /api/v1/apps",
+            "PUT /api/v1/apps/{id}",
             // ---- V6：AI 能力 ----
             "POST /api/v1/ai/summary",
             "POST /api/v1/ai/extract",

@@ -12,14 +12,24 @@ export const RESET_COL_WIDTH_OVERLAY_CLASS =
 export function ResetColWidthButton({
   onClick,
   className,
+  label = '重置列宽',
+  size,
 }: {
   onClick: () => void;
   className?: string;
+  label?: string;
+  size?: 'sm' | 'default';
 }) {
   return (
-    <Button type="button" variant="outline" className={cn(HEADER_ACTION_BTN_CLASS, className)} onClick={onClick}>
+    <Button
+      type="button"
+      variant="outline"
+      size={size}
+      className={cn(!size && HEADER_ACTION_BTN_CLASS, className)}
+      onClick={onClick}
+    >
       <Columns2 className="h-4 w-4" />
-      重置列宽
+      {label}
     </Button>
   );
 }

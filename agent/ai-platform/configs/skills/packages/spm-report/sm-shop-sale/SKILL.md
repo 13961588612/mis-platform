@@ -30,7 +30,7 @@ description: 超市门店销售（经营总览 + 库存订货 + 线上明细/复
 | `compare` | 否 | 仅 `"previous"`：按 ADS 日历补上一期（不占 5 个当期额度） |
 | `shopLevel` | 否 | 店型过滤 |
 
-**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`（已更名或取消区间）。
+**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`（已更名为 `storeIds` / `ordWeeks` / `ordMonths`，区间已取消）。传了旧名会同时报「请改用 storeIds」和「storeIds 与 areaId 必须二选一」。
 
 **返回信封：** `meta` / `summary` / `items[]`。`items` = 门店 × 时段；**多个时段（含 compare）时 `summary` 为 `null`**，对照用 `items[].time.role`。无权限的店从列表去掉并写入 `meta.notice`。
 

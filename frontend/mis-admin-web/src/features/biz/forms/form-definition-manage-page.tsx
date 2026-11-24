@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FilePlus2, FolderTree, Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { FilePlus2, FolderTree, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
+import { FilterField, FilterPanel, FILTER_FIELD_CONTROL_CLASS } from '@/components/common/filter-panel';
 import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -246,25 +248,47 @@ export function FormDefinitionManagePage() {
     }
   }
 
+  const filterCount =
+    (filterStatus !== 'all' ? 1 : 0) + (filterCategoryIds.length > 0 ? 1 : 0) + (filterKeyword.trim() ? 1 : 0);
+
+  const onReset = useCallback(() => {
+    setFilterStatus('all');
+    setFilterCategoryIds([]);
+    setFilterKeyword('');
+    setAppliedStatus('all');
+    setAppliedCategoryIds([]);
+    setAppliedKeyword('');
+  }, []);
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
-        title="表单定义管理"
-        description="业务表单注册（分类为租户通用业务分类）"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void loadForms()}>
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              刷新
-            </Button>
-          </div>
-        }
+        className="mb-2 shrink-0"
+        hideTitle
+        title="表单注册"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'system', group: '表单管理', title: '表单注册' })}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="flex flex-nowrap items-center gap-2">
+      <FilterPanel
+        filterCount={filterCount}
+        onSearch={onSearch}
+        onReset={onReset}
+        actions={
+          <>
+            <Button size="sm" onClick={openFormCreate}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+              新增表单
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void loadForms()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              刷新
+            </Button>
+          </>
+        }
+      >
+        <FilterField label="状态" col={3}>
           <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-32 shrink-0">
+            <SelectTrigger className={FILTER_FIELD_CONTROL_CLASS}>
               <SelectValue placeholder="状态" />
             </SelectTrigger>
             <SelectContent>
@@ -273,37 +297,32 @@ export function FormDefinitionManagePage() {
               <SelectItem value={FORM_STATUS_DISABLED}>停用</SelectItem>
             </SelectContent>
           </Select>
+        </FilterField>
+        <FilterField label="业务分类" col={4}>
           <CategoryTreeSelect
             tree={categoryTree}
             value={filterCategoryIds.map(String)}
             onChange={(ids) => setFilterCategoryIds(ids.map(Number))}
             placeholder="全部分类"
-            triggerClassName="w-56"
+            triggerClassName="w-full"
           />
-          <div className="relative shrink-0">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={filterKeyword}
-              onChange={(e) => setFilterKeyword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') onSearch();
-              }}
-              placeholder="搜索名称或编码"
-              className="h-9 w-64 pl-8"
-              aria-label="名称或编码"
-            />
-          </div>
-          <Button size="sm" variant="secondary" className="shrink-0" onClick={onSearch}>
-            <Search className="mr-1 h-3.5 w-3.5" />
-            查询
-          </Button>
-          <Button size="sm" className="ml-auto shrink-0" onClick={openFormCreate}>
-            <FilePlus2 className="mr-1 h-3.5 w-3.5" />
-            新增表单
-          </Button>
-        </div>
+        </FilterField>
+        <FilterField label="名称或编码" col={4} htmlFor="form-def-kw">
+          <Input
+            id="form-def-kw"
+            value={filterKeyword}
+            onChange={(e) => setFilterKeyword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSearch();
+            }}
+            placeholder="搜索名称或编码"
+            className={FILTER_FIELD_CONTROL_CLASS}
+            aria-label="名称或编码"
+          />
+        </FilterField>
+      </FilterPanel>
 
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
+      <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
           {loading ? (
             <div className="flex h-40 w-full items-center justify-center text-sm text-muted-foreground">加载中…</div>
           ) : error ? (
@@ -388,7 +407,6 @@ export function FormDefinitionManagePage() {
             </table>
           )}
         </div>
-      </div>
 
       <FormDefinitionDialog
         open={formDialogOpen}

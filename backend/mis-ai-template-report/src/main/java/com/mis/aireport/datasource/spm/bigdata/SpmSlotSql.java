@@ -39,8 +39,9 @@ public final class SpmSlotSql {
                    s.areaname
               FROM quser u
               INNER JOIN quser_shop_permission p ON p.user_id = u.user_id
-              INNER JOIN dim_sprmrkt_chl_store_df s ON s.store_id = p.shop_code
-             WHERE u.mis_user_id = ?
+              INNER JOIN dim_sprmrkt_chl_store_df s
+                      ON TRIM(CAST(s.store_id AS CHAR)) = TRIM(CAST(p.shop_code AS CHAR))
+             WHERE CAST(u.mis_user_id AS CHAR) = CAST(? AS CHAR)
                AND s.shopstatus = '0'
                AND s.shoptype = '11'
                AND (s.store_name IS NULL OR s.store_name NOT LIKE '%香烟%')

@@ -13,5 +13,9 @@ public record AppView(
         String runtime,
         Integer sort,
         Integer status,
-        boolean enterable
+        boolean enterable,
+        /** 该应用声明仅内网；门户仍展示卡片，非内网客户端 enterable=false。 */
+        boolean intranetOnly,
+        /** micro-app / iframe 子应用入口 HTML 地址（sys_app.mfe_remote） */
+        String entry
 ) {}

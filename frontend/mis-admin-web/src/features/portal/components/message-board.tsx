@@ -29,7 +29,7 @@ interface MessageBoardProps {
  */
 export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
   const entry = usePortalEntry();
-  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
+  const { appNameOf, bizTypeNameOf, intranetOnlyOf } = usePortalLookups(tenantId);
   const [items, setItems] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +100,11 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
                 {item.referenceTaskId ? (
                   <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">待办</span>
                 ) : null}
-                <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.bizType)} />
+                <PortalMetaTags
+                  appName={appNameOf(item.appCode)}
+                  bizTypeName={bizTypeNameOf(item.bizType)}
+                  intranetOnly={intranetOnlyOf(item.appCode)}
+                />
                 <span
                   className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"
                   title="发起时间"

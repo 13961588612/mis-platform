@@ -67,7 +67,7 @@ export interface AppItem {
   name: string;
   icon: string | null;
   basePath: string | null;
-  /** 微前端子应用入口（runtime='remote' 用；后端暂未暴露，走前端兜底） */
+  /** 微前端子应用入口（sys_app.mfe_remote，runtime=remote/iframe） */
   entry?: string | null;
   description: string | null;
   portalGroup: string | null;
@@ -76,6 +76,8 @@ export interface AppItem {
   sort: number;
   status: number;
   enterable: boolean;
+  /** 仅内网应用：卡片仍展示；非内网时不可进入。 */
+  intranetOnly?: boolean;
 }
 
 export interface DashboardStats {
@@ -153,6 +155,10 @@ export interface OrgItem {
   sort: number;
   status: number;
   remark: string | null;
+  isStore?: number | null;
+  storeCode?: string | null;
+  /** 门店类型：BGMD/CSMD/WLZS */
+  storeType?: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }

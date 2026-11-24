@@ -1,7 +1,7 @@
 import type { AdminPageDef, Assignment, FieldOption } from './types';
 import { fetchDeptTree } from '@/lib/api/depts';
 import { listOrgs } from '@/lib/api/orgs';
-import { fetchApps } from '@/lib/api/platform';
+import { fetchApps, updateApp } from '@/lib/api/platform';
 import { listEmployees, createEmployee, updateEmployee, deleteEmployee, type EmployeeQuery } from '@/lib/api/employees';
 import { listPosts, createPost, updatePost, deletePost, listPostTypes, type PostQuery } from '@/lib/api/posts';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '@/lib/api/configs';
@@ -97,6 +97,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     group: '组织架构',
     title: '员工管理',
     description: '租户员工自然人主数据（sys_employee），关联主部门与任职记录。',
+    hideTitle: true,
+    actionsInFilterBar: true,
     tableDensity: 'compact',
     /** 部门选项与「部门管理」同源：真实 sys_dept 拉取（value=id；接口失败回退空数组） */
     deptOptionsLoader: loadDeptOptions,
@@ -333,6 +335,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     group: '应用与接口',
     title: '应用管理',
     description: '门户子系统 / 微前端应用边界（sys_app）。',
+    hideTitle: true,
+    actionsInFilterBar: true,
     view: 'cards',
     filters: [
       { key: 'name', label: '应用名称', type: 'text', col: 4 },
@@ -354,6 +358,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'base_path', label: '路由前缀' },
       { key: 'kind', label: '种类' },
       { key: 'runtime', label: '运行方式' },
+      { key: 'mfe_remote', label: '加载地址' },
       { key: 'statusText', label: '状态', status: true },
     ],
     form: [
@@ -379,8 +384,16 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         col: 4,
         options: [
           { value: 'host', label: '同仓壳内' },
-          { value: 'remote', label: 'Module Federation' },
+          { value: 'remote', label: 'micro-app 远程' },
+          { value: 'iframe', label: 'iframe 远程' },
         ],
+      },
+      {
+        key: 'mfe_remote',
+        label: '加载地址',
+        type: 'text',
+        col: 12,
+        placeholder: 'http://localhost:5177/  （runtime 为 micro-app / iframe 时填写）',
       },
       { key: 'sort', label: '排序', type: 'number', col: 4 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
@@ -401,7 +414,22 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         sort: a.sort,
         status: a.status,
         enterable: a.enterable,
+        mfe_remote: a.entry,
       }));
+    },
+    updateApi: async (id, values) => {
+      await updateApp(id, {
+        name: String(values.name ?? ''),
+        icon: values.icon != null && String(values.icon) !== '' ? String(values.icon) : null,
+        basePath: values.base_path != null ? String(values.base_path) : null,
+        entry: values.mfe_remote != null ? String(values.mfe_remote) : null,
+        description: values.description != null ? String(values.description) : null,
+        portalGroup: values.portal_group != null ? String(values.portal_group) : null,
+        kind: values.kind != null ? String(values.kind) : undefined,
+        runtime: values.runtime != null ? String(values.runtime) : undefined,
+        sort: values.sort != null && values.sort !== '' ? Number(values.sort) : undefined,
+        status: values.status === '' || values.status == null ? undefined : Number(values.status),
+      });
     },
     decorate: withStatus,
   },

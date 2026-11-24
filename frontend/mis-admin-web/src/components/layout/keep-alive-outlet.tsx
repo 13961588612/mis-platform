@@ -1,7 +1,17 @@
-import { lazy, Suspense, useCallback, useEffect, type ComponentType } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from 'react';
 import { useLocation } from 'react-router-dom';
 import microApp from '@micro-zoe/micro-app';
 import { cn } from '@/lib/utils';
+import { MicroAppLoadCurtain } from '@/components/layout/micro-app-load-curtain';
 import { useTabStore } from '@/stores/tab-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
@@ -10,6 +20,7 @@ import {
   remoteCodeFromPath,
   useRemoteRegistryVersion,
 } from '@/lib/nav/remote-apps';
+import { INTRANET_ONLY_HINT, isIntranetPathBlocked } from '@/lib/nav/intranet-app';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
 // P0-5：/portal 归位进 AppLayout 后，门户页面也由本组件渲染（与 /task/* 同构）
 import { PortalPage } from '@/features/portal/portal-page';
@@ -134,38 +145,97 @@ function IframePage({ basePath, title }: { basePath: string; title: string }) {
 /**
  * micro-app 远程子应用：壳内融合渲染（独立运行时，与 React 组件不同生命周期）。
  * baseroute 下发为子应用 __MICRO_APP_BASE_ROUTE__；keep-alive 由 micro-app 内置保活。
- * 令牌：子应用启动经 getData/addDataListener 接收 setData 下发的 AUTH_TOKEN。
+ * 令牌：getData/addDataListener 接收 forceSetData 下发的 AUTH_TOKEN（含 keep-alive aftershow）。
  */
 function RemotePage({ code }: { code: string }) {
   const meta = getRemoteApp(code);
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const permissions = useAuthStore((s) => s.permissions);
-  // iframe 模式下 setData 早于子应用就绪会丢数据（无 web-component 模式的缓存补投递），
-  // 因此在 micro-app mounted 事件（iframe 加载完成、子应用 main.tsx 已执行）时
-  // 用 forceSetData 强制重发一次，确保会话数据必达。
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [bootKey, setBootKey] = useState(0);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [progress, setProgress] = useState(8);
+  const [hint, setHint] = useState('正在连接应用…');
+  // iframe 模式下 setData 早于子应用就绪会丢；keep-alive 唤回只走 aftershow、不走 mounted。
+  // 一律 forceSetData：令牌变化、首次 mounted、缓存 aftershow 都把当前会话推给子应用。
   const pushSession = useCallback(() => {
     if (!token) return;
     microApp.forceSetData(code, { type: 'AUTH_TOKEN', token, user, permissions });
   }, [code, token, user, permissions]);
   useEffect(() => {
-    if (token) {
-      // 会话数据整体下发：token + 用户信息 + 权限码（阶段 2：子应用免调 /auth/me 即可展示身份/判权限）
-      microApp.setData(code, { type: 'AUTH_TOKEN', token, user, permissions });
-    }
-  }, [code, token, user, permissions]);
+    pushSession();
+  }, [pushSession]);
+  useEffect(() => {
+    setPhase('loading');
+    setProgress(8);
+    setHint('正在连接应用…');
+  }, [code, bootKey]);
+  useEffect(() => {
+    if (phase !== 'loading') return;
+    const id = window.setInterval(() => {
+      setProgress((p) => (p >= 90 ? p : Math.min(90, p + 2 + Math.random() * 4)));
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [phase, bootKey]);
+  useLayoutEffect(() => {
+    const el = wrapRef.current?.querySelector('micro-app');
+    if (!el) return;
+    let hideTimer: number | undefined;
+    let settled = false;
+    const bump = (n: number, text: string) => {
+      setProgress((p) => Math.max(p, n));
+      setHint(text);
+    };
+    const finish = () => {
+      pushSession();
+      if (settled) return;
+      settled = true;
+      setProgress(100);
+      setHint('即将进入…');
+      hideTimer = window.setTimeout(() => setPhase('ready'), 260);
+    };
+    const onCreated = () => bump(22, '正在拉取资源…');
+    const onBeforemount = () => bump(58, '正在启动应用…');
+    const onError = () => setPhase('error');
+    el.addEventListener('created', onCreated);
+    el.addEventListener('beforemount', onBeforemount);
+    el.addEventListener('mounted', finish);
+    el.addEventListener('aftershow', finish);
+    el.addEventListener('error', onError);
+    return () => {
+      window.clearTimeout(hideTimer);
+      el.removeEventListener('created', onCreated);
+      el.removeEventListener('beforemount', onBeforemount);
+      el.removeEventListener('mounted', finish);
+      el.removeEventListener('aftershow', finish);
+      el.removeEventListener('error', onError);
+    };
+  }, [code, bootKey, pushSession]);
   if (!meta) return null;
   return (
-    <micro-app
-      name={code}
-      url={meta.entry}
-      baseroute={`/remote/${code}`}
-      router-mode="native"
-      keep-alive
-      iframe
-      className="flex-1 min-h-0 block w-full"
-      onMounted={pushSession}
-    />
+    <div ref={wrapRef} className="relative flex min-h-0 flex-1 flex-col">
+      <micro-app
+        key={bootKey}
+        name={code}
+        url={meta.entry}
+        baseroute={`/remote/${code}`}
+        router-mode="native"
+        keep-alive
+        iframe
+        className="block min-h-0 w-full flex-1"
+        onMounted={pushSession}
+        onAftershow={pushSession}
+      />
+      <MicroAppLoadCurtain
+        visible={phase !== 'ready'}
+        error={phase === 'error'}
+        progress={progress}
+        title={meta.title}
+        hint={hint}
+        onRetry={() => setBootKey((k) => k + 1)}
+      />
+    </div>
   );
 }
 
@@ -444,9 +514,14 @@ export function KeepAliveOutlet() {
         );
       })}
 
-      {activeRemoteCode ? (
+      {activeRemoteCode && !isIntranetPathBlocked(active) ? (
         <div key={`remote-${activeRemoteCode}`} className="absolute inset-0 flex flex-col">
           <RemotePage code={activeRemoteCode} />
+        </div>
+      ) : null}
+      {activeRemoteCode && isIntranetPathBlocked(active) ? (
+        <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-amber-800">
+          {INTRANET_ONLY_HINT}
         </div>
       ) : null}
 

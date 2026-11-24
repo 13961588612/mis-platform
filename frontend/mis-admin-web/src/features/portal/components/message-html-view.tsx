@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { downloadMessageFile } from '@/lib/api/message-manage';
+import { INTRANET_ONLY_HINT, isIntranetPathBlocked } from '@/lib/nav/intranet-app';
 
 const FILE_SRC = /\/api\/v1\/messages\/files\/(\d+)/;
 
@@ -76,6 +78,21 @@ export function MessageHtmlView({ html }: { html: string }) {
       <div
         className="msg-html-view prose prose-sm max-w-none break-words text-[13px] leading-relaxed"
         dangerouslySetInnerHTML={{ __html: markup }}
+        onClick={(e) => {
+          const anchor = (e.target as HTMLElement).closest('a');
+          if (!anchor) return;
+          const href = anchor.getAttribute('href');
+          if (!href) return;
+          try {
+            const path = href.startsWith('http') ? new URL(href, window.location.origin).pathname : href;
+            if (isIntranetPathBlocked(path)) {
+              e.preventDefault();
+              toast.error(INTRANET_ONLY_HINT);
+            }
+          } catch {
+            /* ignore invalid href */
+          }
+        }}
       />
     </>
   );

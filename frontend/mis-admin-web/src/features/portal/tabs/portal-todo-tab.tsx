@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
+import { IntranetOnlyBadge } from '@/components/common/intranet-only-badge';
 import { PaginationFooter } from '@/components/common/pagination-footer';
 import { TaskStatusBadge } from '@/features/taskflow/task-status';
 import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawer';
@@ -85,7 +86,7 @@ export function PortalTodoTab() {
   // 单租户阶段固定 tenantId=1（与既有待办/我发起的页同口径）。
   const tenantId = '1';
   const userId = user?.id ?? '';
-  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
+  const { appNameOf, bizTypeNameOf, intranetOnlyOf } = usePortalLookups(tenantId);
 
   const activeKey = usePortalTodoTabStore((s) => s.activeKey);
   const setActiveKey = usePortalTodoTabStore((s) => s.setActiveKey);
@@ -370,7 +371,10 @@ export function PortalTodoTab() {
                     </td>
                     <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')}>{row.subtitle ?? '—'}</td>
                     <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={appNameOf(row.appCode)}>
-                      {appNameOf(row.appCode)}
+                      <span className="inline-flex max-w-full items-center gap-1">
+                        <span className="truncate">{appNameOf(row.appCode)}</span>
+                        {intranetOnlyOf(row.appCode) ? <IntranetOnlyBadge /> : null}
+                      </span>
                     </td>
                     <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={bizTypeNameOf(row.bizType)}>
                       {bizTypeNameOf(row.bizType)}

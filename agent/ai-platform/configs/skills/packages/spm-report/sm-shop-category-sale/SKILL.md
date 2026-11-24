@@ -16,8 +16,9 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 - 工具：**`callShopCategorySaleApi`**
 - 只传 **`apiName`** + **`params`**
 - **不要传 `serviceName` / `identity`**
-- `items`：**门店 × 类目 × 时段**一行（`storeId` + `categoryId` / `categoryName`）；`time.role` = `current` | `previous`
-- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`
+- `items`：**门店 × 类目 × 时段**一行（返回含 `storeId` + `categoryId` / `categoryName`）；`time.role` = `current` | `previous`
+- **入参不要传 `storeId`**（单店字段只出现在返回里；范围用 `storeIds` / `areaId`）
+- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`；日报日清单用 `listMonthDates`
 - 分类维表可用 `callCommonInfoApi`：`listCategories` / `listChildCategories` / `getCategoryById`
 
 ---
@@ -38,7 +39,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 `categoryLevel` / `parentCategoryId` **不要配 `areaId`、不要配多个 storeIds / 多个当期时段**（会一次展开全部分类）。
 
-**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`。
+**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`（已更名为 `storeIds` / `ordWeeks` / `ordMonths`）。传了旧名会同时报「请改用 storeIds」和「storeIds 与 areaId 必须二选一」。
 
 ### `data_type` 映射（门店内）
 
@@ -97,6 +98,13 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
+  "period": "day", "storeIds": "0001", "ordDates": ["2026-11-23"],
+  "categoryLevel": "大类"
+}}
+```
+
+```json
+{ "apiName": "getShopCategoryOverview", "params": {
   "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40",
   "categoryLevel": "大类"
 }}
@@ -142,7 +150,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ## 结构类（与门店档对称；指标字段同 sm-shop-sale）
 
-入参同总览（须带 `categoryLevel` 或 `parentCategoryId` 或 `categoryIds`）。
+入参同总览（须带 `categoryLevel` 或 `parentCategoryId`；指定类目也可用 `categoryIds`）。
 
 ### `getShopCategoryDiscountStructure`
 

@@ -18,7 +18,6 @@ function translateCapabilitiesToFeatures(
 ): string[] {
   const f = (features ?? {}) as Record<string, boolean>;
   const out: string[] = [];
-  if (f.extract) { out.push('form-fill', 'text-extract'); }   // 抽取 -> 表单填充 + 智能录入
   if (f.summary) { out.push('detail-summary'); }               // 摘要
   if (f.rag)    { out.push('rag-qa'); }                        // 问答
   if (f.chat)   { out.push('copilot'); }                       // 流式对话
@@ -68,14 +67,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
             ? (d.allowedCategories as string[])
             : [];
           const config = (d.config as Record<string, Record<string, unknown>>) ?? {};
-          const ff = config['form-fill'] as Record<string, unknown> | undefined;
-          const ct = typeof ff?.confThreshold === 'number' ? (ff.confThreshold as number) : undefined;
           setFeatures({
             enabled,
             allowedCategories,
             canApprove: typeof d.canApprove === 'boolean' ? d.canApprove : undefined,
             config,
-            confThreshold: ct,
           });
         } else {
           // 业务失败按 fail-closed

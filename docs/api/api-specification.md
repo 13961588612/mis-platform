@@ -259,6 +259,14 @@ GET /menus/router
 | PUT | `/menus/{id}` | system:menu:edit |
 | DELETE | `/menus/{id}` | system:menu:delete |
 
+### 3.2.1 权限查询（当前操作员）
+
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| GET | `/permissions/stores` | 登录即可（authOnly，V182） | 当前操作员权限内门店；可选 `storeType=BGMD\|CSMD\|WLZS` |
+
+响应项：`id` / `storeCode` / `name` / `storeType` / `sort`。数据范围：`data_scope=全部` 返回租户内全部门店组织；否则取角色 `perm_type=store` 并集，以及落在自定义组织（含子孙）下的门店。
+
 ### 3.3 API 树管理（sys_api）
 
 | 方法 | 路径 | 权限 |
@@ -434,9 +442,14 @@ GET /users/check-employee-binding?appId=&employeeId=&excludeUserId=
   "name": "上海分公司",
   "sort": 10,
   "status": 1,
-  "remark": ""
+  "remark": "",
+  "isStore": 1,
+  "storeCode": "001",
+  "storeType": "CSMD"
 }
 ```
+
+门店字段（V177/V181）：`isStore=1` 时必填 `storeCode`、`storeType`（`BGMD` 百购门店 / `CSMD` 超市门店 / `WLZS` 物流中心）。
 
 **删除规则：** 组织下存在部门 → 409（`ORG_HAS_CHILDREN` 或业务 message）。
 

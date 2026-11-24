@@ -2,13 +2,22 @@ package com.mis.adminbff.controller;
 
 import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.model.AppVO;
+import com.mis.adminbff.config.ImapProperties;
+import com.mis.adminbff.config.SpmProperties;
+import com.mis.adminbff.dto.AppUpdateRequest;
 import com.mis.adminbff.dto.AppView;
+import com.mis.adminbff.support.IntranetAddresses;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.result.Result;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -41,26 +50,43 @@ public class AppController {
     private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent", "iqd", "finance");
 
     private final IamWebClient iamWebClient;
+    private final SpmProperties spmProperties;
+    private final ImapProperties imapProperties;
 
-    public AppController(IamWebClient iamWebClient) {
+    public AppController(IamWebClient iamWebClient, SpmProperties spmProperties, ImapProperties imapProperties) {
         this.iamWebClient = iamWebClient;
+        this.spmProperties = spmProperties;
+        this.imapProperties = imapProperties;
     }
 
     @GetMapping
-    public Result<List<AppView>> list() {
+    public Result<List<AppView>> list(HttpServletRequest request) {
         Long tenantId = RequestContext.requireTenantId();
         List<AppVO> apps = iamWebClient.listApps(tenantId, "subsystem");
-        List<AppView> views = apps.stream().map(this::toView).toList();
+        boolean intranet = IntranetAddresses.isIntranetClient(request, extraCidrs());
+        List<AppView> views = apps.stream().map((app) -> toView(app, intranet)).toList();
         return Result.ok(views);
     }
 
-    private AppView toView(AppVO app) {
+    @PutMapping("/{id}")
+    public Result<AppView> update(@PathVariable Long id, @RequestBody AppUpdateRequest request, HttpServletRequest http) {
+        AppVO updated = iamWebClient.updateApp(id, request);
+        boolean intranet = IntranetAddresses.isIntranetClient(http, extraCidrs());
+        return Result.ok(toView(updated, intranet));
+    }
+
+    private AppView toView(AppVO app, boolean intranet) {
         // 可进入性：remote / iframe 子应用由壳子容器（/remote/:code、iframe 页面）承载，天然可进；
         // host 应用仍走白名单（本仓已实现路由才可进）。
         String runtime = app.runtime() != null ? app.runtime() : "host";
+        boolean intranetOnly = ("spm".equals(app.code()) && spmProperties.isIntranetOnly())
+                || ("imap".equals(app.code()) && imapProperties.isIntranetOnly());
         boolean enterable = (app.status() == null || app.status() == 1) && (
                 "remote".equalsIgnoreCase(runtime) || "iframe".equalsIgnoreCase(runtime)
                         || ("host".equalsIgnoreCase(runtime) && ENTERABLE_CODES.contains(app.code())));
+        if (intranetOnly && !intranet) {
+            enterable = false;
+        }
         return new AppView(
                 app.id(),
                 app.tenantId(),
@@ -74,6 +100,19 @@ public class AppController {
                 app.runtime(),
                 app.sort(),
                 app.status(),
-                enterable);
+                enterable,
+                intranetOnly,
+                app.mfeRemote());
+    }
+
+    private List<String> extraCidrs() {
+        List<String> merged = new ArrayList<>();
+        if (spmProperties.getExtraAllowedCidrs() != null) {
+            merged.addAll(spmProperties.getExtraAllowedCidrs());
+        }
+        if (imapProperties.getExtraAllowedCidrs() != null) {
+            merged.addAll(imapProperties.getExtraAllowedCidrs());
+        }
+        return merged;
     }
 }

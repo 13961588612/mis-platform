@@ -12,5 +12,6 @@ public record AppVO(
         String kind,
         String runtime,
         Integer sort,
-        Integer status
+        Integer status,
+        String mfeRemote
 ) {}

@@ -153,6 +153,16 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 
 > 各 API 的 `sys_api` 明细见 [api-permission-mapping.md](../backend/api-permission-mapping.md)。
 
+### 4.2 登录即可（authOnly）补充
+
+| API | sys_api | 说明 |
+|-----|---------|------|
+| `GET /api/v1/permissions/stores` | **1102**（V182） | 当前操作员权限内门店；可选 `storeType`；挂菜单 **90**（认证，permission=NULL） |
+
+身份权限模块 API 树：顶级「权限模块」(1100) →「权限查询」(1101) → 本接口。
+
+V183 起另挂超市运营菜单：**96041**（闭店退券 view）、**96037**（闭店退卡 view），前端以 `storeType=CSMD` 拉权限内超市门店。
+
 ## 5. 角色默认权限矩阵（Phase 1 种子）
 
 | 角色 | 说明 |
@@ -229,7 +239,40 @@ Copilot 语音转写：`POST /api/v1/agent-ops/speech/transcribe`（sys_api **93
 
 接收范围可同时选全员、部门（含子部门）、岗位类型（含下级类型与兼职）、指定用户，按并集去重。内置管理员角色（role_id=1）已授权。
 
-## 11. 关联文档
+## 11. 应用管理加载地址（V175）
+
+| permission | 菜单 | API |
+|------------|------|-----|
+| `system:app:edit` | 291 | `PUT /api/v1/apps/{id}`（含 `sys_app.mfe_remote` 加载地址） |
+
+## 12. 超市运营（spm，独立仓 mis-spm-biz，V174 + V179 + V180）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| `spm:home:view` | 菜单 96036 | 首页；`GET /api/v1/spm/health`（sys_api **96100**） |
+| `spm:cashcard:close-cleanup:view` | 菜单 96037 | 闭店退卡列表/详情；`GET /api/v1/spm/cashcard/**`（**96101**） |
+| `spm:cashcard:close-cleanup:edit` | 按钮 96038 | 新建/保存；POST/PUT `/api/v1/spm/cashcard/**`（**96103–96104**） |
+| `spm:cashcard:close-cleanup:audit` | 按钮 96039 | 审核；`POST .../shop-close-cleanup/*/audit`（**96102**） |
+| `spm:cashcard:close-cleanup:delete` | 按钮 96040 | 删除；`DELETE /api/v1/spm/cashcard/**`（**96105**） |
+| `spm:coupon:close-cleanup:view` | 菜单 96041 | 闭店退券列表/详情；`GET /api/v1/spm/coupon/**`（**96110**） |
+| `spm:coupon:close-cleanup:edit` | 按钮 96042 | 新建/保存；POST/PUT `/api/v1/spm/coupon/**`（**96112–96113**） |
+| `spm:coupon:close-cleanup:audit` | 按钮 96043 | 审核；`POST .../coupon/shop-close-cleanup/*/audit`（**96111**） |
+| `spm:coupon:close-cleanup:delete` | 按钮 96044 | 删除；`DELETE /api/v1/spm/coupon/**`（**96114**） |
+
+V179 起取消 `/api/v1/spm/**` 四方法 **authOnly** 通配（96091–96094 已停用）。V180 增加闭店退券分码。本应用默认仅内网：BFF `mis.spm.intranet-only`。与 `spm-report` 智能体、老 `mis.bff.smp` 无关。
+
+## 13. 室内地图（imap，独立仓 indoor-map，V178）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| `imap:map:view` | 菜单 97031 | 浏览列表/详情；`GET /api/v1/imap/**` |
+| `imap:map:edit` | 按钮 97032 | 新建、保存、锁图、本人解锁；POST/PUT/PATCH `/api/v1/imap/**` |
+| `imap:map:unlock` | 按钮 97033 | 强制解锁；`POST /api/v1/imap/**/force-unlock` |
+| `imap:map:delete` | 按钮 97034 | 删除；`DELETE /api/v1/imap/**` |
+
+BFF `/api/v1/imap/**` 透传到 Nest `/api/v1/**`，不包第二层 Result。默认仅内网：`mis.imap.intranet-only`。登录身份为门户 SYSTEM 用户；地图 `orgId` 归属 MIS 组织。
+
+## 14. 关联文档
 
 - [接口规范](api-specification.md)
 - [种子数据](../database/seed-data.md)

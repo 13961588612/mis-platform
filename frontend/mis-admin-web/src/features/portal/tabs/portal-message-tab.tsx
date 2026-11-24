@@ -4,6 +4,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
+import { IntranetOnlyBadge } from '@/components/common/intranet-only-badge';
 import { PaginationFooter } from '@/components/common/pagination-footer';
 import { UnreadDot } from '@/components/common/unread-dot';
 import { MessageDetailDrawer } from '@/features/portal/components/message-detail-drawer';
@@ -81,7 +82,7 @@ export function PortalMessageTab() {
   // 单租户阶段固定 tenantId=1（与门户其它页同口径）。
   const tenantId = '1';
   const userId = user?.id ?? '';
-  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
+  const { appNameOf, bizTypeNameOf, intranetOnlyOf } = usePortalLookups(tenantId);
 
   const [activeKey, setActiveKey] = useState<string>(DEFAULT_MSG_TAB_KEY);
   /** 输入框即时值（受控；**不是**数据加载依赖，故打字不触发请求）。 */
@@ -283,7 +284,10 @@ export function PortalMessageTab() {
                       ) : null}
                     </td>
                     <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={appNameOf(item.appCode)}>
-                      {appNameOf(item.appCode)}
+                      <span className="inline-flex max-w-full items-center gap-1">
+                        <span className="truncate">{appNameOf(item.appCode)}</span>
+                        {intranetOnlyOf(item.appCode) ? <IntranetOnlyBadge /> : null}
+                      </span>
                     </td>
                     <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={bizTypeNameOf(item.bizType)}>
                       {bizTypeNameOf(item.bizType)}

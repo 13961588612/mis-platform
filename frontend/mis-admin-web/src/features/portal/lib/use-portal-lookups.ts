@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { fetchApps } from '@/lib/api/platform';
+import { setAppCatalog } from '@/lib/nav/intranet-app';
 import { fetchBizCategories } from '@/lib/api/biz-category';
 
 /** 平台级归属的展示文案（`appCode == null`）。 */
@@ -17,6 +18,8 @@ export interface PortalLookups {
   appNameOf: (appCode: string | null | undefined) => string;
   /** `bizType` → 展示名：`null` → 「—」；命中业务分类取 `name`；取不到回退 `bizType` 本身。 */
   bizTypeNameOf: (bizType: string | null | undefined) => string;
+  /** 该 app_code 是否声明仅内网。 */
+  intranetOnlyOf: (appCode: string | null | undefined) => boolean;
 }
 
 /** 把 `{code, name}` 列表折叠成 `code → name` 映射。 */
@@ -38,13 +41,18 @@ function toNameMap(items: ReadonlyArray<{ code: string; name: string }>): Map<st
  */
 export function usePortalLookups(tenantId: string): PortalLookups {
   const [appNames, setAppNames] = useState<Map<string, string>>(() => new Map());
+  const [intranetApps, setIntranetApps] = useState<Set<string>>(() => new Set());
   const [bizNames, setBizNames] = useState<Map<string, string>>(() => new Map());
 
   useEffect(() => {
     let cancelled = false;
     fetchApps()
       .then((list) => {
-        if (!cancelled) setAppNames(toNameMap(list));
+        if (!cancelled) {
+          setAppNames(toNameMap(list));
+          setIntranetApps(new Set(list.filter((a) => a.intranetOnly).map((a) => a.code)));
+          setAppCatalog(list);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -81,5 +89,13 @@ export function usePortalLookups(tenantId: string): PortalLookups {
     [bizNames],
   );
 
-  return { appNameOf, bizTypeNameOf };
+  const intranetOnlyOf = useCallback(
+    (appCode: string | null | undefined): boolean => {
+      if (appCode == null) return false;
+      return intranetApps.has(appCode);
+    },
+    [intranetApps],
+  );
+
+  return { appNameOf, bizTypeNameOf, intranetOnlyOf };
 }

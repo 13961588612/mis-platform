@@ -176,7 +176,7 @@ describe('FormDefinitionManagePage', () => {
         <FormDefinitionManagePage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText('表单定义管理')).toBeTruthy();
+    expect(await screen.findByText('表单注册')).toBeTruthy();
     // 表头
     expect(screen.getByText('编码')).toBeTruthy();
     expect(screen.getByText('分类')).toBeTruthy();

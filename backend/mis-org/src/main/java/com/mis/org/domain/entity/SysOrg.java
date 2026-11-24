@@ -38,6 +38,18 @@ public class SysOrg {
     @Column
     private String remark;
 
+    /** 是否门店：0=否 1=是（V176） */
+    @Column(name = "is_store", nullable = false)
+    private Integer isStore;
+
+    /** 门店编号（is_store=1 时填写） */
+    @Column(name = "store_code")
+    private String storeCode;
+
+    /** 门店类型：BGMD/CSMD/WLZS（is_store=1 时填写，V181） */
+    @Column(name = "store_type")
+    private String storeType;
+
     @Column(nullable = false)
     private Integer deleted;
 
@@ -69,6 +81,12 @@ public class SysOrg {
     public void setParentId(Long parentId) { this.parentId = parentId; }
     public String getRemark() { return remark; }
     public void setRemark(String remark) { this.remark = remark; }
+    public Integer getIsStore() { return isStore; }
+    public void setIsStore(Integer isStore) { this.isStore = isStore; }
+    public String getStoreCode() { return storeCode; }
+    public void setStoreCode(String storeCode) { this.storeCode = storeCode; }
+    public String getStoreType() { return storeType; }
+    public void setStoreType(String storeType) { this.storeType = storeType; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Long getCreatedBy() { return createdBy; }

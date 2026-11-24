@@ -41,14 +41,8 @@ import type { AdminField, AdminPageDef, FieldOption } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
 import { listPosts } from '@/lib/api/posts';
 import { AiFeature } from '@/features/ai/components/ai-feature';
-import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
 import { AiRag } from '@/features/ai/components/ai-rag';
-import {
-  FormFillBridgeProvider,
-  toFormFieldSchema,
-  type FormFillBridge,
-} from '@/features/ai/context/form-fill-bridge';
 
 const COL: Record<number, string> = {
   2: 'col-span-1',
@@ -730,14 +724,13 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     [def, deptOptions, postOptions, postTypeOptions, orgOptions],
   );
 
-  // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
-  const [aiAssistOpen, setAiAssistOpen] = useState(false);
+  // AI 问答仍用独立 Sheet（详情摘要/RAG）
   const [aiRagOpen, setAiRagOpen] = useState(false);
 
   // 列表任职子表展开态（按行 id 记录）
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  const openCreate = useCallback((opts?: { withAssist?: boolean }) => {
+  const openCreate = useCallback(() => {
     const seed: Record<string, unknown> = {};
     for (const f of effectiveForm) {
       if (f.defaultValue !== undefined) seed[f.key] = f.defaultValue;
@@ -747,40 +740,12 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     setSheetMode('create');
     setEditing(null);
     setFormValues(seed);
-    setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
   }, [effectiveForm]);
 
-  // 表单回填桥接：桥接 AI 组件与当前表单态（schema 真源 = effectiveForm，含真实部门选项）
-  const bridge = useMemo<FormFillBridge>(
-    () => ({
-      def,
-      getSchema: () => toFormFieldSchema(effectiveForm),
-      getValues: () => formValues,
-      applyFields: (partial) => {
-        setFormValues((prev) => {
-          const next = { ...prev };
-          for (const [k, s] of Object.entries(partial)) next[k] = s.value;
-          return next;
-        });
-      },
-      openCreate: () => openCreate(),
-    }),
-    [def, effectiveForm, formValues, openCreate],
-  );
-
-  // UC-3 智能录入：打开新增表单，并在右侧展开辅助录入
-  const openSmartImport = useCallback(() => {
-    openCreate({ withAssist: true });
-  }, [openCreate]);
-
   const closeSheet = (open: boolean) => {
     setSheetOpen(open);
-    if (!open) setAiAssistOpen(false);
   };
-
-  const formModes = sheetMode === 'create' || sheetMode === 'edit';
-  const splitAssist = formModes && aiAssistOpen;
 
   const decorate = def.decorate ?? ((r: Record<string, unknown>) => r);
 
@@ -840,7 +805,6 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     setSheetMode('edit');
     setEditing(row);
     setFormValues({ ...row });
-    setAiAssistOpen(false);
     setSheetOpen(true);
   };
 
@@ -906,6 +870,26 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     }
   };
 
+  const createActions = def.readonly ? null : (
+    <Button
+      type="button"
+      size={def.actionsInFilterBar ? 'sm' : 'default'}
+      className={def.actionsInFilterBar ? undefined : HEADER_ACTION_BTN_CLASS}
+      onClick={() => openCreate()}
+    >
+      <Plus className="h-4 w-4" />
+      新建
+    </Button>
+  );
+
+  const resetColWidthBtn = hasCustom ? (
+    <ResetColWidthButton
+      onClick={resetColWidths}
+      label="重置表格列宽"
+      size={def.actionsInFilterBar ? 'sm' : undefined}
+    />
+  ) : null;
+
   const pagerNums = useMemo(() => {
     const pages = totalPages;
     const cur = safePage;
@@ -919,12 +903,12 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
   }, [safePage, totalPages]);
 
   return (
-    <FormFillBridgeProvider value={bridge}>
-      {/* absolute inset-0：钉死在 KeepAlive 槽内，主表区域才能成为唯一纵向滚动容器 */}
       <div className="relative min-h-0 flex-1">
+      {/* absolute inset-0：钉死在 KeepAlive 槽内，主表区域才能成为唯一纵向滚动容器 */}
       <div className="absolute inset-0 flex flex-col overflow-hidden">
       <PageHeader
-        className="mb-4 shrink-0"
+        className={cn('shrink-0', def.hideTitle ? 'mb-2' : 'mb-4')}
+        hideTitle={!!def.hideTitle}
         title={def.title}
         description={def.description}
         breadcrumbs={buildAppBreadcrumbs({
@@ -933,23 +917,15 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
           title: def.title,
         })}
         actions={
-          <div className="flex items-center gap-2">
-            {headerExtra ? <>{headerExtra}</> : null}
-            {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
-            {def.readonly ? null : (
-              <>
-                <Button type="button" className={HEADER_ACTION_BTN_CLASS} onClick={() => openCreate()}>
-                  <Plus className="h-4 w-4" />
-                  新建
-                </Button>
-                <AiFeature feature="text-extract">
-                  <Button type="button" variant="outline" className={HEADER_ACTION_BTN_CLASS} onClick={openSmartImport}>
-                    <Sparkles className="h-4 w-4" /> 智能录入
-                  </Button>
-                </AiFeature>
-              </>
-            )}
-          </div>
+          def.actionsInFilterBar ? (
+            headerExtra ? <div className="flex items-center gap-2">{headerExtra}</div> : null
+          ) : (
+            <div className="flex items-center gap-2">
+              {headerExtra ? <>{headerExtra}</> : null}
+              {resetColWidthBtn}
+              {createActions}
+            </div>
+          )
         }
       />
 
@@ -972,6 +948,8 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                 </span>
               </div>
               <div className="flex items-center gap-2">
+                {def.actionsInFilterBar ? createActions : null}
+                {def.actionsInFilterBar ? resetColWidthBtn : null}
                 <Button
                   type="button"
                   size="sm"
@@ -993,7 +971,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                     setPage(1);
                   }}
                 >
-                  重置
+                  重置查询条件
                 </Button>
                 <Button
                   type="button"
@@ -1354,10 +1332,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       <Sheet open={sheetOpen} onOpenChange={closeSheet}>
         <SheetContent
           side="right"
-          className={cn(
-            'flex w-full flex-col p-0',
-            splitAssist ? 'sm:max-w-4xl' : 'max-w-[40rem] sm:max-w-[40rem]',
-          )}
+          className="flex w-full max-w-[40rem] flex-col p-0 sm:max-w-[40rem]"
         >
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle className="text-[1.05rem] font-semibold leading-none">
@@ -1368,35 +1343,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
             </SheetDescription>
           </SheetHeader>
 
-          {/* 创建/编辑：可展开右侧辅助录入 */}
-          {formModes ? (
-            <div className="flex items-center gap-2 border-b bg-muted/30 px-5 py-2">
-              <AiFeature feature="text-extract">
-                <Button
-                  type="button"
-                  variant={aiAssistOpen ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setAiAssistOpen((v) => !v)}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {aiAssistOpen ? '收起辅助' : '辅助录入'}
-                </Button>
-              </AiFeature>
-              <span className="text-xs text-muted-foreground">
-                {aiAssistOpen
-                  ? '右侧抽取后自动填入左侧表单，请核对后保存'
-                  : '打开后在右侧粘贴/上传，识别结果写入左侧'}
-              </span>
-            </div>
-          ) : null}
-
-          <div className={cn('flex min-h-0 flex-1', splitAssist ? 'flex-row' : 'flex-col')}>
-            <div
-              className={cn(
-                'flex min-h-0 min-w-0 flex-col',
-                splitAssist ? 'w-1/2 border-r' : 'flex-1',
-              )}
-            >
+          <div className="flex min-h-0 flex-1 flex-col">
           {sheetMode === 'view' ? (
             <div className="border-b px-5 py-3">
               <AiFeature feature="detail-summary">
@@ -1442,7 +1389,6 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                     key={f.key}
                     className={cn(
                       (f.col ?? 6) >= 12 || f.type === 'textarea' ? 'col-span-2' : COL[f.col ?? 6],
-                      'relative',
                     )}
                   >
                     <FieldControl
@@ -1450,17 +1396,6 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                       value={formValues[f.key]}
                       onChange={(v) => setFormValues((prev) => ({ ...prev, [f.key]: v }))}
                     />
-                    {/* 单字段 Sparkles：打开右侧辅助录入 */}
-                    <AiFeature feature="text-extract">
-                      <button
-                        type="button"
-                        onClick={() => setAiAssistOpen(true)}
-                        className="absolute right-1 top-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`辅助录入 ${f.label}`}
-                      >
-                        <Sparkles className="h-3.5 w-3.5" />
-                      </button>
-                    </AiFeature>
                   </div>
                 ))}
               </div>
@@ -1490,17 +1425,6 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
               </>
             )}
           </SheetFooter>
-            </div>
-
-            {splitAssist ? (
-              <div className="flex w-1/2 min-h-0 min-w-0 flex-col bg-muted/10">
-                <AiTextExtract
-                  embedded
-                  autoApplyOnDone
-                  onClose={() => setAiAssistOpen(false)}
-                />
-              </div>
-            ) : null}
           </div>
         </SheetContent>
       </Sheet>
@@ -1519,7 +1443,6 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       ) : null}
       </div>
       </div>
-    </FormFillBridgeProvider>
   );
 }
 

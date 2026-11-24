@@ -9,5 +9,8 @@ public record OrgCreateRequest(
         Long parentId,
         Integer sort,
         String remark,
+        Integer isStore,
+        String storeCode,
+        String storeType,
         Long categoryId
 ) {}

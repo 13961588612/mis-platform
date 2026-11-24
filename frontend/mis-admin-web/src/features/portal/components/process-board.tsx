@@ -35,7 +35,7 @@ const STATUS: Record<string, { text: string; cls: string }> = {
  */
 export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
   const entry = usePortalEntry();
-  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
+  const { appNameOf, bizTypeNameOf, intranetOnlyOf } = usePortalLookups(tenantId);
   const [items, setItems] = useState<WfInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +116,11 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
                   <span className="min-w-0 flex-1 truncate text-[13px]">
                     {item.title?.trim() || `${item.businessType} / ${item.businessId}`}
                   </span>
-                  <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.businessType)} />
+                  <PortalMetaTags
+                    appName={appNameOf(item.appCode)}
+                    bizTypeName={bizTypeNameOf(item.businessType)}
+                    intranetOnly={intranetOnlyOf(item.appCode)}
+                  />
                   <span
                     className="max-w-[10rem] shrink-0 truncate text-[11px] text-muted-foreground"
                     title="发起人（公司）"

@@ -48,6 +48,8 @@ public class IamWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<AppVO>>> APP_LIST =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<AppVO>> APP =
+            new ParameterizedTypeReference<>() {};
 
     public IamWebClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -280,6 +282,21 @@ public class IamWebClient extends AbstractDownstreamClient {
                 .retrieve()
                 .bodyToMono(APP_LIST));
         return data != null ? data : List.of();
+    }
+
+    public AppVO updateApp(Long id, com.mis.adminbff.dto.AppUpdateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", request.name());
+        body.put("icon", request.icon());
+        body.put("basePath", request.basePath());
+        body.put("mfeRemote", request.entry());
+        body.put("description", request.description());
+        body.put("portalGroup", request.portalGroup());
+        body.put("kind", request.kind());
+        body.put("runtime", request.runtime());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        return block(put(body, APP, "/internal/v1/apps/{id}", id));
     }
 
     public List<Long> enabledUserIds(Long tenantId, Long appId) {

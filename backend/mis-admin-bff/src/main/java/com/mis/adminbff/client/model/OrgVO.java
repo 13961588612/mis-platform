@@ -11,6 +11,9 @@ public record OrgVO(
         Integer sort,
         Integer status,
         String remark,
+        Integer isStore,
+        String storeCode,
+        String storeType,
         Instant createdAt,
         Instant updatedAt
 ) {}

@@ -7,5 +7,4 @@ export { useAI } from './use-ai';
 export { aiFetchEventSource } from './ai-sse-client';
 export { AI_FEATURES, getFeatureDeclaration } from './ai-feature-registry';
 export { AiFeature } from './components/ai-feature';
-export { useFormFillBridge, FormFillBridgeProvider } from './context/form-fill-bridge';
 export * from './types';

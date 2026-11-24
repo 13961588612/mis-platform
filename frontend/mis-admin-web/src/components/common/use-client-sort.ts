@@ -1,13 +1,23 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { SortDir } from './sort-indicator';
 
+export type ClientSortInitial = {
+  key: string;
+  dir?: SortDir;
+};
+
 /**
  * 客户端列排序：三态 无 → 升 → 降 → 无。
  * 对 string / number / boolean / Date 做稳定比较；null/undefined 沉底。
+ * 可选 initial 指定进入页面时的默认排序列。
  */
-export function useClientSort<T>(rows: T[], getValue: (row: T, key: string) => unknown) {
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
+export function useClientSort<T>(
+  rows: T[],
+  getValue: (row: T, key: string) => unknown,
+  initial?: ClientSortInitial,
+) {
+  const [sortKey, setSortKey] = useState<string | null>(initial?.key ?? null);
+  const [sortDir, setSortDir] = useState<SortDir>(initial?.dir ?? 'asc');
 
   const toggleSort = useCallback(
     (key: string) => {

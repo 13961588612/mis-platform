@@ -19,6 +19,9 @@ export async function createOrg(body: {
   parentId?: number;
   sort?: number;
   remark?: string;
+  isStore?: number;
+  storeCode?: string;
+  storeType?: string;
   categoryId?: number;
 }): Promise<OrgItem> {
   const res = await api.post<ApiResult<OrgItem>>('/orgs', body);
@@ -27,7 +30,16 @@ export async function createOrg(body: {
 
 export async function updateOrg(
   id: string,
-  body: { name: string; parentId?: number; sort?: number; status?: number; remark?: string },
+  body: {
+    name: string;
+    parentId?: number;
+    sort?: number;
+    status?: number;
+    remark?: string;
+    isStore?: number;
+    storeCode?: string;
+    storeType?: string;
+  },
 ): Promise<OrgItem> {
   const res = await api.put<ApiResult<OrgItem>>(`/orgs/${id}`, body);
   return unwrap(res, '更新组织失败');
