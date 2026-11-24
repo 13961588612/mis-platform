@@ -22,10 +22,16 @@ declare global {
         inline?: boolean;
         /** vite 子应用需 iframe 沙箱隔离（ESM 无法被 Proxy 沙箱拦截） */
         iframe?: boolean;
+        /** 子应用实例创建（开始拉取资源） */
+        onCreated?: () => void;
+        /** 资源就绪、即将挂载 */
+        onBeforemount?: () => void;
         /** 子应用首次挂载完成回调（keep-alive-outlet 用于下发会话令牌） */
         onMounted?: () => void;
         /** keep-alive 从缓存唤回（重登后再进 APP 不会再走 mounted） */
         onAftershow?: () => void;
+        /** 子应用加载或运行失败 */
+        onError?: () => void;
       };
     }
   }

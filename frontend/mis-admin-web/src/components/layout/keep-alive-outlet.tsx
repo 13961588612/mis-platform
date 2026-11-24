@@ -1,7 +1,17 @@
-import { lazy, Suspense, useCallback, useEffect, type ComponentType } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from 'react';
 import { useLocation } from 'react-router-dom';
 import microApp from '@micro-zoe/micro-app';
 import { cn } from '@/lib/utils';
+import { MicroAppLoadCurtain } from '@/components/layout/micro-app-load-curtain';
 import { useTabStore } from '@/stores/tab-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
@@ -142,6 +152,11 @@ function RemotePage({ code }: { code: string }) {
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const permissions = useAuthStore((s) => s.permissions);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [bootKey, setBootKey] = useState(0);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [progress, setProgress] = useState(8);
+  const [hint, setHint] = useState('正在连接应用…');
   // iframe 模式下 setData 早于子应用就绪会丢；keep-alive 唤回只走 aftershow、不走 mounted。
   // 一律 forceSetData：令牌变化、首次 mounted、缓存 aftershow 都把当前会话推给子应用。
   const pushSession = useCallback(() => {
@@ -151,19 +166,76 @@ function RemotePage({ code }: { code: string }) {
   useEffect(() => {
     pushSession();
   }, [pushSession]);
+  useEffect(() => {
+    setPhase('loading');
+    setProgress(8);
+    setHint('正在连接应用…');
+  }, [code, bootKey]);
+  useEffect(() => {
+    if (phase !== 'loading') return;
+    const id = window.setInterval(() => {
+      setProgress((p) => (p >= 90 ? p : Math.min(90, p + 2 + Math.random() * 4)));
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [phase, bootKey]);
+  useLayoutEffect(() => {
+    const el = wrapRef.current?.querySelector('micro-app');
+    if (!el) return;
+    let hideTimer: number | undefined;
+    let settled = false;
+    const bump = (n: number, text: string) => {
+      setProgress((p) => Math.max(p, n));
+      setHint(text);
+    };
+    const finish = () => {
+      pushSession();
+      if (settled) return;
+      settled = true;
+      setProgress(100);
+      setHint('即将进入…');
+      hideTimer = window.setTimeout(() => setPhase('ready'), 260);
+    };
+    const onCreated = () => bump(22, '正在拉取资源…');
+    const onBeforemount = () => bump(58, '正在启动应用…');
+    const onError = () => setPhase('error');
+    el.addEventListener('created', onCreated);
+    el.addEventListener('beforemount', onBeforemount);
+    el.addEventListener('mounted', finish);
+    el.addEventListener('aftershow', finish);
+    el.addEventListener('error', onError);
+    return () => {
+      window.clearTimeout(hideTimer);
+      el.removeEventListener('created', onCreated);
+      el.removeEventListener('beforemount', onBeforemount);
+      el.removeEventListener('mounted', finish);
+      el.removeEventListener('aftershow', finish);
+      el.removeEventListener('error', onError);
+    };
+  }, [code, bootKey, pushSession]);
   if (!meta) return null;
   return (
-    <micro-app
-      name={code}
-      url={meta.entry}
-      baseroute={`/remote/${code}`}
-      router-mode="native"
-      keep-alive
-      iframe
-      className="flex-1 min-h-0 block w-full"
-      onMounted={pushSession}
-      onAftershow={pushSession}
-    />
+    <div ref={wrapRef} className="relative flex min-h-0 flex-1 flex-col">
+      <micro-app
+        key={bootKey}
+        name={code}
+        url={meta.entry}
+        baseroute={`/remote/${code}`}
+        router-mode="native"
+        keep-alive
+        iframe
+        className="block min-h-0 w-full flex-1"
+        onMounted={pushSession}
+        onAftershow={pushSession}
+      />
+      <MicroAppLoadCurtain
+        visible={phase !== 'ready'}
+        error={phase === 'error'}
+        progress={progress}
+        title={meta.title}
+        hint={hint}
+        onRetry={() => setBootKey((k) => k + 1)}
+      />
+    </div>
   );
 }
 

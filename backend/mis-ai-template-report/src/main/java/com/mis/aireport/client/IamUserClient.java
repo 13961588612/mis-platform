@@ -50,28 +50,66 @@ public class IamUserClient {
     }
 
     public List<Long> fetchRoleIds(Long userId) {
+        List<Long> ids = new ArrayList<>();
+        for (RoleDto role : fetchRoles(userId)) {
+            Long id = parseLong(role == null ? null : role.id());
+            if (id != null) {
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 超市门店槽：IAM 数据范围为全部，或角色含 TENANT_ADMIN 时，
+     * {@code quser} 未映射也可回退在营全量门店。
+     */
+    public boolean hasUnrestrictedStoreAccess(Long userId) {
         if (userId == null) {
+            return false;
+        }
+        if (fetchDataScope(userId).dataScope() == 1) {
+            return true;
+        }
+        UserDto user = fetchUser(userId);
+        if (user == null) {
+            return false;
+        }
+        if (user.isTenantAdmin() != null && user.isTenantAdmin() == 1) {
+            return true;
+        }
+        if (user.roles() == null) {
+            return false;
+        }
+        for (RoleDto role : user.roles()) {
+            if (role != null && "TENANT_ADMIN".equalsIgnoreCase(role.code())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<RoleDto> fetchRoles(Long userId) {
+        UserDto user = fetchUser(userId);
+        if (user == null || user.roles() == null) {
             return List.of();
+        }
+        return user.roles();
+    }
+
+    private UserDto fetchUser(Long userId) {
+        if (userId == null) {
+            return null;
         }
         try {
             Result<UserDto> result = client.get()
                     .uri("/internal/v1/users/{id}", userId)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
-            if (result == null || result.getData() == null || result.getData().roles() == null) {
-                return List.of();
-            }
-            List<Long> ids = new ArrayList<>();
-            for (RoleDto role : result.getData().roles()) {
-                Long id = parseLong(role == null ? null : role.id());
-                if (id != null) {
-                    ids.add(id);
-                }
-            }
-            return ids;
+            return result == null ? null : result.getData();
         } catch (Exception ex) {
             log.warn("fetch user roles failed userId={}: {}", userId, ex.getMessage());
-            return Collections.emptyList();
+            return null;
         }
     }
 
@@ -98,10 +136,12 @@ public class IamUserClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record UserDto(@JsonProperty("roles") List<RoleDto> roles) {
+    public record UserDto(
+            @JsonProperty("roles") List<RoleDto> roles,
+            @JsonProperty("isTenantAdmin") Integer isTenantAdmin) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record RoleDto(String id) {
+    public record RoleDto(String id, String code) {
     }
 }

@@ -78,12 +78,12 @@ mis:
         password: ${MIS_AI_REPORT_SPM_BIGDATA_PASSWORD:}
         driver-class-name: com.mysql.cj.jdbc.Driver
         maximum-pool-size: 3
-        # 槽位逐个对接：改对应 enabled=true
+        # 槽位默认跟随总开关；可单独 MIS_AI_REPORT_SPM_*_ENABLED 覆盖
         authorized-stores:
-          enabled: false
+          enabled: ${MIS_AI_REPORT_SPM_AUTH_STORES_ENABLED:${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}}
         biz-dates:
-          enabled: false
+          enabled: ${MIS_AI_REPORT_SPM_BIZ_DATES_ENABLED:${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}}
         ord-weeks:
-          enabled: false
+          enabled: ${MIS_AI_REPORT_SPM_ORD_WEEKS_ENABLED:${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}}
         ord-months:
-          enabled: false
+          enabled: ${MIS_AI_REPORT_SPM_ORD_MONTHS_ENABLED:${MIS_AI_REPORT_SPM_BIGDATA_ENABLED:false}}
