@@ -69,9 +69,9 @@ public class SpmProxyController {
                 : spec.contentType(resolveContentType(request)).bodyValue(body);
 
         try {
+            // 与 imap 透传一致：勿用 retrieve()，否则下游 4xx 会被吞成 502
             ResponseEntity<String> downstream = requestSpec
-                    .retrieve()
-                    .toEntity(String.class)
+                    .exchangeToMono(clientResponse -> clientResponse.toEntity(String.class))
                     .block(timeout);
             if (downstream == null) {
                 return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
