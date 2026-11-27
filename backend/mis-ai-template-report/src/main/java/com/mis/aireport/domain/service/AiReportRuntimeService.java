@@ -453,16 +453,43 @@ public class AiReportRuntimeService {
         return normalized;
     }
 
-    /** 开卡提示、模拟表不得进成文缓存，否则下次 execute 会循环吐同一句话。 */
+    /**
+     * 开卡提示、模拟表、中途思考碎片不得进成文缓存，否则下次 execute 会循环吐同一句话。
+     * 典型脏缓存：「I need to load the weekly report skill…现加载品类销售技能取数。」
+     */
     static boolean isNonReportCacheBody(String contentMd) {
         String t = contentMd == null ? "" : contentMd.trim();
+        if (t.startsWith("> 来自缓存")) {
+            int nl = t.indexOf('\n');
+            t = nl >= 0 ? t.substring(nl + 1).trim() : "";
+        }
         if (t.length() < 80) {
             return true;
         }
-        return t.contains("参数卡")
+        if (t.contains("参数卡")
                 || t.contains("模拟执行")
                 || t.contains("模拟结果")
-                || t.contains("[[ai.report.open_card");
+                || t.contains("[[ai.report.open_card")) {
+            return true;
+        }
+        // Agent 中途英文/中文思考碎片（未成文就结束并被回写）
+        String lower = t.toLowerCase();
+        if (lower.contains("i need to load")
+                || lower.contains("i'll load")
+                || lower.contains("i will load")
+                || t.contains("现加载")
+                || t.contains("load the weekly report")
+                || t.contains("load the monthly report")
+                || t.contains("load the diary")
+                || t.contains("skill first")) {
+            return true;
+        }
+        // 成文至少应有标题/结论/金额单位之一；纯日历旁白不算报告
+        boolean looksLikeReport = t.contains("##")
+                || t.contains("结论")
+                || t.contains("万元")
+                || t.contains("经营数据");
+        return !looksLikeReport;
     }
 
     private String renderPrompt(AiReportDef def, Map<String, Object> params) {

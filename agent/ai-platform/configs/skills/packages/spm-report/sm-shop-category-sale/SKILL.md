@@ -16,30 +16,40 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 - 工具：**`callShopCategorySaleApi`**
 - 只传 **`apiName`** + **`params`**
 - **不要传 `serviceName` / `identity`**
-- `items`：**门店 × 类目 × 时段**一行（返回含 `storeId` + `categoryId` / `categoryName`）；`time.role` = `current` | `previous`
-- **入参不要传 `storeId`**（单店字段只出现在返回里；范围用 `storeIds` / `areaId`）
-- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`；日报日清单用 `listMonthDates`
+- `items`：**门店 × 类目 × 时段**一行；**返回**里有 `storeId`（单店字段），**入参不要传 `storeId`**
+- 周/月键优先用日历 Skill `listYearWeeks` / `listYearMonths`
 - 分类维表可用 `callCommonInfoApi`：`listCategories` / `listChildCategories` / `getCategoryById`
+
+**每次业务查询都必须带类目维，三选一，缺一不可：**
+
+1. `categoryLevel`：**中文字符串**，只能是 `部门` / `柜组` / `大类` / `中类` / `小类`
+2. 或 `parentCategoryId`（分类 id 字符串）
+3. 或 `categoryIds`（分类 id，标量或数组）
+
+用户没说看哪一层、也没给 `parentCategoryId` / `categoryIds` 时：**不要猜默认层级**，应询问或报错（接口本身会拒）。
+
+**禁止**把 `categoryLevel` 写成数字或数字串：`1` / `"1"` / `deptLevelId` / `"门店大类"` 都会报错。`1` 是维表 `deptLevelId`，不是本接口的 `categoryLevel`。
 
 ---
 
 ## 公共入参
 
-时间 + 门店范围与 sm-shop-sale 相同（`storeIds` / `ordDates` / `ordWeeks` / `ordMonths` / `compare`），**另加**类目三选一。
+时间 + 门店范围字段名与 sm-shop-sale 相同（`storeIds` / `ordDates` / `ordWeeks` / `ordMonths` / `compare`），**另加**类目三选一。**条数上限不同**：按级别/父类展开时不是「最多 5 店 × 5 时段」。
 
 | 字段 | 何时必填 | 说明 |
 |------|----------|------|
 | `period` | 始终 | `"day"` / `"week"` / `"month"` |
-| `storeIds` / `areaId` | 二选一 | 同 sm-shop-sale；最多 5 店 |
-| `ordDates` / `ordWeeks` / `ordMonths` | 按 period | 同 sm-shop-sale；最多 5 个当期 |
-| `compare` | 否 | `"previous"` 补上一期 |
-| `categoryLevel` | 三选一 | `部门` / `柜组` / `大类` / `中类` / `小类`；**仅单门店 + 单当期时段**（compare 可另补上一期） |
-| `parentCategoryId` | 三选一 | 查该父类下一级子类；同样 **单门店 + 单当期时段** |
-| `categoryIds` | 三选一 | 指定分类 id（须同级），标量或数组最多 5；可配最多 5 店 × 5 时段 |
+| `storeIds` | `categoryLevel` / `parentCategoryId` 时 **必须且仅 1 个**；`categoryIds` 时与 `areaId` 二选一，最多 5 店 |
+| `areaId` | 仅 `categoryIds` 模式 | 按级别/父类 **禁止** `areaId` |
+| `ordDates` / `ordWeeks` / `ordMonths` | 按 period | `categoryLevel` / `parentCategoryId`：**当期数组长度必须 = 1**（标量也行）。`categoryIds`：最多 5 个当期 |
+| `compare` | 否 | 仅 `"previous"`：按日历补上一期（**不占**当期额度，这才是「本周 vs 上周」的写法） |
+| `categoryLevel` | 三选一 | `部门` / `柜组` / `大类` / `中类` / `小类` |
+| `parentCategoryId` | 三选一 | 查该父类下一级子类 |
+| `categoryIds` | 三选一 | 指定分类 id（须同级），标量或数组最多 5 |
 
-`categoryLevel` / `parentCategoryId` **不要配 `areaId`、不要配多个 storeIds / 多个当期时段**（会一次展开全部分类）。
+**对比两周/两月时不要把两个键都塞进 `ordWeeks` / `ordMonths`。** 会报：`categoryLevel / parentCategoryId 只支持单个当期时段（compare:previous 可另补上一期）`。
 
-**不要传** `storeId` / `ordWeek` / `ordMonth` / `startOrdDate` / `endOrdDate`（已更名为 `storeIds` / `ordWeeks` / `ordMonths`）。传了旧名会同时报「请改用 storeIds」和「storeIds 与 areaId 必须二选一」。
+**不要传** `storeId` / `ordWeek` / `ordMonth`（已更名为 `storeIds` / `ordWeeks` / `ordMonths`）。传了旧名会同时报「请改用 storeIds」和「storeIds 与 areaId 必须二选一」。
 
 ### `data_type` 映射（门店内）
 
@@ -68,23 +78,22 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ---
 
-## 选用（router 代号 → apiName；权威在本表）
+## 选用
 
-由 `sm-report-router` 确认门店/时间/品类槽后加载本 Skill，**按下表复制 apiName**。  
-级别：`部门` / `柜组` / `大类` / `中类` / `小类`。品类角色 / ABC 等默认 **`categoryLevel=大类`**。
+| 意图 | apiName |
+|------|---------|
+| 品类销售/毛利/损耗/促销（任一或同时） | `getShopCategoryOverview` |
+| 品类库存/滞销/缺货/周转/订货/退货/交叉率 | `getShopCategoryInventoryOverview`（**仅 week/month**） |
+| 品类折扣三列 | `getShopCategoryDiscountStructure` |
+| 品类出清效率 | `getShopCategoryClearanceEfficiency` |
+| 品类供应商促销分担 | `getShopCategorySupplierPromoShare` |
+| 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix` |
+| 品类经销/联营/租赁 | `getShopCategoryVentureStructure` |
+| 类目角色四象限（利润/客流/结构/问题） | `getShopCategoryRoleMatrix` |
+| 类目级 ABC（累计营业额） | `getShopCategoryAbc` |
+| 门店级（无类目） | Skill **`sm-shop-sale`** |
 
-| router | 意图 | apiName |
-|--------|------|---------|
-| **P1** | 品类销售/毛利/损耗/促销总览（**仅查数**） | `getShopCategoryOverview`（成文 → `sm-shop-ops-category-report`） |
-| **P2** | 品类折扣三列 | `getShopCategoryDiscountStructure`（成文 → category-report **轻量**；勿默认 promo） |
-| **P3** | 品类出清效率 | `getShopCategoryClearanceEfficiency`（同上） |
-| **P4** | 品类供应商促销分担 | `getShopCategorySupplierPromoShare`（同上） |
-| **P5** | 品类新品/重点/TOP/出清 | `getShopCategoryProductLifecycleMix`（有数可成文 → category-report） |
-| **P6** | 品类经销/联营/租赁 | `getShopCategoryVentureStructure`（有数可成文 → category-report） |
-| **P7** | 品类库存/滞销/缺货/周转/订货/退货 | `getShopCategoryInventoryOverview`（**仅 week/month**；可选进 category-report） |
-| **P8** | 类目角色四象限（利润/客流/结构/问题） | `getShopCategoryRoleMatrix`（成文 → category-report） |
-| **P9** | 类目级 ABC（累计营业额） | `getShopCategoryAbc`（成文 → category-report） |
-| — | 门店级（无类目） | Skill **`sm-shop-sale`** |
+router 代号（`sm-report-router` 确认槽后按下表复制 apiName）：P1 总览 → `getShopCategoryOverview`（成文 → `sm-shop-ops-category-report`）；P2 折扣；P3 出清；P4 供应商分担；P5 生命周期；P6 经营方式；P7 库存（**仅 week/month**）；P8 四象限；P9 ABC。
 
 **日粒度硬禁止**：`period=day` **不得**调用 `getShopCategoryInventoryOverview`；失败后禁止改 week 重试。
 
@@ -105,10 +114,23 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
-  "period": "week", "storeIds": "6001", "ordWeeks": "2026-W40",
+  "period": "week", "storeIds": "0001", "ordWeeks": "2026年-46周",
   "categoryLevel": "大类"
 }}
 ```
+
+本周 vs 上周（**对**：1 个当期 + `compare`）：
+
+```json
+{ "apiName": "getShopCategoryOverview", "params": {
+  "period": "week", "storeIds": "0001", "ordWeeks": ["2026年-46周"],
+  "compare": "previous",
+  "categoryLevel": "大类"
+}}
+```
+
+**错**（两个当期，Zod 会拒）：`"ordWeeks": ["2026年-46周", "2026年-45周"]` + `categoryLevel`。
+要指定两个分类、或多店多周，改用 `categoryIds`（不要用 `categoryLevel`）。
 
 ```json
 { "apiName": "getShopCategoryOverview", "params": {
@@ -150,7 +172,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ## 结构类（与门店档对称；指标字段同 sm-shop-sale）
 
-入参同总览（须带 `categoryLevel` 或 `parentCategoryId`；指定类目也可用 `categoryIds`）。
+入参同总览（须带 `categoryLevel` 或 `parentCategoryId`）。
 
 ### `getShopCategoryDiscountStructure`
 
@@ -194,7 +216,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 ### `getShopCategoryInventoryOverview` — 品类库存订货
 
 **仅 week/month**。指标口径与门店档 `getShopInventoryOverview` 同构，另带 `categoryId` / `categoryName`。  
-**日报 / `period=day` 禁止调用**。可选进成文 → `sm-shop-ops-category-report`（库存要点节）。
+**日报 / `period=day` 禁止调用**。
 
 | 字段 | 含义 |
 |------|------|
@@ -208,7 +230,7 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 ## 主题二扩展（ADS 近似，非订单明细）
 
-入参同总览。数据来自品类总览的销售占比 + 前台毛利率，**按门店分别**计算。品类角色 / ABC 默认 **`categoryLevel=大类`**。
+入参同总览。数据来自品类总览的销售占比 + 前台毛利率，**按门店分别**计算。
 
 ### `getShopCategoryRoleMatrix` — 类目角色四象限
 
@@ -238,10 +260,27 @@ description: 超市门店内品类结构（销售/毛利/损耗/促销总览 + �
 
 > **局限：** 类目级（非单品）；单品 ABC / 动销率 / 供应商销售集中度仍需订单明细，本 Skill 暂不覆盖。
 
+### 四象限 / 客流品·问题品明细（防死循环）
+
+用户要「客流品 / 问题品 / 四象限 + 各类指标」时：
+
+1. **一次** `getShopCategoryRoleMatrix`（级别用 `categoryLevel`，全店结构默认 **`大类`**，不要逐 id）
+2. 需要损耗/促销等总览字段时，**再一次** `getShopCategoryOverview`，**同一** `categoryLevel`（可加 `compare: "previous"`）
+3. 在内存里按 `role` 过滤客流品/问题品，用 Overview 的 `categoryId` 对齐补指标，**立即成文**
+
+**禁止：**
+
+- 对 RoleMatrix 返回的每个 `categoryId` 再打 Overview / RoleMatrix
+- 把几十个 id 拆成多次 `categoryIds`（每批最多 5 也不能用来扫完全店）
+- 工具返回 `Tool output truncated` / `Original size` 后：用 **内联 preview + 已拿到的 RoleMatrix** 成文；写 TOP（默认最多 10，用户要「全部」也最多表列 15）+「另有 N 个类目未展开」
+- truncated 后禁止再 MCP 补拉、禁止同参重试、禁止改成按 id 循环
+
+本意图 MCP **上限 3 次**（日历若尚未确认可另 1 次 `listYearWeeks`）。超限必须停手成文。
+
 ---
 
 ## 对比与成文分流
 
-- **同比**：同门店档——另查对比期时间键，同一 `apiName` 再调一次。
+- **同比 / 上期**：`categoryLevel` / `parentCategoryId` 只传 **1 个当期** + `compare: "previous"`，不要把两周塞进 `ordWeeks`。
 - **成文**（详 router §1.1）：P1～P9 → `sm-shop-ops-category-report`（P2～P4 仅轻量节）；门店促销专项才走 promo。
 - **门店级无类目** → `sm-shop-sale`。

@@ -105,3 +105,17 @@ mis:
     base-url: ${RECON_BASE_URL:http://127.0.0.1:8111}
     # 查询/拉取为真实 DB 操作，3s（aggregate-timeout-ms）会误判超时
     timeout-ms: ${RECON_TIMEOUT_MS:15000}
+
+  # 超市运营透传（S1 同机 :8112）：/api/v1/spm/** → /internal/v1/spm/**
+  # 8112 仅供本机 BFF 调用，不对 S2/公网放行。
+  spm:
+    base-url: ${SPM_BASE_URL:http://127.0.0.1:8112}
+    timeout-ms: ${SPM_TIMEOUT_MS:15000}
+    intranet-only: ${SPM_INTRANET_ONLY:true}
+
+  # 室内地图透传（S1 同机 :3000）：/api/v1/imap/** → Nest /api/v1/**
+  # 3000 仅供本机 BFF 调用，不对 S2/公网放行。
+  imap:
+    base-url: ${IMAP_BASE_URL:http://127.0.0.1:3000}
+    timeout-ms: ${IMAP_TIMEOUT_MS:15000}
+    intranet-only: ${IMAP_INTRANET_ONLY:true}

@@ -1,0 +1,42 @@
+# spm-service — systemd (S1 ai-service 10.254.26.33)
+#
+# 前置：
+#   1) 宿主机已装 Java 17
+#   2) JAR：/usr/local/app/spm-service/spm-service.jar
+#   3) 环境：/usr/local/app/spm-service/spm-service.env
+#   4) 库 jdbc:postgresql://10.254.26.36:5432/spm 已建好
+#   5) Nacos prod 已有 Data ID spm-service
+#
+# 安装：
+#   sudo cp deploy/systemd/spm-service.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now spm-service
+#
+# 注意：8112 仅供本机 mis-admin-bff 调用，不需要对 S2 或公网放行。
+
+[Unit]
+Description=SPM Service (spm-service :8112)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/app/spm-service
+
+EnvironmentFile=-/usr/local/app/spm-service/spm-service.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/java -Xms512m -Xmx1024m -jar /usr/local/app/spm-service/spm-service.jar
+
+Restart=always
+RestartSec=5
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spm-service
+
+[Install]
+WantedBy=multi-user.target

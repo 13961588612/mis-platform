@@ -131,7 +131,8 @@ skill(sm-common-info-master-data) → listAuthorizedStores
 
 ## 6. CAT（仅 P*）
 
-部门/柜组：`categoryLevel`。大中小类必须 `parentCategoryId`。指定同级分类用 `categoryIds`（最多 5）。P8/P9 默认 `categoryLevel=大类`。`categoryLevel`/`parentCategoryId` 仅单店+单当期。销售门店入参用 `storeIds`（不要 `storeId`）。
+部门/柜组：`categoryLevel`。大中小类必须 `parentCategoryId`。指定同级分类用 `categoryIds`（最多 5）。P8/P9 默认 `categoryLevel=大类`。`categoryLevel`/`parentCategoryId` 仅单店+单当期。销售门店入参用 `storeIds`（不要 `storeId`）。  
+P8 客流/问题品明细：下游只许 **P8 一次 + 可选 P1 一次**（同级别），禁止按 `categoryIds` 扫全店。truncated 用已有结果成文。
 
 ---
 

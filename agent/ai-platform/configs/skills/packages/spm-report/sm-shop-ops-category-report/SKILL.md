@@ -24,6 +24,7 @@ required_permissions:
 
 - 槽位齐后：`skill(sm-shop-category-sale)` → 按意图选用表 apiName，对照一期，并行。入参同品类销售公共字段（`storeIds` + 复数时间键 + `categoryLevel`/`parentCategoryId`/`categoryIds` 三选一）。
 - 日粒度不写 P7、禁止改查 week。成文后禁止再 MCP。
+- **客流品 / 问题品 / 四象限明细**：只打 P8（`getShopCategoryRoleMatrix`）+ 可选一次 P1（同 `categoryLevel`，默认大类）。**禁止**按类目 id 循环 MCP。`truncated` 则用 preview 成文，TOP≤15，其余写「另有 N 个未展开」。
 
 ### 取数 → 章节对照（只写已有结果的节）
 
@@ -121,5 +122,6 @@ required_permissions:
 - [ ] 未查数；未编造未取到章节；日粒度未写品类库存、未改查 week  
 - [ ] 金额万元 2 位；占比已换算  
 - [ ] 标题含店名 · 时间 · 品类管理 · 级别  
-- [ ] TOP≤10；ABC 已声明类目级局限  
+- [ ] TOP≤10（用户要「全部」时表列仍 ≤15）；ABC 已声明类目级局限  
+- [ ] 未按类目 id 循环 MCP；truncated 未再补拉  
 - [ ] 未说损耗吃毛利  

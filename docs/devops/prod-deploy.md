@@ -240,6 +240,7 @@ JWT 密钥目录（S1/S2 共用约定）：**`/usr/local/app/keys/{public,privat
 | ----------- | ------------------------------------- | ---------------------------------------------------------------------- |
 | 运行时         | **OpenJDK / Temurin JRE**             | **17**（镜像基线 `eclipse-temurin:17-jre-alpine`）                           |
 | 运行时         | **Python**                            | **3.12+**（ai-platform backend）                                         |
+| 运行时         | **Node.js**                           | **18+**（建议 22；`indoor-map-server` Nest）                                 |
 | 容器（推荐）      | Docker Engine + Compose V2            | 建议 **24+** / Compose **v2**                                            |
 | 自研 · Java   | `mis-auth`                            | 发版制品（持 JWT **私钥**）                                                     |
 | 自研 · Java   | `mis-iam`                             | 发版制品                                                                   |
@@ -251,6 +252,7 @@ JWT 密钥目录（S1/S2 共用约定）：**`/usr/local/app/keys/{public,privat
 | 自研 · Java   | `mis-kb`                              | 发版制品（知识库编排，连 S3 RAGFlow）                                               |
 | 自研 · Java   | `mis-iqd`                             | 发版制品（问数配置/ACL，连 S5 MCP）                                                |
 | 自研 · 运维 Job | `mis-migrator`                        | Flyway 迁移（发版时对 S4 业务库执行，可 Job 形态）                                      |
+| 自研 · Nest   | `indoor-map-server`                   | 独立仓 `indoor-map`；systemd；`:3000` 仅本机 BFF；单元见该仓 `deploy/systemd/`        |
 | 自研 · Agent  | **ai-platform backend**               | Python 编排 / Worker（含问数、知识检索等）                                          |
 | 外部 · 模型服务   | **Embedding 服务**（`bge-small-zh-v1.5`） | 自建镜像（`Dockerfile.embedding`）；模型 **BAAI/bge-small-zh-v1.5**；端口 **8001** |
 
@@ -288,6 +290,25 @@ docker run -d --name ai-platform-embedding --restart unless-stopped \
 
 验收：`curl -sS http://127.0.0.1:8001/health`（期望含 `ready: true`；**首次**拉模型可能较久，属正常）。  
 Agent：`EMBEDDING_SERVICE_URL=http://127.0.0.1:8001`。
+
+#### indoor-map-server 裸跑（S1 · Nest + systemd）
+
+独立仓 `indoor-map`（**pnpm** monorepo）。**发版以该仓文档为准**（含一键清单、禁止事项、排障表）：
+
+`indoor-map/indoor-map-platform/deploy/s1-systemd.md` → **§0 发版清单**
+
+要点：
+
+- 源码：`/usr/local/src/indoor-map/indoor-map-platform`（只在此 `pnpm build`）
+- 运行：`/usr/local/app/indoor-map-server`（`env` + `dist` + **`pnpm deploy --prod` 产物**）
+- 发版关键三步：`pnpm deploy --prod` → 同步到运行目录 → **在运行目录再 `prisma generate`**
+- **禁止** rsync `packages/server/node_modules`（pnpm 符号链接会断 → 缺 `tslib`/`reflect-metadata`/`express`）
+- **禁止**从 Windows 拷 `dist` / `node_modules`
+- BFF：`IMAP_BASE_URL=http://127.0.0.1:3000`；**3000 不对 S2/公网放行**
+- Redis **无密码**；JWT 公钥 `/usr/local/app/keys/public.pem`
+
+Nacos `mis-admin-bff`（prod）已含 `mis.imap.base-url`；改过 yaml 后刷新 BFF 配置或重启 BFF。  
+门户 `/api/v1/imap/**` **502** = Nest `:3000` 未起或依赖不全，先查 `systemctl status indoor-map-server`。
 
 ### 2.2 S2 — `ai-portal`（10.254.26.34）代理 + 页面（双入口）
 
@@ -436,7 +457,7 @@ rsync -avz --delete dist/ root@10.254.26.34:/usr/local/app/mis-admin-web/dist/
 
 # S2
 sudo cp deploy/nginx/mis-admin-web.conf /etc/nginx/conf.d/
-# 改 server_name / 按需开 TLS
+# 改 server_name；HTTPS 定稿为 443 转本机 80（见 mis-admin-web-deploy.md §4.1），80 不强制 301
 sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
 curl -fsS http://127.0.0.1/nginx-health
 ```

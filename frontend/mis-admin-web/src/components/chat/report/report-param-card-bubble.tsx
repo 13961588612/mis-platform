@@ -10,6 +10,7 @@ import { formatExecuteResultMarkdown } from '@/components/chat/report/format-exe
 import { executeAiReport, saveAiReportResult } from '@/lib/api/ai-report';
 import { ApiError } from '@/lib/api/errors';
 import { appendSessionTranscript } from '@/features/agent/api/agent-ops-api';
+import { isNonReportCacheBody } from '@/components/chat/report/is-report-cache-body';
 import { generateClientId, type ChatMessage } from '@/lib/chat/types';
 import { useChatStore } from '@/stores/chat-store';
 
@@ -181,12 +182,7 @@ export function ReportParamCardBubble({ message, onAgentRun }: ReportParamCardBu
         });
         if (result.save_to_cache && result.cache_write_token && finalText?.trim()) {
           const body = finalText.trim();
-          const notReport =
-            body.length < 80 ||
-            body.includes('参数卡') ||
-            body.includes('模拟执行') ||
-            body.includes('模拟结果');
-          if (notReport) {
+          if (isNonReportCacheBody(body)) {
             toast.message('本轮未产出成文，未写入缓存');
           } else {
             try {

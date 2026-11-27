@@ -23,6 +23,8 @@
 | `mis-iqd.yaml` | `mis-iqd` |
 | `mis-ai-template-report.yaml` | `mis-ai-template-report` |
 | `mis-admin-bff.yaml` | `mis-admin-bff` |
+| `recon-service.yaml` | `recon-service` |
+| `spm-service.yaml` | `spm-service` |
 
 ## 推送与核对
 

@@ -57,6 +57,7 @@ import { DispatchTraceHint } from '@/components/chat/DispatchTraceHint';
 import { ToolStepsBar } from '@/components/chat/ToolStepsBar';
 import { ReportCatalogBar } from '@/components/chat/report/report-catalog-bar';
 import { ReportParamCardBubble } from '@/components/chat/report/report-param-card-bubble';
+import { isNonReportCacheBody } from '@/components/chat/report/is-report-cache-body';
 import { parseReportSubmitDisplay } from '@/components/chat/report/build-report-submit-text';
 import { ReportSubmitUserBody } from '@/components/chat/report/report-submit-user-body';
 import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
@@ -689,8 +690,9 @@ export function CopilotPanel({
                                 const msgs = useChatStore.getState().messages;
                                 for (let i = msgs.length - 1; i >= 0; i -= 1) {
                                   const m = msgs[i];
-                                  if (m.role === 'assistant' && (m.content?.trim() || '')) {
-                                    return m.content.trim();
+                                  const body = m.content?.trim() || '';
+                                  if (m.role === 'assistant' && body && !isNonReportCacheBody(body)) {
+                                    return body;
                                   }
                                 }
                                 return undefined;

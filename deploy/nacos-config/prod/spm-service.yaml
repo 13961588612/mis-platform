@@ -1,0 +1,52 @@
+# Nacos config: spm-service (prod, S1 10.254.26.33)
+#
+# 同时加载 shared-config `mis-common`（指向 mis_platform）。
+# 本文件必须整体覆盖 datasource 为 spm 库，否则 Flyway 会把业务表建进平台库。
+
+server:
+  port: 8112
+
+spring:
+  datasource:
+    url: "jdbc:postgresql://10.254.26.36:5432/spm?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
+    username: spm
+    password: "spm#1014"
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: spmHikariPool
+      minimum-idle: 2
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: "SELECT 1"
+      connection-init-sql: "SET application_name = '${spring.application.name}'"
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    default-schema: public
+    validate-on-migrate: true
+
+# 闭店退券 Oracle：口令只写 S1 上的 spm-service.env，不要写进本文件。
+mis:
+  spm:
+    oracle:
+      cscoupon:
+        jdbc-url: ${CSCOUPON_JDBC_URL:}
+        username: ${CSCOUPON_DB_USER:}
+        password: ${CSCOUPON_DB_PASSWORD:}
+      hdcrm:
+        jdbc-url: ${HDCRM_JDBC_URL:jdbc:oracle:thin:@10.254.16.211:1521:thdcrm}
+        username: ${HDCRM_DB_USER:bfcrm8}
+        password: ${HDCRM_DB_PASSWORD:}
+      hdczk:
+        jdbc-url: ${HDCZK_JDBC_URL:jdbc:oracle:thin:@10.254.16.211:1521:thdczk}
+        username: ${HDCZK_DB_USER:bfcrm8}
+        password: ${HDCZK_DB_PASSWORD:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

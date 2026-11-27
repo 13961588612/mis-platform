@@ -18,7 +18,7 @@
 | 模板报告 | mis-ai-template-report | 8110 | S3 运行时 | 管理 CRUD + `catalog` / `prepare-card` / `execute` / `results`（缓存+硬派发 agent）；槽位 `spm-big-data`；表 `ai_report_*`（V159–V168，含 `workflow_key`）；说明见 [ai-template-report-agent-run.md](ai-template-report-agent-run.md) |
 | 对账引擎 | recon-service | 8111 | 独立子项目 | 对账平台后端（`recon/` 子项目，非 `backend/` 聚合模块）；平台侧统一走 Gateway → BFF `/api/v1/recon/**` → `/internal/v1/recon/**` 透传，见 [mfe-integration.md](../../recon/docs/_archive/mfe-integration.md) |
 | 超市运营 | spm-service（仓 `mis-spm-biz`） | 8112 | P0 骨架 | 独立仓；micro-app `sys_app.code=spm`；BFF `/api/v1/spm/**` 透传；**仅内网**；规划见该仓 `docs/` |
-| 室内地图 | indoor-map-server（仓 `indoor-map`） | 3000 | P0 | 独立仓 Nest；micro-app `sys_app.code=imap`；BFF `/api/v1/imap/**` 透传；**仅内网** |
+| 室内地图 | indoor-map-server（仓 `indoor-map`） | 3000 | P0 | 独立仓 Nest；S1 systemd；micro-app `sys_app.code=imap`；BFF `/api/v1/imap/**` 透传；**仅内网** |
 
 
 > **Sprint 2 重构说明：** 取消 mis-user（8102）和 mis-rbac（8104），合并为 mis-iam（8102）；员工档案从 mis-user 迁入 mis-org。
